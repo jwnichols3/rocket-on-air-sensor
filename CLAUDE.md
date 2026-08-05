@@ -19,4 +19,5 @@ Canonical five roles (`needs-triage`, `needs-info`, `ready-for-agent`,
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` at root; decisions recorded in its `## Decisions` section.
+Single-context: `CONTEXT.md` at root; decisions recorded in its `## Decisions` section
+(the ADR record). See `docs/agents/domain.md`.
