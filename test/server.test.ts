@@ -1,0 +1,142 @@
+import assert from 'node:assert/strict';
+import type { Server } from 'node:http';
+import { test } from 'node:test';
+import type { LightDriver } from '../src/driver.js';
+import { createApiServer, type ServerDeps } from '../src/server.js';
+import { defaultState, StateStore, type Confirmed, type OnAirState } from '../src/state.js';
+
+class StubDriver implements LightDriver {
+  calls: boolean[] = [];
+  result: Confirmed = 'on';
+  fail = false;
+
+  async set(onAir: boolean): Promise<Confirmed> {
+    this.calls.push(onAir);
+    if (this.fail) throw new Error('light unreachable');
+    return this.result;
+  }
+}
+
+interface Harness {
+  base: string;
+  driver: StubDriver;
+  persisted: OnAirState[];
+  close: () => Promise<void>;
+}
+
+async function boot(token?: string): Promise<Harness> {
+  const driver = new StubDriver();
+  const persisted: OnAirState[] = [];
+  const deps: ServerDeps = {
+    store: new StateStore(defaultState()),
+    driver,
+    persist: async (state) => {
+      persisted.push(state);
+    },
+    token,
+  };
+  const server: Server = createApiServer(deps);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (typeof address !== 'object' || address === null) throw new Error('no address');
+  return {
+    base: `http://127.0.0.1:${address.port}`,
+    driver,
+    persisted,
+    close: () => new Promise((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
+  };
+}
+
+test('GET /status returns state plus ageSeconds', async () => {
+  const h = await boot();
+  const res = await fetch(`${h.base}/status`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.intended, 'off');
+  assert.equal(body.confirmed, 'unknown');
+  assert.equal(typeof body.ageSeconds, 'number');
+  await h.close();
+});
+
+test('PUT /state turns on, persists, and reports driver confirmation', async () => {
+  const h = await boot();
+  const res = await fetch(`${h.base}/state`, {
+    method: 'PUT',
+    body: JSON.stringify({ onAir: true, source: 'detector' }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.intended, 'on');
+  assert.equal(body.confirmed, 'on');
+  assert.equal(body.source, 'detector');
+  assert.deepEqual(h.driver.calls, [true]);
+  assert.equal(h.persisted.length, 1);
+  assert.equal(h.persisted[0]!.intended, 'on');
+  assert.equal(h.persisted[0]!.confirmed, 'unknown');
+  await h.close();
+});
+
+test('PUT /state defaults source to manual', async () => {
+  const h = await boot();
+  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: false }) });
+  const body = await res.json();
+  assert.equal(body.source, 'manual');
+  await h.close();
+});
+
+test('driver failure still succeeds the write with confirmed unknown', async () => {
+  const h = await boot();
+  h.driver.fail = true;
+  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.intended, 'on');
+  assert.equal(body.confirmed, 'unknown');
+  assert.equal(h.persisted.length, 1);
+  await h.close();
+});
+
+test('POST /on and /off are manual conveniences with ?source= override', async () => {
+  const h = await boot();
+  let body = await (await fetch(`${h.base}/on`, { method: 'POST' })).json();
+  assert.equal(body.intended, 'on');
+  assert.equal(body.source, 'manual');
+  body = await (await fetch(`${h.base}/off?source=shortcut`, { method: 'POST' })).json();
+  assert.equal(body.intended, 'off');
+  assert.equal(body.source, 'shortcut');
+  assert.deepEqual(h.driver.calls, [true, false]);
+  await h.close();
+});
+
+test('malformed and invalid bodies get 400 with error shape', async () => {
+  const h = await boot();
+  const bad = await fetch(`${h.base}/state`, { method: 'PUT', body: '{not json' });
+  assert.equal(bad.status, 400);
+  assert.equal(typeof (await bad.json()).error, 'string');
+  const wrongType = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: 'yes' }) });
+  assert.equal(wrongType.status, 400);
+  assert.deepEqual(h.driver.calls, []);
+  await h.close();
+});
+
+test('unknown path 404, wrong method 405', async () => {
+  const h = await boot();
+  assert.equal((await fetch(`${h.base}/nope`)).status, 404);
+  assert.equal((await fetch(`${h.base}/status`, { method: 'POST' })).status, 405);
+  assert.equal((await fetch(`${h.base}/on`)).status, 405);
+  await h.close();
+});
+
+test('token gate: 401 without or with wrong bearer, 200 with right one', async () => {
+  const h = await boot('sekrit');
+  assert.equal((await fetch(`${h.base}/status`)).status, 401);
+  assert.equal(
+    (await fetch(`${h.base}/status`, { headers: { authorization: 'Bearer wrong' } })).status,
+    401,
+  );
+  assert.equal(
+    (await fetch(`${h.base}/status`, { headers: { authorization: 'Bearer sekrit' } })).status,
+    200,
+  );
+  await h.close();
+});
