@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import { NoopDriver, type LightDriver } from './driver.js';
 import { loadState, saveState } from './persist.js';
 import { createApiServer } from './server.js';
+import { createSseHub } from './sse.js';
 import { defaultState, StateStore } from './state.js';
 
 export interface AppOptions {
@@ -31,11 +32,13 @@ export async function createApp(opts: AppOptions): Promise<App> {
     store.setConfirmed('unknown');
   }
 
+  const hub = createSseHub();
   const server: Server = createApiServer({
     store,
     driver,
     persist: (state) => saveState(opts.stateFile, state),
     token: opts.token,
+    hub,
   });
 
   await new Promise<void>((resolve) => server.listen(opts.port, resolve));
@@ -46,6 +49,11 @@ export async function createApp(opts: AppOptions): Promise<App> {
   return {
     port,
     store,
-    close: () => new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+    close: () =>
+      new Promise((resolve, reject) => {
+        hub.closeAll();
+        server.closeIdleConnections();
+        server.close((err) => (err ? reject(err) : resolve()));
+      }),
   };
 }

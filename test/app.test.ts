@@ -48,3 +48,23 @@ test('token from options gates the API end to end', async () => {
   );
   await app.close();
 });
+
+test('message survives a restart', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'onair-app-')), 'state.json');
+  const app1 = await createApp({ stateFile, port: 0, driver: new StubDriver(), log: () => {} });
+  await fetch(`http://127.0.0.1:${app1.port}/message`, { method: 'PUT', body: JSON.stringify({ text: 'BRB' }) });
+  await app1.close();
+  const app2 = await createApp({ stateFile, port: 0, driver: new StubDriver(), log: () => {} });
+  const body = await (await fetch(`http://127.0.0.1:${app2.port}/status`)).json();
+  assert.equal(body.message, 'BRB');
+  await app2.close();
+});
+
+test('close() completes while an SSE client is connected', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'onair-app-')), 'state.json');
+  const app = await createApp({ stateFile, port: 0, driver: new StubDriver(), log: () => {} });
+  const res = await fetch(`http://127.0.0.1:${app.port}/events`);
+  assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/);
+  await app.close(); // must resolve despite the open stream
+  assert.ok(true);
+});
