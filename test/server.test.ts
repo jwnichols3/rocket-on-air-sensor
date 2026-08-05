@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import type { Server } from 'node:http';
 import { test } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { LightDriver } from '../src/driver.js';
 import { createApiServer, type ServerDeps } from '../src/server.js';
 import { defaultState, StateStore, type Confirmed, type OnAirState } from '../src/state.js';
@@ -224,5 +225,96 @@ test('concurrent writes serialize: last write wins, driver calls and persists ha
   assert.equal(h.persisted[0]!.intended, 'on');
   assert.equal(h.persisted[1]!.intended, 'off');
 
+  await h.close();
+});
+
+test('PUT /message sets, DELETE clears; on-air fields untouched', async () => {
+  const h = await boot();
+  const set = await fetch(`${h.base}/message`, { method: 'PUT', body: JSON.stringify({ text: 'BE QUIET' }) });
+  assert.equal(set.status, 200);
+  const setBody = await set.json();
+  assert.equal(setBody.message, 'BE QUIET');
+  assert.equal(setBody.intended, 'off');
+  assert.equal(h.persisted.at(-1)!.message, 'BE QUIET');
+  const del = await fetch(`${h.base}/message`, { method: 'DELETE' });
+  assert.equal((await del.json()).message, null);
+  const delAgain = await fetch(`${h.base}/message`, { method: 'DELETE' });
+  assert.equal(delAgain.status, 200); // idempotent
+  await h.close();
+});
+
+test('PUT /message validation: missing, empty, oversized text get 400', async () => {
+  const h = await boot();
+  for (const body of [JSON.stringify({}), JSON.stringify({ text: '' }), JSON.stringify({ text: 'x'.repeat(201) })]) {
+    const res = await fetch(`${h.base}/message`, { method: 'PUT', body });
+    assert.equal(res.status, 400);
+    assert.equal(typeof (await res.json()).error, 'string');
+  }
+  await h.close();
+});
+
+test('heartbeat re-PUT of /state leaves the message intact', async () => {
+  const h = await boot();
+  await fetch(`${h.base}/message`, { method: 'PUT', body: JSON.stringify({ text: 'BE QUIET' }) });
+  await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true, source: 'detector' }) });
+  const status = await (await fetch(`${h.base}/status`)).json();
+  assert.equal(status.message, 'BE QUIET');
+  assert.equal(status.intended, 'on');
+  await h.close();
+});
+
+test('GET /display serves the self-contained page', async () => {
+  const h = await boot();
+  const res = await fetch(`${h.base}/display`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /text\/html/);
+  const html = await res.text();
+  assert.match(html, /EventSource/);
+  assert.match(html, /ON AIR/);
+  await h.close();
+});
+
+test('token via query works on GETs only', async () => {
+  const h = await boot('sekrit');
+  assert.equal((await fetch(`${h.base}/status?token=sekrit`)).status, 200);
+  assert.equal((await fetch(`${h.base}/status?token=wrong`)).status, 401);
+  assert.equal((await fetch(`${h.base}/display?token=sekrit`)).status, 200);
+  const write = await fetch(`${h.base}/state?token=sekrit`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+  assert.equal(write.status, 401); // writes require the header
+  await h.close();
+});
+
+test('GET /events sends a snapshot then an event per write', async () => {
+  const h = await boot();
+  const controller = new AbortController();
+  const eventsPromise = (async () => {
+    const res = await fetch(`${h.base}/events`, { signal: controller.signal });
+    assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/);
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    const events: Array<Record<string, unknown>> = [];
+    while (events.length < 3) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const dataLine = frame.split('\n').find((l) => l.startsWith('data: '));
+        if (dataLine !== undefined) events.push(JSON.parse(dataLine.slice(6)) as Record<string, unknown>);
+      }
+    }
+    return events;
+  })();
+  await sleep(50);
+  await fetch(`${h.base}/on`, { method: 'POST' });
+  await fetch(`${h.base}/message`, { method: 'PUT', body: JSON.stringify({ text: 'HI' }) });
+  const events = await eventsPromise;
+  assert.equal(events[0]!.intended, 'off'); // snapshot
+  assert.equal(events[1]!.intended, 'on'); // after POST /on
+  assert.equal(events[2]!.message, 'HI'); // after PUT /message
+  controller.abort();
   await h.close();
 });

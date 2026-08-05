@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { LightDriver } from './driver.js';
+import { DISPLAY_HTML } from './display.js';
+import { createSseHub, type SseHub } from './sse.js';
 import type { Confirmed, OnAirState, StateStore } from './state.js';
 
 export interface ServerDeps {
@@ -7,6 +9,7 @@ export interface ServerDeps {
   driver: LightDriver;
   persist: (state: OnAirState) => Promise<void>;
   token?: string;
+  hub?: SseHub;
 }
 
 const ROUTES: Record<string, string[]> = {
@@ -14,14 +17,20 @@ const ROUTES: Record<string, string[]> = {
   '/state': ['PUT'],
   '/on': ['POST'],
   '/off': ['POST'],
+  '/message': ['PUT', 'DELETE'],
+  '/events': ['GET'],
+  '/display': ['GET'],
 };
 
 const MAX_BODY_BYTES = 16 * 1024;
+const MAX_MESSAGE_CHARS = 200;
 
 export function createApiServer(deps: ServerDeps): Server {
   if (deps.token !== undefined && deps.token.trim() === '') {
     throw new Error('token must be non-empty when provided');
   }
+
+  const hub = deps.hub ?? createSseHub();
 
   let writeChain: Promise<void> = Promise.resolve();
   function enqueueWrite(run: () => Promise<void>): Promise<void> {
@@ -31,7 +40,7 @@ export function createApiServer(deps: ServerDeps): Server {
   }
 
   return createServer((req, res) => {
-    handle(req, res, deps, enqueueWrite).catch((err) => {
+    handle(req, res, deps, enqueueWrite, hub).catch((err) => {
       sendJson(res, 500, { error: `internal error: ${(err as Error).message}` });
     });
   });
@@ -76,14 +85,19 @@ async function handle(
   res: ServerResponse,
   deps: ServerDeps,
   enqueueWrite: EnqueueWrite,
+  hub: SseHub,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
   const method = req.method ?? 'GET';
 
-  if (deps.token !== undefined && req.headers.authorization !== `Bearer ${deps.token}`) {
-    sendJson(res, 401, { error: 'missing or invalid bearer token' });
-    return;
+  if (deps.token !== undefined) {
+    const headerOk = req.headers.authorization === `Bearer ${deps.token}`;
+    const queryOk = method === 'GET' && url.searchParams.get('token') === deps.token;
+    if (!headerOk && !queryOk) {
+      sendJson(res, 401, { error: 'missing or invalid bearer token' });
+      return;
+    }
   }
 
   const allowed = ROUTES[path];
@@ -97,6 +111,53 @@ async function handle(
   }
 
   if (path === '/status') {
+    sendJson(res, 200, statusBody(deps));
+    return;
+  }
+
+  if (path === '/events') {
+    hub.attach(res, () => statusBody(deps));
+    return;
+  }
+
+  if (path === '/display') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(DISPLAY_HTML);
+    return;
+  }
+
+  if (path === '/message') {
+    if (method === 'DELETE') {
+      await enqueueWrite(async () => {
+        deps.store.clearMessage();
+        await deps.persist(deps.store.get());
+      });
+      hub.broadcast(statusBody(deps));
+      sendJson(res, 200, statusBody(deps));
+      return;
+    }
+    let text: unknown;
+    try {
+      const body: unknown = JSON.parse(await readBody(req));
+      ({ text } = body as { text?: unknown });
+    } catch (err) {
+      sendJson(res, 400, { error: `malformed JSON body: ${(err as Error).message}` });
+      return;
+    }
+    if (typeof text !== 'string' || text.trim() === '') {
+      sendJson(res, 400, { error: 'text must be a non-empty string' });
+      return;
+    }
+    if (text.length > MAX_MESSAGE_CHARS) {
+      sendJson(res, 400, { error: `text must be at most ${MAX_MESSAGE_CHARS} characters` });
+      return;
+    }
+    const messageText: string = text;
+    await enqueueWrite(async () => {
+      deps.store.setMessage(messageText);
+      await deps.persist(deps.store.get());
+    });
+    hub.broadcast(statusBody(deps));
     sendJson(res, 200, statusBody(deps));
     return;
   }
@@ -120,11 +181,13 @@ async function handle(
       return;
     }
     await enqueueWrite(() => doWrite(deps, onAir, source ?? 'manual'));
+    hub.broadcast(statusBody(deps));
     sendJson(res, 200, statusBody(deps));
     return;
   }
 
   // POST /on | /off
   await enqueueWrite(() => doWrite(deps, path === '/on', url.searchParams.get('source') ?? 'manual'));
+  hub.broadcast(statusBody(deps));
   sendJson(res, 200, statusBody(deps));
 }
