@@ -22,3 +22,11 @@ Three unknowns, all to be determined:
    direct GPIO over network, etc.).
 3. **Receiver + light hardware** - what device drives the light (Raspberry Pi, ESP32,
    smart plug, busylight-style USB device, etc.).
+
+## Running the API
+
+```sh
+npm install && npm run build && npm start   # or: npm run dev
+```
+
+Config via env: `ONAIR_PORT` (default 8484), `ONAIR_STATE_FILE` (default `~/.onair/state.json`), `ONAIR_TOKEN` (optional bearer auth). Contract: `docs/api-contract.md`.
