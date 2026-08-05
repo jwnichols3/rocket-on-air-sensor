@@ -13,7 +13,8 @@ One state object, persisted to disk atomically, restored on restart:
 | `intended` | `"on" \| "off"` | What the API was last told. Survives restart; on boot the service re-applies it to the light. |
 | `confirmed` | `"on" \| "off" \| "unknown"` | What the light acknowledged via the LightDriver. `unknown` when the driver has no feedback or the light is unreachable - never guessed. |
 | `source` | string | Who wrote the state. Conventions: `"detector"`, `"manual"`. Free-form; no precedence semantics in v1 (last write wins). |
-| `updatedAt` | ISO 8601 string | Time of last write. Refreshed by every write, including idempotent repeats. |
+| `updatedAt` | ISO 8601 string | Time of last on-air write. Refreshed by every `/state`, `/on`, `/off` write, including idempotent repeats. |
+| `message` | `string \| null` | Optional display message (see `PUT /message`). Independent of on-air writes - heartbeats never touch it. Absent in pre-message state files, which load as `null`. |
 
 Staleness is visible, never acted on: the detector re-sends its state every ~60s as a
 heartbeat (client-side convention, not enforced), so a stale `updatedAt` means a dead
@@ -54,6 +55,26 @@ No-body conveniences for curl and phone shortcuts. Equivalent to `PUT /state` wi
 `onAir` true/false and `source` `"manual"`; override with `?source=<name>`.
 Response identical to `PUT /state`.
 
+### `PUT /message` / `DELETE /message`
+
+Set or clear the display message shown by `/display`. `PUT` body: `{"text": "BE
+QUIET"}` - `text` must be a non-empty string, max 200 chars (400 otherwise). `DELETE`
+is idempotent. Both respond 200 with the same body as `GET /status`. Message persists
+across restarts; on-air writes and detector heartbeats never modify it.
+
+### `GET /events`
+
+Server-sent events (`text/event-stream`): a `status` event with the full status JSON
+on connect, another on every successful write (state or message), and a keep-alive
+comment every 15s. `ageSeconds` is computed at send time.
+
+### `GET /display`
+
+A self-contained HTML tally page (inline CSS/JS) for fullscreen/kiosk use. Renders ON
+AIR (red) / OFF AIR (dark) live via `/events`; a set message replaces the wordmark
+text but never the state color; shows a DISCONNECTED overlay when the stream drops
+and a stale badge when detector-sourced state exceeds 5 minutes of age.
+
 ## Light failures are not write failures
 
 A write always succeeds if the body is valid: `intended` is updated and persisted even
@@ -63,7 +84,10 @@ response and in `GET /status`. Clients that care check `confirmed`.
 ## Auth
 
 Off by default. If the `ONAIR_TOKEN` env var is set, every endpoint requires
-`Authorization: Bearer <token>`; wrong or missing token gets `401`.
+`Authorization: Bearer <token>`; wrong or missing token gets `401`. Because
+`EventSource` cannot set headers, the read-only GETs (`/status`, `/events`,
+`/display`) also accept `?token=<token>`; writes accept the header only. An empty
+`ONAIR_TOKEN` is a startup error, never bypassable auth.
 
 ## Errors
 

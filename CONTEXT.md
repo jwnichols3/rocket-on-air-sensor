@@ -111,3 +111,10 @@ else (state, light control, API) lives on the receiver.
   ecosystem). Revisit triggers: if the chosen light is BLE and a Pi hardware spike
   shows Node BLE libraries unreliable vs Python's bleak -> Python; if cold-machine
   install simplicity becomes dominant -> Go (static binary).
+- **D-9 (2026-08-05)** Interim light: a browser tally page served by the API
+  (`GET /display`, Pi in kiosk mode on a small screen) until real hardware lands.
+  Adds to the contract: a `message` resource (`PUT`/`DELETE /message`) independent of
+  on-air state so heartbeats can't clobber it, and SSE (`GET /events`) for live
+  updates. Safety rule: the display's background color always reflects on-air state;
+  a message can never hide ON AIR. Spec:
+  `docs/superpowers/specs/2026-08-05-onair-display-design.md`.
