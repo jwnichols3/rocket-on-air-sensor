@@ -1,0 +1,19 @@
+# session/scratch
+.remember/
+tmp/
+
+# macOS
+.DS_Store
+
+# Claude local settings (machine-local; agentcore.json is committed when it exists)
+.claude/settings.local.json
+
+# common build/dep dirs (language TBD - prune when stack is chosen)
+node_modules/
+.venv/
+__pycache__/
+dist/
+build/
+.env
+.env.local
+*.log
