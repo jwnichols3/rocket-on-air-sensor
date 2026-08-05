@@ -30,7 +30,8 @@ else (state, light control, API) lives on the receiver.
 ## Requirements
 
 - Detector (work Mac): fire ON when a Zoom/Meet call launches, OFF when it closes.
-- Receiver (Raspberry Pi): hosts a REST API that is the system's source of truth.
+- Receiver (Mac Mini now, Raspberry Pi later - D-4): hosts a REST API that is the
+  system's source of truth.
   - Endpoint to set on-air state ON/OFF (used by the detector AND usable manually,
     independent of any call sensing).
   - Endpoint to query current on-air status.
@@ -43,13 +44,19 @@ else (state, light control, API) lives on the receiver.
 ## Domain glossary
 
 - **Detector** - the process on the Mac that decides "call in progress: yes/no".
-- **Receiver** - the device/computer that receives the state change and drives the light.
-  Current plan: a Raspberry Pi running the REST API service.
+- **Receiver** - the role of the device/computer that receives the state change and
+  drives the light. Mac Mini first (development), Raspberry Pi as the long-term host
+  (D-4). Never the work Mac.
 - **On-air light** - the physical light. Hardware TBD; research ticket open. Wi-Fi or
   Bluetooth, preferably battery operated with status feedback.
 - **Call state** - boolean, ON_AIR / OFF_AIR. The single fact the system communicates.
 - **On-air API** - the REST service on the receiver: set state, query state. The
-  system's source of truth, callable by the detector or any other client.
+  system's source of truth, callable by the detector or any other client. Contract:
+  `docs/api-contract.md`.
+- **Intended state** - what the API was last told (`on`/`off`). Persisted; survives
+  restarts.
+- **Confirmed state** - what the light acknowledged (`on`/`off`/`unknown`). Never
+  guessed; `unknown` when the light can't report or can't be reached.
 
 ## Invariants (draft)
 
@@ -65,7 +72,8 @@ else (state, light control, API) lives on the receiver.
       art on macOS meeting detection - check its detection registry.)
 - [ ] Light hardware: which Wi-Fi/BT tally or busylight? Battery operated preferred,
       status feedback preferred. (Research ticket open.)
-- [ ] REST API shape: endpoints, auth (LAN-only? token?), port, state model.
+- [x] REST API shape: endpoints, auth, port, state model - resolved, see
+      `docs/api-contract.md` and D-5..D-7.
 - [ ] Light behavior: binary on/off only, or colors/states (in call vs camera on)?
 - [ ] Pi packaging: npx-style one-command install - Node on Pi, or alternative
       (pipx, docker, systemd unit) if npx is a poor fit?
@@ -81,3 +89,19 @@ else (state, light control, API) lives on the receiver.
   detector integration later as a separate module/plugin that calls the API.
 - **D-3 (2026-08-05)** Manual control is a first-class requirement: the API must allow
   setting and querying on-air state independent of any call sensing.
+- **D-4 (2026-08-05)** "Receiver" is a role, not a device. Develop and run the API on
+  the Mac Mini first (fast iteration, local troubleshooting); once working, package it
+  for the Raspberry Pi as the long-term host. Amends D-1: the Pi is the eventual
+  deployment target, not the only host. D-1's rationale is unchanged - the Mac Mini is
+  not the work computer.
+- **D-5 (2026-08-05)** API contract v1 (full spec: `docs/api-contract.md`): canonical
+  idempotent `PUT /state` plus no-body `POST /on`/`POST /off` conveniences for manual
+  control; `GET /status`. State distinguishes intended vs confirmed; writes succeed
+  even when the light is unreachable (surfaced as `confirmed: unknown`).
+- **D-6 (2026-08-05)** No TTL/auto-OFF. Detector heartbeats by re-sending state
+  (~60s, client-side convention); staleness is visible via `updatedAt`/`ageSeconds`
+  but never acted on. Only an explicit write turns the light off. Rationale: false
+  OFF is worse than false ON; "no stuck-on light" is met by manual OFF + visible
+  staleness.
+- **D-7 (2026-08-05)** Auth: optional shared bearer token (`ONAIR_TOKEN` env var),
+  off by default; LAN-only exposure is the baseline security model. Port 8484.
