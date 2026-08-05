@@ -105,3 +105,9 @@ else (state, light control, API) lives on the receiver.
   staleness.
 - **D-7 (2026-08-05)** Auth: optional shared bearer token (`ONAIR_TOKEN` env var),
   off by default; LAN-only exposure is the baseline security model. Port 8484.
+- **D-8 (2026-08-05)** Runtime: Node.js + TypeScript. Confirmed via a judged LLM
+  bakeoff (Node/Python/Go advocate briefs + judge; full verdict on issue #3).
+  Decisive weight: reliability of AI-agent-driven development (compiler feedback,
+  ecosystem). Revisit triggers: if the chosen light is BLE and a Pi hardware spike
+  shows Node BLE libraries unreliable vs Python's bleak -> Python; if cold-machine
+  install simplicity becomes dominant -> Go (static binary).
