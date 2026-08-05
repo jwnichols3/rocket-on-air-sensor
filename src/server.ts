@@ -19,8 +19,15 @@ const ROUTES: Record<string, string[]> = {
 const MAX_BODY_BYTES = 16 * 1024;
 
 export function createApiServer(deps: ServerDeps): Server {
+  let writeChain: Promise<void> = Promise.resolve();
+  function enqueueWrite(run: () => Promise<void>): Promise<void> {
+    const next = writeChain.then(run);
+    writeChain = next.catch(() => {});
+    return next;
+  }
+
   return createServer((req, res) => {
-    handle(req, res, deps).catch((err) => {
+    handle(req, res, deps, enqueueWrite).catch((err) => {
       sendJson(res, 500, { error: `internal error: ${(err as Error).message}` });
     });
   });
@@ -58,7 +65,14 @@ async function doWrite(deps: ServerDeps, onAir: boolean, source: string): Promis
   deps.store.setConfirmed(confirmed);
 }
 
-async function handle(req: IncomingMessage, res: ServerResponse, deps: ServerDeps): Promise<void> {
+type EnqueueWrite = (run: () => Promise<void>) => Promise<void>;
+
+async function handle(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ServerDeps,
+  enqueueWrite: EnqueueWrite,
+): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
   const method = req.method ?? 'GET';
@@ -101,12 +115,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ServerDep
       sendJson(res, 400, { error: 'source must be a string' });
       return;
     }
-    await doWrite(deps, onAir, source ?? 'manual');
+    await enqueueWrite(() => doWrite(deps, onAir, source ?? 'manual'));
     sendJson(res, 200, statusBody(deps));
     return;
   }
 
   // POST /on | /off
-  await doWrite(deps, path === '/on', url.searchParams.get('source') ?? 'manual');
+  await enqueueWrite(() => doWrite(deps, path === '/on', url.searchParams.get('source') ?? 'manual'));
   sendJson(res, 200, statusBody(deps));
 }

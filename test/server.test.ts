@@ -7,13 +7,15 @@ import { defaultState, StateStore, type Confirmed, type OnAirState } from '../sr
 
 class StubDriver implements LightDriver {
   calls: boolean[] = [];
-  result: Confirmed = 'on';
   fail = false;
+  /** When set, set() waits for this promise to resolve before returning. */
+  gate: Promise<void> | null = null;
 
   async set(onAir: boolean): Promise<Confirmed> {
     this.calls.push(onAir);
+    if (this.gate) await this.gate;
     if (this.fail) throw new Error('light unreachable');
-    return this.result;
+    return onAir ? 'on' : 'off';
   }
 }
 
@@ -138,5 +140,65 @@ test('token gate: 401 without or with wrong bearer, 200 with right one', async (
     (await fetch(`${h.base}/status`, { headers: { authorization: 'Bearer sekrit' } })).status,
     200,
   );
+  await h.close();
+});
+
+test('PUT /state body over 16KB returns 400 with an error string', async () => {
+  const h = await boot();
+  const res = await fetch(`${h.base}/state`, {
+    method: 'PUT',
+    body: JSON.stringify({ onAir: true, source: 'x'.repeat(17 * 1024) }),
+  });
+  assert.equal(res.status, 400);
+  assert.equal(typeof (await res.json()).error, 'string');
+  assert.deepEqual(h.driver.calls, []);
+  await h.close();
+});
+
+test('PUT /state with no onAir field returns 400 and never calls the driver', async () => {
+  const h = await boot();
+  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({}) });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.error, 'onAir must be a boolean');
+  assert.deepEqual(h.driver.calls, []);
+  await h.close();
+});
+
+test('concurrent writes serialize: last write wins, driver calls and persists happen in arrival order', async () => {
+  const h = await boot();
+  let releaseGate: () => void = () => {};
+  h.driver.gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+
+  // Slow write: PUT /state {onAir:true} - blocks inside driver.set() until we release the gate.
+  const slow = fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+
+  // Wait until the slow write has actually reached driver.set() (i.e. it's holding the write
+  // queue) before firing the second write, so the arrival order is deterministic.
+  while (h.driver.calls.length === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+
+  // Fast write arrives second but its driver call would resolve immediately once it runs.
+  const fast = fetch(`${h.base}/off`, { method: 'POST' });
+
+  // Let the slow write's driver.set() finish; the queue then lets the fast write run.
+  releaseGate();
+
+  const [slowRes, fastRes] = await Promise.all([slow, fast]);
+  assert.equal(slowRes.status, 200);
+  assert.equal(fastRes.status, 200);
+
+  const status = await (await fetch(`${h.base}/status`)).json();
+  assert.equal(status.intended, 'off');
+  assert.equal(status.confirmed, 'off');
+
+  assert.deepEqual(h.driver.calls, [true, false]);
+  assert.equal(h.persisted.length, 2);
+  assert.equal(h.persisted[0]!.intended, 'on');
+  assert.equal(h.persisted[1]!.intended, 'off');
+
   await h.close();
 });
