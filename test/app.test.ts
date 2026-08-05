@@ -65,6 +65,6 @@ test('close() completes while an SSE client is connected', async () => {
   const app = await createApp({ stateFile, port: 0, driver: new StubDriver(), log: () => {} });
   const res = await fetch(`http://127.0.0.1:${app.port}/events`);
   assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/);
+  await res.body?.cancel();
   await app.close(); // must resolve despite the open stream
-  assert.ok(true);
 });
