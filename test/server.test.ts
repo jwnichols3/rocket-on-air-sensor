@@ -181,8 +181,22 @@ test('concurrent writes serialize: last write wins, driver calls and persists ha
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
 
+  // Clear the gate so it can no longer be blamed for blocking the fast write's driver call -
+  // if the fast write's driver.set() runs at all before we release the slow write, it must be
+  // because the queue let it through, not because a shared gate happened to hold it back too.
+  h.driver.gate = null;
+
   // Fast write arrives second but its driver call would resolve immediately once it runs.
   const fast = fetch(`${h.base}/off`, { method: 'POST' });
+
+  // Yield briefly. Without the write queue, the fast write's driver.set() would run now (its
+  // own gate is null) and this assertion would fail.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(
+    h.driver.calls,
+    [true],
+    'fast write must stay queued behind the slow write, not race through the driver',
+  );
 
   // Let the slow write's driver.set() finish; the queue then lets the fast write run.
   releaseGate();
