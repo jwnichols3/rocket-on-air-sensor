@@ -43,3 +43,22 @@ test('load throws on valid JSON with invalid shape', async () => {
   await writeFile(file, JSON.stringify({ intended: 'sideways' }), 'utf8');
   await assert.rejects(() => loadState(file), /invalid shape/);
 });
+
+test('pre-message state files load with message null', async () => {
+  const file = await tmpStateFile();
+  await saveState(file, defaultState());
+  await writeFile(
+    file,
+    JSON.stringify({ intended: 'on', confirmed: 'unknown', source: 'detector', updatedAt: '2026-08-05T00:00:00.000Z' }),
+    'utf8',
+  );
+  const loaded = await loadState(file);
+  assert.equal(loaded?.message, null);
+  assert.equal(loaded?.intended, 'on');
+});
+
+test('message round-trips through save and load', async () => {
+  const file = await tmpStateFile();
+  await saveState(file, { ...defaultState(), message: 'BE QUIET' });
+  assert.equal((await loadState(file))?.message, 'BE QUIET');
+});

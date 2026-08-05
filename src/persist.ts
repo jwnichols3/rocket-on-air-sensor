@@ -12,7 +12,7 @@ export async function loadState(file: string): Promise<OnAirState | null> {
   }
   const parsed: unknown = JSON.parse(raw);
   if (!isOnAirState(parsed)) throw new Error(`state file ${file} has invalid shape`);
-  return parsed;
+  return { ...parsed, message: (parsed as { message?: string | null }).message ?? null };
 }
 
 export async function saveState(file: string, state: OnAirState): Promise<void> {

@@ -9,6 +9,7 @@ test('defaultState is off/unknown from boot', () => {
     confirmed: 'unknown',
     source: 'boot',
     updatedAt: '2026-08-05T00:00:00.000Z',
+    message: null,
   });
 });
 
@@ -50,4 +51,21 @@ test('isOnAirState accepts valid state and rejects junk', () => {
   assert.equal(isOnAirState(null), false);
   assert.equal(isOnAirState({ intended: 'maybe', confirmed: 'unknown', source: 'x', updatedAt: 'now' }), false);
   assert.equal(isOnAirState({ intended: 'on', confirmed: 'off', source: 7, updatedAt: 'now' }), false);
+});
+
+test('setMessage and clearMessage change only message', () => {
+  const store = new StateStore(defaultState(new Date('2026-08-05T00:00:00Z')));
+  const withMsg = store.setMessage('BE QUIET');
+  assert.equal(withMsg.message, 'BE QUIET');
+  assert.equal(withMsg.updatedAt, '2026-08-05T00:00:00.000Z');
+  const cleared = store.clearMessage();
+  assert.equal(cleared.message, null);
+});
+
+test('on-air write preserves an existing message', () => {
+  const store = new StateStore(defaultState());
+  store.setMessage('BE QUIET');
+  const state = store.write(true, 'detector');
+  assert.equal(state.message, 'BE QUIET');
+  assert.equal(state.intended, 'on');
 });
