@@ -143,6 +143,16 @@ test('token gate: 401 without or with wrong bearer, 200 with right one', async (
   await h.close();
 });
 
+test('createApiServer rejects an empty token', () => {
+  const deps: ServerDeps = {
+    store: new StateStore(defaultState()),
+    driver: new StubDriver(),
+    persist: async () => {},
+    token: '',
+  };
+  assert.throws(() => createApiServer(deps));
+});
+
 test('PUT /state body over 16KB returns 400 with an error string', async () => {
   const h = await boot();
   const res = await fetch(`${h.base}/state`, {

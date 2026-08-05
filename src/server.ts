@@ -19,6 +19,10 @@ const ROUTES: Record<string, string[]> = {
 const MAX_BODY_BYTES = 16 * 1024;
 
 export function createApiServer(deps: ServerDeps): Server {
+  if (deps.token !== undefined && deps.token.trim() === '') {
+    throw new Error('token must be non-empty when provided');
+  }
+
   let writeChain: Promise<void> = Promise.resolve();
   function enqueueWrite(run: () => Promise<void>): Promise<void> {
     const next = writeChain.then(run);

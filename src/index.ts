@@ -14,6 +14,10 @@ function parsePort(raw: string | undefined): number {
 const port = parsePort(process.env.ONAIR_PORT);
 const stateFile = process.env.ONAIR_STATE_FILE ?? join(homedir(), '.onair', 'state.json');
 const token = process.env.ONAIR_TOKEN;
+if (token !== undefined && token.trim() === '') {
+  console.error('[onair] ONAIR_TOKEN is set but empty - either unset it (no auth) or provide a real token');
+  process.exit(1);
+}
 
 const app = await createApp({ port, stateFile, token });
 
