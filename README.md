@@ -30,3 +30,7 @@ npm install && npm run build && npm start   # or: npm run dev
 ```
 
 Config via env: `ONAIR_PORT` (default 8484), `ONAIR_STATE_FILE` (default `~/.onair/state.json`), `ONAIR_TOKEN` (optional bearer auth). Contract: `docs/api-contract.md`.
+
+Interim tally display: open `http://<host>:8484/display` fullscreen (kiosk). Set a
+custom message with `curl -X PUT :8484/message -d '{"text": "BE QUIET"}'`, clear with
+`DELETE /message`.
