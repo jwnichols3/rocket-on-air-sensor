@@ -10,6 +10,9 @@ const app = await createApp({ port, stateFile, token });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    void app.close().then(() => process.exit(0));
+    void app.close().then(
+      () => process.exit(0),
+      () => process.exit(1),
+    );
   });
 }
