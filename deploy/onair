@@ -110,24 +110,26 @@ $CONFIG_FILE.
 EOF
 }
 
-# --- health check: GET /admin/health, token via query string (GET-only auth path) ---
-health_url() {
-  if [[ -n "$ONAIR_TOKEN" ]]; then
-    printf 'http://localhost:%s/admin/health?token=%s' "$ONAIR_PORT" "$ONAIR_TOKEN"
-  else
-    printf 'http://localhost:%s/admin/health' "$ONAIR_PORT"
-  fi
-}
-
+# --- health check: GET /admin/health, token via Authorization: Bearer header ---
+# (not a query string - an unencoded token containing # or & would otherwise
+# corrupt the URL; the header form works fine for GETs too).
 health_check_once() {
-  curl -fsS -m 2 "$(health_url)" >/dev/null 2>&1
+  local -a auth=()
+  if [[ -n "$ONAIR_TOKEN" ]]; then
+    auth=(-H "Authorization: Bearer $ONAIR_TOKEN")
+  fi
+  curl -fsS -m 2 "${auth[@]+"${auth[@]}"}" "http://localhost:$ONAIR_PORT/admin/health" >/dev/null 2>&1
 }
 
 # Fetches /admin/health and prints its body, or nothing on failure. Kept
 # dependency-free (grep, not a JSON parser) since the only field we care
 # about is stateFileWritable.
 health_body() {
-  curl -fsS -m 2 "$(health_url)" 2>/dev/null
+  local -a auth=()
+  if [[ -n "$ONAIR_TOKEN" ]]; then
+    auth=(-H "Authorization: Bearer $ONAIR_TOKEN")
+  fi
+  curl -fsS -m 2 "${auth[@]+"${auth[@]}"}" "http://localhost:$ONAIR_PORT/admin/health" 2>/dev/null
 }
 
 # Every mutating verb polls up to 5s and prints PASS/FAIL. Also fails (even
@@ -386,7 +388,22 @@ cmd_setup() {
       case "$ans" in
         k|K) new_token="$cur_token"; break ;;
         g|G) new_token="$(uuidgen | tr 'A-Z' 'a-z')"; break ;;
-        e|E) read -r -p "Enter token: " new_token || true; break ;;
+        e|E)
+          while true; do
+            read -r -s -p "Enter token: " new_token || true
+            printf '\n'
+            if [[ "$new_token" == *'"'* ]]; then
+              echo "onair: token cannot contain a double-quote character - try again" >&2
+              continue
+            fi
+            if [[ -z "$new_token" ]]; then
+              echo "onair: token cannot be empty - try again (or choose [n]one)" >&2
+              continue
+            fi
+            break
+          done
+          break
+          ;;
         n|N) new_token=""; break ;;
         *) echo "onair: invalid choice '$ans' - enter k, g, e, or n" >&2 ;;
       esac
@@ -394,6 +411,14 @@ cmd_setup() {
 
     read -r -p "State file [$cur_state]: " ans || true
     new_state="${ans:-$cur_state}"
+  else
+    # Non-interactive path: the wizard's per-keystroke valid_port check never
+    # runs, so an env/config ONAIR_PORT that isn't a valid port would
+    # otherwise sail straight into config.env unchecked.
+    if ! valid_port "$new_port"; then
+      echo "onair: invalid ONAIR_PORT '$new_port' - must be an integer 1-65535" >&2
+      exit 1
+    fi
   fi
 
   # Was the daemon reachable before config.env changes under it? Probed with
@@ -414,7 +439,17 @@ cmd_setup() {
 # Managed by 'onair setup' (rerun any time to change these values). Real
 # environment variables override the values below.
 ONAIR_PORT="$new_port"
-ONAIR_TOKEN="$new_token"
+EOF
+  # An empty ONAIR_TOKEN="" line would be written as set-but-empty, which the
+  # service treats as a fatal misconfiguration (fail-closed empty-token
+  # guard, by design - see src/index.ts) and crash-loops on. A fresh
+  # no-token install must instead get no ONAIR_TOKEN= assignment at all.
+  if [[ -n "$new_token" ]]; then
+    printf 'ONAIR_TOKEN="%s"\n' "$new_token" >> "$tmp_config"
+  else
+    printf '%s\n' "# ONAIR_TOKEN is not set - no auth. Run 'onair setup' to add one." >> "$tmp_config"
+  fi
+  cat >> "$tmp_config" <<EOF
 ONAIR_STATE_FILE="$new_state"
 EOF
   install -o "$TARGET_USER" -m 0600 "$tmp_config" "$CONFIG_FILE"
