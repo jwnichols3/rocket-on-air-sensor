@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# deploy/bootstrap - one-command install from a repo checkout: verify
+# prerequisites, build, then dispatch to the platform-specific installer
+# (macOS: deploy/onair install; Linux+systemd: render/install a systemd
+# unit). Run as root (sudo) on Linux - it writes /etc/systemd/system and
+# enables the service; on macOS deploy/onair itself asks for sudo where it
+# needs it.
+set -euo pipefail
+
+usage() {
+  cat >&2 <<EOF
+usage: deploy/bootstrap [--build-only] [args forwarded to 'onair install']
+
+  --build-only   run npm ci + npm run build, then stop (prints the next
+                 manual step instead of installing/starting the service).
+                 Useful on its own to prep a checkout without touching the
+                 running service.
+
+Any other arguments are forwarded to 'deploy/onair install' on macOS.
+EOF
+}
+
+# --- resolve this script's own directory, even through a symlink (same
+# pattern as deploy/onair's resolve_script_path) - works regardless of the
+# invoking cwd. ---
+resolve_script_path() {
+  local source="${BASH_SOURCE[0]}" dir
+  while [[ -h "$source" ]]; do
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    if [[ "$source" != /* ]]; then source="$dir/$source"; fi
+  done
+  cd -P "$(dirname "$source")" && pwd
+}
+
+check_prereqs() {
+  if ! command -v git >/dev/null 2>&1; then
+    echo "bootstrap: git not found in PATH - install git and re-run" >&2
+    exit 1
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    echo "bootstrap: node not found in PATH - install Node.js 22+ and re-run" >&2
+    exit 1
+  fi
+  local ver major
+  ver="$(node --version)"   # e.g. v22.4.0
+  major="${ver#v}"
+  major="${major%%.*}"
+  if ! [[ "$major" =~ ^[0-9]+$ ]] || (( major < 22 )); then
+    echo "bootstrap: node $ver found, but Node 22+ is required" >&2
+    exit 1
+  fi
+}
+
+# run_as_invoking_user CMD... - runs CMD as $SUDO_USER when this script is
+# running as root under sudo (so npm ci/npm run build don't leave root-owned
+# files in the checkout); runs it directly otherwise. -H so npm/node see the
+# invoking user's HOME, not root's.
+run_as_invoking_user() {
+  if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$SUDO_USER" -H "$@"
+  else
+    "$@"
+  fi
+}
+
+build() {
+  local reporoot="$1"
+  ( cd "$reporoot" && run_as_invoking_user npm ci )
+  ( cd "$reporoot" && run_as_invoking_user npm run build )
+}
+
+# --- Linux target user/home resolution (mirrors deploy/onair's macOS dscl
+# lookup, via getent since there's no dscl on Linux). Sets TARGET_USER and
+# TARGET_HOME. ---
+resolve_target_user_home() {
+  if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    TARGET_USER="$SUDO_USER"
+  else
+    TARGET_USER="$(id -un)"
+  fi
+  TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
+  if [[ -z "$TARGET_HOME" ]]; then
+    TARGET_HOME="$HOME"
+  fi
+}
+
+# resolve_real_path PATH - follows symlinks to a canonical path (e.g. a
+# node shim) when readlink -f is available; falls back to PATH unchanged.
+resolve_real_path() {
+  local p="$1"
+  if readlink -f "$p" >/dev/null 2>&1; then
+    readlink -f "$p"
+  else
+    printf '%s' "$p"
+  fi
+}
+
+# render_unit TEMPLATE OUT NODE_BIN APPDIR TARGET_USER TARGET_HOME - renders
+# the systemd unit template with sed. Guards against substitution values
+# containing characters sed's replacement syntax can't handle safely (same
+# guard deploy/onair uses when rendering the plist template).
+render_unit() {
+  local template="$1" out="$2" node_bin="$3" appdir="$4" target_user="$5" target_home="$6"
+  local sub_value
+  for sub_value in "$node_bin" "$appdir" "$target_user" "$target_home"; do
+    if [[ "$sub_value" == *'&'* || "$sub_value" == *'|'* || "$sub_value" == *'\'* ]]; then
+      echo "bootstrap: path contains characters the installer cannot render safely" >&2
+      exit 1
+    fi
+  done
+  sed \
+    -e "s|@NODE@|$node_bin|g" \
+    -e "s|@APPDIR@|$appdir|g" \
+    -e "s|@USER@|$target_user|g" \
+    -e "s|@HOME@|$target_home|g" \
+    "$template" > "$out"
+}
+
+# read_port - ONAIR_PORT env wins; else the last "^ONAIR_PORT=" line from
+# $ONAIR_CONFIG or $TARGET_HOME/.onair/config.env with one pair of
+# surrounding quotes stripped (same source-free parsing deploy/onair's
+# read_config uses - no eval/source of the config file); else 8484.
+# Deliberately port-only: this is a smoke test that the daemon started, not
+# a full config reader.
+read_port() {
+  if [[ -n "${ONAIR_PORT:-}" ]]; then
+    printf '%s' "$ONAIR_PORT"
+    return 0
+  fi
+  local config_file="${ONAIR_CONFIG:-$TARGET_HOME/.onair/config.env}"
+  local line value
+  if [[ -f "$config_file" ]]; then
+    line="$(grep '^ONAIR_PORT=' "$config_file" 2>/dev/null | tail -n 1)"
+    if [[ -n "$line" ]]; then
+      value="$(printf '%s\n' "$line" | cut -d'=' -f2-)"
+      case "$value" in
+        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+      esac
+      printf '%s' "$value"
+      return 0
+    fi
+  fi
+  printf '8484'
+}
+
+# health_poll PORT - GET /admin/health, up to 5s, print PASS/FAIL (same
+# curl-based poll deploy/onair uses).
+health_poll() {
+  local port="$1"
+  local deadline=$((SECONDS + 5))
+  while (( SECONDS < deadline )); do
+    if curl -fsS -m 2 "http://localhost:$port/admin/health" >/dev/null 2>&1; then
+      echo "health: PASS"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "health: FAIL"
+  return 1
+}
+
+dispatch_linux() {
+  local reporoot="$1"
+
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "bootstrap: Linux without systemd (no systemctl in PATH) is not supported" >&2
+    exit 1
+  fi
+
+  local node_bin
+  node_bin="$(command -v node)"
+  node_bin="$(resolve_real_path "$node_bin")"
+
+  resolve_target_user_home
+
+  local template="$reporoot/deploy/onair.service.template"
+  if [[ ! -f "$template" ]]; then
+    echo "bootstrap: template not found at $template" >&2
+    exit 1
+  fi
+
+  local tmp_unit
+  tmp_unit="$(mktemp /tmp/onair.service.XXXXXX)"
+  render_unit "$template" "$tmp_unit" "$node_bin" "$reporoot" "$TARGET_USER" "$TARGET_HOME"
+
+  if command -v systemd-analyze >/dev/null 2>&1; then
+    if ! systemd-analyze verify "$tmp_unit"; then
+      echo "bootstrap: warning - systemd-analyze verify reported issues on the rendered unit (continuing anyway)" >&2
+    fi
+  fi
+
+  install -m 0644 "$tmp_unit" /etc/systemd/system/onair.service
+  rm -f "$tmp_unit"
+
+  systemctl daemon-reload
+  systemctl enable --now onair
+
+  health_poll "$(read_port)"
+}
+
+dispatch() {
+  local reporoot="$1"; shift
+  local os
+  os="$(uname -s)"
+  case "$os" in
+    Darwin)
+      exec "$reporoot/deploy/onair" install "$@"
+      ;;
+    Linux)
+      dispatch_linux "$reporoot"
+      ;;
+    *)
+      echo "bootstrap: unsupported OS '$os' - only macOS and Linux (systemd) are supported" >&2
+      exit 1
+      ;;
+  esac
+}
+
+main() {
+  local build_only=false
+  local -a forward_args=()
+  local a
+  for a in "$@"; do
+    case "$a" in
+      -h|--help) usage; exit 0 ;;
+      --build-only) build_only=true ;;
+      *) forward_args+=("$a") ;;
+    esac
+  done
+
+  check_prereqs
+
+  local deploy_dir reporoot
+  deploy_dir="$(resolve_script_path)"
+  reporoot="$(cd -P "$deploy_dir/.." && pwd)"
+
+  build "$reporoot"
+
+  if [[ "$build_only" == "true" ]]; then
+    echo "bootstrap: build complete. Next: re-run 'deploy/bootstrap' (macOS) or 'sudo deploy/bootstrap' (Linux) without --build-only to install and start the service."
+    return 0
+  fi
+
+  dispatch "$reporoot" "${forward_args[@]+"${forward_args[@]}"}"
+}
+
+main "$@"

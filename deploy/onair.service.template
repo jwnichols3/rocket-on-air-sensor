@@ -1,0 +1,35 @@
+# Template for /etc/systemd/system/onair.service.
+# Rendered by `deploy/bootstrap` - do not hand-edit the installed unit,
+# re-run bootstrap instead (it renders this template with sed, validates it
+# with `systemd-analyze verify` when available, installs it root:root 0644,
+# and does daemon-reload + enable --now).
+#
+# Placeholders (filled in by deploy/bootstrap):
+#   NODE   - absolute path to the node binary (resolved from `command -v node`)
+#   APPDIR - absolute path to the app checkout (WorkingDirectory; runs a
+#            locally built APPDIR/dist/index.js, not a package-runner fetch)
+#   USER   - Linux username systemd runs the service as
+#   HOME   - that user's home directory (EnvironmentFile path)
+# Each is written into the unit below wrapped in '@' signs, e.g. the node
+# placeholder reads "at" sign + NODE + "at" sign.
+#
+# No service configuration (port, token, state file) lives in this unit or the
+# rendered copy: the service reads $HOME/.onair/config.env itself at startup
+# (src/config.ts). Change it with `onair setup`-equivalent editing of that
+# file and a restart - no re-render of this unit required.
+
+[Unit]
+Description=On-air API service
+After=network.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@APPDIR@
+EnvironmentFile=-@HOME@/.onair/config.env
+ExecStart=@NODE@ @APPDIR@/dist/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
