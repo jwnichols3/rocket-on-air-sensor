@@ -369,9 +369,9 @@ cmd_setup() {
 # $CONFIG_FILE - onair service configuration.
 # Managed by 'onair setup' (rerun any time to change these values). Real
 # environment variables override the values below.
-ONAIR_PORT=$new_port
-ONAIR_TOKEN=$new_token
-ONAIR_STATE_FILE=$new_state
+ONAIR_PORT="$new_port"
+ONAIR_TOKEN="$new_token"
+ONAIR_STATE_FILE="$new_state"
 EOF
   install -o "$TARGET_USER" -m 0600 "$tmp_config" "$CONFIG_FILE"
   rm -f "$tmp_config"
@@ -390,7 +390,7 @@ EOF
   if [[ "$daemon_was_up" == "true" ]]; then
     cmd_restart
   else
-    echo "onair: daemon not running - run 'sudo onair install' to start it"
+    echo "onair: daemon not responding - check 'onair status' and 'onair logs'; if it's not installed yet, run 'sudo onair install'"
   fi
 }
 
