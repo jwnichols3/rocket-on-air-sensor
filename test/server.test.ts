@@ -27,7 +27,7 @@ interface Harness {
   close: () => Promise<void>;
 }
 
-async function boot(token?: string): Promise<Harness> {
+async function boot(token?: string, log?: (line: string) => void): Promise<Harness> {
   const driver = new StubDriver();
   const persisted: OnAirState[] = [];
   const deps: ServerDeps = {
@@ -37,6 +37,7 @@ async function boot(token?: string): Promise<Harness> {
       persisted.push(state);
     },
     token,
+    log,
   };
   const server: Server = createApiServer(deps);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -96,6 +97,21 @@ test('driver failure still succeeds the write with confirmed unknown', async () 
   assert.equal(body.intended, 'on');
   assert.equal(body.confirmed, 'unknown');
   assert.equal(h.persisted.length, 1);
+  await h.close();
+});
+
+test('driver failure is logged before confirmed is set to unknown', async () => {
+  const lines: string[] = [];
+  const h = await boot(undefined, (line) => lines.push(line));
+  h.driver.fail = true;
+  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.confirmed, 'unknown');
+  assert.ok(
+    lines.some((line) => /driver\.set\(true\) failed/.test(line)),
+    `expected a log line matching /driver\\.set\\(true\\) failed/, got: ${JSON.stringify(lines)}`,
+  );
   await h.close();
 });
 

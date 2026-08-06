@@ -28,7 +28,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
   // Invariant: recover after restart - re-apply intended state to the light on boot.
   try {
     store.setConfirmed(await driver.set(store.get().intended === 'on'));
-  } catch {
+  } catch (err) {
+    log(`[onair] boot driver re-apply failed: ${(err as Error).message}`);
     store.setConfirmed('unknown');
   }
 
@@ -39,6 +40,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     persist: (state) => saveState(opts.stateFile, state),
     token: opts.token,
     hub,
+    log,
   });
 
   await new Promise<void>((resolve) => server.listen(opts.port, resolve));

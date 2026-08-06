@@ -38,6 +38,30 @@ test('state survives a restart and boot re-applies intended to the driver', asyn
   await app2.close();
 });
 
+class FailingDriver implements LightDriver {
+  async set(): Promise<Confirmed> {
+    throw new Error('light unreachable');
+  }
+}
+
+test('boot driver re-apply failure is logged and confirmed stays unknown', async () => {
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'onair-app-')), 'state.json');
+  const lines: string[] = [];
+  const app = await createApp({
+    stateFile,
+    port: 0,
+    driver: new FailingDriver(),
+    log: (line) => lines.push(line),
+  });
+  const body = await (await fetch(`http://127.0.0.1:${app.port}/status`)).json();
+  assert.equal(body.confirmed, 'unknown');
+  assert.ok(
+    lines.some((line) => /boot driver re-apply failed/.test(line)),
+    `expected a log line matching /boot driver re-apply failed/, got: ${JSON.stringify(lines)}`,
+  );
+  await app.close();
+});
+
 test('token from options gates the API end to end', async () => {
   const stateFile = join(await mkdtemp(join(tmpdir(), 'onair-app-')), 'state.json');
   const app = await createApp({ stateFile, port: 0, token: 'tok', driver: new StubDriver(), log: () => {} });

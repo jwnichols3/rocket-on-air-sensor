@@ -10,6 +10,7 @@ export interface ServerDeps {
   persist: (state: OnAirState) => Promise<void>;
   token?: string;
   hub?: SseHub;
+  log?: (line: string) => void;
 }
 
 const ROUTES: Record<string, string[]> = {
@@ -31,6 +32,7 @@ export function createApiServer(deps: ServerDeps): Server {
   }
 
   const hub = deps.hub ?? createSseHub();
+  const log = deps.log ?? console.log;
 
   let writeChain: Promise<void> = Promise.resolve();
   function enqueueWrite(run: () => Promise<void>): Promise<void> {
@@ -40,7 +42,7 @@ export function createApiServer(deps: ServerDeps): Server {
   }
 
   return createServer((req, res) => {
-    handle(req, res, deps, enqueueWrite, hub).catch((err) => {
+    handle(req, res, deps, enqueueWrite, hub, log).catch((err) => {
       sendJson(res, 500, { error: `internal error: ${(err as Error).message}` });
     });
   });
@@ -77,13 +79,19 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function doWrite(deps: ServerDeps, onAir: boolean, source: string): Promise<void> {
+async function doWrite(
+  deps: ServerDeps,
+  onAir: boolean,
+  source: string,
+  log: (line: string) => void,
+): Promise<void> {
   deps.store.write(onAir, source);
   await persistCurrent(deps);
   let confirmed: Confirmed;
   try {
     confirmed = await deps.driver.set(onAir);
-  } catch {
+  } catch (err) {
+    log(`[onair] driver.set(${onAir}) failed: ${(err as Error).message}`);
     confirmed = 'unknown';
   }
   deps.store.setConfirmed(confirmed);
@@ -97,6 +105,7 @@ async function handle(
   deps: ServerDeps,
   enqueueWrite: EnqueueWrite,
   hub: SseHub,
+  log: (line: string) => void,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
@@ -189,12 +198,12 @@ async function handle(
       sendJson(res, 400, { error: 'source must be a string' });
       return;
     }
-    await enqueueWrite(() => doWrite(deps, onAir, source ?? 'manual'));
+    await enqueueWrite(() => doWrite(deps, onAir, source ?? 'manual', log));
     broadcastAndSend(res, deps, hub);
     return;
   }
 
   // POST /on | /off
-  await enqueueWrite(() => doWrite(deps, path === '/on', url.searchParams.get('source') ?? 'manual'));
+  await enqueueWrite(() => doWrite(deps, path === '/on', url.searchParams.get('source') ?? 'manual', log));
   broadcastAndSend(res, deps, hub);
 }
