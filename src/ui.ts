@@ -122,6 +122,7 @@ export const UI_HTML = `<!doctype html>
   }
   .btn:active { transform: translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); }
   .btn:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-sm { padding: 6px 10px; font-size: 12px; }
 
   .controls-row { display: flex; gap: 12px; }
@@ -144,6 +145,15 @@ export const UI_HTML = `<!doctype html>
   .err-strip.show { opacity: 1; transform: translateY(0); }
 
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .admin-health {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px 16px;
+    margin: 0;
+  }
+  .admin-health > div { display: flex; justify-content: space-between; gap: 8px; }
+  .admin-health dt { margin: 0; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .admin-health dd { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--text); }
   #msg-input {
     flex: 1; min-width: 180px;
     background: var(--well); color: var(--text);
@@ -237,6 +247,21 @@ export const UI_HTML = `<!doctype html>
     </section>
 
     <section class="card">
+      <h2>Admin</h2>
+      <dl id="admin-health" class="admin-health">
+        <div><dt>PID</dt><dd id="admin-pid">&mdash;</dd></div>
+        <div><dt>Uptime</dt><dd id="admin-uptime">&mdash;</dd></div>
+        <div><dt>Node</dt><dd id="admin-node">&mdash;</dd></div>
+        <div><dt>State file writable</dt><dd id="admin-writable">&mdash;</dd></div>
+      </dl>
+      <div class="row" style="margin-top: 10px;">
+        <button id="admin-refresh" class="btn btn-sm">Refresh</button>
+        <button id="btn-restart" class="btn btn-sm" disabled>Restart</button>
+      </div>
+      <div id="admin-err" class="err-strip"></div>
+    </section>
+
+    <section class="card">
       <h2>Event Log</h2>
       <ul id="log"><li id="log-empty">no events yet</li></ul>
     </section>
@@ -324,6 +349,14 @@ export const UI_HTML = `<!doctype html>
     var log = document.getElementById('log');
     var logEmpty = document.getElementById('log-empty');
 
+    var adminErr = document.getElementById('admin-err');
+    var adminPid = document.getElementById('admin-pid');
+    var adminUptime = document.getElementById('admin-uptime');
+    var adminNode = document.getElementById('admin-node');
+    var adminWritable = document.getElementById('admin-writable');
+    var adminRefresh = document.getElementById('admin-refresh');
+    var btnRestart = document.getElementById('btn-restart');
+
     function setErr(el, text) {
       el.textContent = text;
       el.classList.add('show');
@@ -368,7 +401,107 @@ export const UI_HTML = `<!doctype html>
         led.className = 'led reconnecting';
       };
       lastAt = Date.now();
+      loadHealth();
     }
+
+    var healthLoadedOnce = false;
+    var restarting = false;
+
+    function adminHealthUrl() {
+      return '/admin/health' + (token ? '?token=' + encodeURIComponent(token) : '');
+    }
+
+    function humanizeUptime(seconds) {
+      seconds = Math.floor(seconds);
+      var h = Math.floor(seconds / 3600);
+      var m = Math.floor((seconds % 3600) / 60);
+      var s = seconds % 60;
+      if (h > 0) return h + 'h ' + m + 'm';
+      if (m > 0) return m + 'm ' + s + 's';
+      return s + 's';
+    }
+
+    function renderHealth(body) {
+      adminPid.textContent = String(body.pid);
+      adminUptime.textContent = humanizeUptime(body.uptime);
+      adminNode.textContent = body.nodeVersion;
+      adminWritable.textContent = body.stateFileWritable ? 'yes' : 'no';
+      healthLoadedOnce = true;
+      if (!restarting) btnRestart.disabled = false;
+    }
+
+    function loadHealth() {
+      return fetch(adminHealthUrl()).then(function (res) {
+        if (!res.ok) {
+          return res.text().then(function (txt) {
+            var msg = txt;
+            try {
+              var parsed = JSON.parse(txt);
+              if (parsed && parsed.error) msg = parsed.error;
+            } catch (e) {}
+            setErr(adminErr, 'GET /admin/health -> ' + res.status + (msg ? ' ' + msg : ''));
+          });
+        }
+        return res.json().then(function (body) {
+          clearErr(adminErr);
+          renderHealth(body);
+        });
+      }).catch(function (err) {
+        setErr(adminErr, 'GET /admin/health -> ' + (err && err.message ? err.message : String(err)));
+      });
+    }
+    adminRefresh.addEventListener('click', function () { loadHealth(); });
+
+    function pollHealthUntilBack() {
+      var timer = setInterval(function () {
+        fetch(adminHealthUrl()).then(function (res) {
+          if (!res.ok) return;
+          return res.json().then(function (body) {
+            clearInterval(timer);
+            restarting = false;
+            btnRestart.textContent = 'Restart';
+            clearErr(adminErr);
+            renderHealth(body);
+          });
+        }).catch(function () {
+          // Connection refused / reset while the process is restarting - keep polling.
+        });
+      }, 1000);
+    }
+
+    btnRestart.addEventListener('click', function () {
+      if (btnRestart.disabled) return;
+      restarting = true;
+      btnRestart.disabled = true;
+      btnRestart.textContent = 'restarting…';
+      fetch('/admin/restart', { method: 'POST', headers: authHeaders() }).then(function (res) {
+        if (res.status === 403) {
+          setErr(adminErr, 'set ONAIR_TOKEN to enable remote restart');
+          restarting = false;
+          btnRestart.textContent = 'Restart';
+          btnRestart.disabled = !healthLoadedOnce;
+          return;
+        }
+        if (res.status >= 200 && res.status < 300) {
+          // Fire-and-forget: the process exits right after this response, so don't
+          // read the body - just start polling for it to come back.
+          clearErr(adminErr);
+          pollHealthUntilBack();
+          return;
+        }
+        return res.text().then(function (txt) {
+          setErr(adminErr, 'POST /admin/restart -> ' + res.status + (txt ? ' ' + txt : ''));
+          restarting = false;
+          btnRestart.textContent = 'Restart';
+          btnRestart.disabled = !healthLoadedOnce;
+        });
+      }).catch(function (err) {
+        setErr(adminErr, 'POST /admin/restart -> ' + (err && err.message ? err.message : String(err)));
+        restarting = false;
+        btnRestart.textContent = 'Restart';
+        btnRestart.disabled = !healthLoadedOnce;
+      });
+    });
 
     function effectiveAgeSeconds() {
       if (last === null) return 0;
@@ -549,6 +682,9 @@ export const UI_HTML = `<!doctype html>
     setInterval(function () {
       if (last !== null) ageEl.textContent = 'age ' + Math.floor(effectiveAgeSeconds()) + 's';
     }, 1000);
+    setInterval(function () {
+      if (!restarting) loadHealth();
+    }, 10000);
     setInterval(function () {
       if (Date.now() - lastAt > WATCHDOG_SILENT_MS) {
         document.body.classList.add('disconnected');

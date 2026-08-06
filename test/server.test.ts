@@ -356,7 +356,17 @@ test('GET /ui serves the control panel + API console page', async () => {
   const html = await res.text();
   assert.match(html, /EventSource/);
   assert.match(html, /WATCHDOG_SILENT_MS/);
-  for (const marker of ['/status', '/state', '/on', '/off', '/message', 'DELETE']) {
+  for (const marker of [
+    '/status',
+    '/state',
+    '/on',
+    '/off',
+    '/message',
+    'DELETE',
+    'btn-restart',
+    'admin-health',
+    '/admin/health',
+  ]) {
     assert.ok(html.includes(marker), `expected UI_HTML to contain ${marker}`);
   }
   await h.close();
