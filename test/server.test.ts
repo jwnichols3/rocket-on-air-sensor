@@ -243,6 +243,15 @@ test('PUT /message sets, DELETE clears; on-air fields untouched', async () => {
   await h.close();
 });
 
+test('message write persists confirmed as unknown even after a driver ack', async () => {
+  const h = await boot();
+  await fetch(`${h.base}/on`, { method: 'POST' }); // StubDriver acks -> confirmed "on" in memory
+  await fetch(`${h.base}/message`, { method: 'PUT', body: JSON.stringify({ text: 'HI' }) });
+  assert.equal(h.persisted.at(-1)!.confirmed, 'unknown');
+  assert.equal(h.persisted.at(-1)!.message, 'HI');
+  await h.close();
+});
+
 test('PUT /message validation: missing, empty, oversized text get 400', async () => {
   const h = await boot();
   for (const body of [JSON.stringify({}), JSON.stringify({ text: '' }), JSON.stringify({ text: 'x'.repeat(201) })]) {

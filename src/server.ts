@@ -55,6 +55,17 @@ function statusBody(deps: ServerDeps): OnAirState & { ageSeconds: number } {
   return { ...deps.store.get(), ageSeconds: deps.store.ageSeconds() };
 }
 
+function persistCurrent(deps: ServerDeps): Promise<void> {
+  // Invariant: persisted confirmed is always "unknown" - the live value is memory-only.
+  return deps.persist({ ...deps.store.get(), confirmed: 'unknown' });
+}
+
+function broadcastAndSend(res: ServerResponse, deps: ServerDeps, hub: SseHub): void {
+  const body = statusBody(deps);
+  hub.broadcast(body);
+  sendJson(res, 200, body);
+}
+
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -68,7 +79,7 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 async function doWrite(deps: ServerDeps, onAir: boolean, source: string): Promise<void> {
   deps.store.write(onAir, source);
-  await deps.persist(deps.store.get());
+  await persistCurrent(deps);
   let confirmed: Confirmed;
   try {
     confirmed = await deps.driver.set(onAir);
@@ -130,10 +141,9 @@ async function handle(
     if (method === 'DELETE') {
       await enqueueWrite(async () => {
         deps.store.clearMessage();
-        await deps.persist(deps.store.get());
+        await persistCurrent(deps);
       });
-      hub.broadcast(statusBody(deps));
-      sendJson(res, 200, statusBody(deps));
+      broadcastAndSend(res, deps, hub);
       return;
     }
     let text: unknown;
@@ -155,10 +165,9 @@ async function handle(
     const messageText: string = text;
     await enqueueWrite(async () => {
       deps.store.setMessage(messageText);
-      await deps.persist(deps.store.get());
+      await persistCurrent(deps);
     });
-    hub.broadcast(statusBody(deps));
-    sendJson(res, 200, statusBody(deps));
+    broadcastAndSend(res, deps, hub);
     return;
   }
 
@@ -181,13 +190,11 @@ async function handle(
       return;
     }
     await enqueueWrite(() => doWrite(deps, onAir, source ?? 'manual'));
-    hub.broadcast(statusBody(deps));
-    sendJson(res, 200, statusBody(deps));
+    broadcastAndSend(res, deps, hub);
     return;
   }
 
   // POST /on | /off
   await enqueueWrite(() => doWrite(deps, path === '/on', url.searchParams.get('source') ?? 'manual'));
-  hub.broadcast(statusBody(deps));
-  sendJson(res, 200, statusBody(deps));
+  broadcastAndSend(res, deps, hub);
 }
