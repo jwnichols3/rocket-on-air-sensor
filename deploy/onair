@@ -96,6 +96,14 @@ verbs:
   reset-state            clear on-air state via API (or state file), restart
   disable               launchctl disable (persists across reboot)
   enable                launchctl enable, then start
+  update [--check-only|--dry-run] [--yes]
+                        fetch + fast-forward this checkout, rebuild, swap in
+                        the new dist, restart (reload if the node path
+                        changed), health-poll; rolls back on failure.
+                        --check-only/--dry-run lists pending commits without
+                        applying. --yes skips the confirm prompt (implied
+                        when stdin is not a TTY). Refuses a dirty tree or a
+                        checkout with no upstream branch.
 
 Reads ONAIR_PORT (default 8484) and ONAIR_TOKEN from the environment or
 $CONFIG_FILE.
@@ -178,25 +186,12 @@ migrate_cli_env() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-cmd_install() {
-  local sudoers_flag="${1:-}"
-  # Create as TARGET_USER, not root: install runs under sudo, so a plain
-  # `mkdir -p` here would leave ~/.onair root-owned and the daemon (which runs
-  # as TARGET_USER) unable to write state. Works both invoked via sudo (EUID
-  # 0, TARGET_USER set from SUDO_USER) and run directly (EUID != 0, plain mkdir).
-  ensure_target_dir "$TARGET_HOME/.onair/logs"
-
-  migrate_cli_env
-
-  # A fresh install with no config.env yet (and nothing to migrate from
-  # cli.env) gets the wizard before the daemon ever starts, so the first
-  # boot already uses the chosen values instead of defaults. Interactive
-  # only on a TTY - cmd_setup makes that call itself.
-  if [[ ! -f "$CONFIG_FILE" ]]; then
-    cmd_setup __internal_from_install__
-  fi
-
+# render_plist - render the plist template (node/APPDIR/user/home
+# placeholders), lint it, and install it to $PLIST_PATH (0644 root:wheel).
+# Factored out of cmd_install so `onair update`'s node-path-changed path
+# (step 7) can re-render without going through cmd_install's full flow
+# (wizard-on-first-run, sudoers, bootstrap-start).
+render_plist() {
   local node_bin
   node_bin="$(command -v node || true)"
   if [[ -z "$node_bin" ]]; then
@@ -236,6 +231,55 @@ cmd_install() {
 
   sudo install -o root -g wheel -m 0644 "$tmp_plist" "$PLIST_PATH"
   rm -f "$tmp_plist"
+}
+
+# run_as_invoking_user CMD... - runs CMD as $SUDO_USER when this script is
+# running as root under sudo (so `onair update`'s git/npm/build steps don't
+# leave root-owned files in the checkout); runs it directly otherwise. -H so
+# npm/node/git see the invoking user's HOME, not root's. Mirrors
+# deploy/bootstrap's helper of the same name.
+run_as_invoking_user() {
+  if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$SUDO_USER" -H "$@"
+  else
+    "$@"
+  fi
+}
+
+# git_u ARGS... - git against $APPDIR, run as the invoking (non-root) user.
+git_u() {
+  run_as_invoking_user git -C "$APPDIR" "$@"
+}
+
+# dist_is_current - true if $APPDIR/dist exists and no file under
+# $APPDIR/src has a newer mtime than it.
+dist_is_current() {
+  [[ -d "$APPDIR/dist" ]] || return 1
+  local newer
+  newer="$(find "$APPDIR/src" -type f -newer "$APPDIR/dist" 2>/dev/null)"
+  [[ -z "$newer" ]]
+}
+
+# ---------------------------------------------------------------------------
+cmd_install() {
+  local sudoers_flag="${1:-}"
+  # Create as TARGET_USER, not root: install runs under sudo, so a plain
+  # `mkdir -p` here would leave ~/.onair root-owned and the daemon (which runs
+  # as TARGET_USER) unable to write state. Works both invoked via sudo (EUID
+  # 0, TARGET_USER set from SUDO_USER) and run directly (EUID != 0, plain mkdir).
+  ensure_target_dir "$TARGET_HOME/.onair/logs"
+
+  migrate_cli_env
+
+  # A fresh install with no config.env yet (and nothing to migrate from
+  # cli.env) gets the wizard before the daemon ever starts, so the first
+  # boot already uses the chosen values instead of defaults. Interactive
+  # only on a TTY - cmd_setup makes that call itself.
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    cmd_setup __internal_from_install__
+  fi
+
+  render_plist
 
   write_newsyslog_conf
 
@@ -510,6 +554,158 @@ cmd_enable() {
   cmd_start
 }
 
+# apply_restart_for_update - steps 7-8 of `onair update`: on Mac, if the
+# node path baked into the installed plist no longer matches `command -v
+# node` (e.g. a Homebrew node upgrade), re-render the plist and reload;
+# otherwise a plain restart. Both cmd_reload and cmd_restart already end in
+# mutating_health_poll (PASS/FAIL printed there) - this function's exit
+# status IS the health-poll result, for cmd_update to branch on.
+apply_restart_for_update() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local installed_node="" current_node
+    if [[ -f "$PLIST_PATH" ]]; then
+      installed_node="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$PLIST_PATH" 2>/dev/null || true)"
+    fi
+    current_node="$(command -v node || true)"
+    if [[ -n "$installed_node" && -n "$current_node" && "$installed_node" != "$current_node" ]]; then
+      echo "onair: update: node path changed ($installed_node -> $current_node) - re-rendering plist and reloading" >&2
+      render_plist
+      cmd_reload
+      return
+    fi
+  fi
+  cmd_restart
+}
+
+# cmd_update [--check-only|--dry-run] [--yes] - self-update: fetch, fast-
+# forward if behind, rebuild into a staging dir, swap it in, restart
+# (reload if the node path changed), health-poll, roll back on failure. See
+# docs/superpowers/specs/2026-08-06-host-install-evolvable-design.md
+# Deliverable 5 for the numbered steps this mirrors.
+cmd_update() {
+  local check_only=false yes=false
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --check-only|--dry-run) check_only=true ;;
+      --yes) yes=true ;;
+      *)
+        echo "onair: update: unknown argument: $a" >&2
+        exit 1
+        ;;
+    esac
+  done
+  # Non-interactive invocations (cron, CI, a pipe) can't answer a confirm
+  # prompt - treat as if --yes were passed rather than hang.
+  [[ -t 0 ]] || yes=true
+
+  if ! git_u rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "onair: update: $APPDIR is not a git checkout - can't self-update" >&2
+    exit 1
+  fi
+  if ! git_u rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+    echo "onair: update: no upstream tracking branch configured for the current branch in $APPDIR - can't self-update" >&2
+    exit 1
+  fi
+
+  # Step 1: refuse a dirty tree - staged or unstaged changes to tracked
+  # files (untracked files don't block a fast-forward merge, so they're not
+  # treated as blocking here).
+  local dirty
+  dirty="$( { git_u diff --name-only; git_u diff --cached --name-only; } | sort -u )"
+  if [[ -n "$dirty" ]]; then
+    echo "onair: update: refusing - working tree has uncommitted changes:" >&2
+    printf '%s\n' "$dirty" >&2
+    exit 1
+  fi
+
+  # Step 2: fetch, then check both "no new commits" and "dist is current" -
+  # a stale/missing dist with no new commits still needs a rebuild, just
+  # without a merge first.
+  git_u fetch --quiet origin
+
+  local head_rev upstream_rev
+  head_rev="$(git_u rev-parse @)"
+  upstream_rev="$(git_u rev-parse '@{u}')"
+
+  if [[ "$head_rev" == "$upstream_rev" ]] && dist_is_current; then
+    echo "Everything is up to date."
+    exit 0
+  fi
+
+  # Step 3: --check-only/--dry-run stops here, before touching anything.
+  if [[ "$check_only" == "true" ]]; then
+    local log
+    log="$(git_u log --oneline '@..@{u}')"
+    if [[ -n "$log" ]]; then
+      printf '%s\n' "$log"
+    else
+      echo "no new commits"
+    fi
+    exit 0
+  fi
+
+  # Step 4: confirm unless --yes (or non-TTY, handled above).
+  if [[ "$yes" != "true" ]]; then
+    local ans
+    read -r -p "Apply update and restart onair? [y/N] " ans || true
+    case "$ans" in
+      y|Y|yes|Yes) ;;
+      *)
+        echo "onair: update: aborted" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  # Step 5: fast-forward (skip if already at the upstream commit) + npm ci,
+  # both as the checkout-owning user even if `update` itself was run via sudo.
+  if [[ "$head_rev" != "$upstream_rev" ]]; then
+    git_u merge --ff-only '@{u}'
+  fi
+  ( cd "$APPDIR" && run_as_invoking_user npm ci --ignore-scripts )
+
+  # Step 6: build to a staging dir, then swap it in. The trap here is
+  # deliberately scoped to just the swap - if a kill lands between the two
+  # `mv`s, $APPDIR/dist would otherwise be left missing entirely.
+  rm -rf "$APPDIR/.dist-next"
+  ( cd "$APPDIR" && run_as_invoking_user npx tsc -p tsconfig.json --outDir .dist-next )
+
+  trap '
+    if [[ ! -d "$APPDIR/dist" && -d "$APPDIR/dist.prev" ]]; then
+      echo "onair: update: interrupted mid-swap - restoring dist from dist.prev" >&2
+      mv "$APPDIR/dist.prev" "$APPDIR/dist"
+    fi
+    exit 1
+  ' INT TERM ERR
+  rm -rf "$APPDIR/dist.prev"
+  if [[ -d "$APPDIR/dist" ]]; then
+    mv "$APPDIR/dist" "$APPDIR/dist.prev"
+  fi
+  mv "$APPDIR/.dist-next" "$APPDIR/dist"
+  trap - INT TERM ERR
+
+  # Steps 7-8: restart (or reload, if node moved) + health-poll.
+  if apply_restart_for_update; then
+    return 0
+  fi
+
+  # Health failed: roll back to the pre-update build, keep the bad one
+  # around for diagnosis, restart once more (best-effort - the update has
+  # already failed regardless of whether this second restart's poll passes).
+  echo "onair: update: health check failed after update - rolling back" >&2
+  if [[ -d "$APPDIR/dist.prev" ]]; then
+    rm -rf "$APPDIR/.dist-failed"
+    mv "$APPDIR/dist" "$APPDIR/.dist-failed"
+    mv "$APPDIR/dist.prev" "$APPDIR/dist"
+    echo "onair: update: failed build kept at $APPDIR/.dist-failed for diagnosis" >&2
+    apply_restart_for_update || true
+  else
+    echo "onair: update: no dist.prev to roll back to - $APPDIR/dist left as the failed build" >&2
+  fi
+  exit 1
+}
+
 # ---------------------------------------------------------------------------
 if [[ $# -lt 1 ]]; then
   usage
@@ -532,6 +728,7 @@ case "$verb" in
   reset-state) cmd_reset_state ;;
   disable) cmd_disable ;;
   enable) cmd_enable ;;
+  update) cmd_update "$@" ;;
   *)
     usage
     exit 1

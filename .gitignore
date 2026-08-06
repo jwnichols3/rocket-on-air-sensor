@@ -17,3 +17,9 @@ build/
 .env
 .env.local
 *.log
+
+# onair update working dirs (deploy/onair): staged build, previous-good
+# build kept for rollback, failed build kept for diagnosis
+.dist-next/
+dist.prev/
+.dist-failed/
