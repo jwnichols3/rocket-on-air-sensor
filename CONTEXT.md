@@ -135,3 +135,13 @@ else (state, light control, API) lives on the receiver.
   parked; the hardware research doc stands ready for whenever this reopens.
   Consequence: `confirmed` stays `"unknown"` (no-op driver), so all status feedback
   (display, Companion) keys off `intended`.
+- **D-13 (2026-08-06)** Mac Mini service management: a system-domain **LaunchDaemon**
+  (`com.rocket.onair`, `UserName=john`, `KeepAlive`) supervising `node dist/index.js`
+  from a local checkout - chosen over pm2/brew-services/LaunchAgent via a judged
+  3-advocate bakeoff (issue #12 has the full verdict). Admin interface is layered:
+  an `onair` shell CLI wrapping launchctl (the only layer that can cold-start a dead
+  service), authed `GET /admin/health` + `POST /admin/restart` routes (restart =
+  exit cleanly, supervisor respawns - identical under Pi systemd), and an Admin card
+  on `/ui`. Zero new dependencies; symmetric with `deploy/onair.service`. Revisit
+  if: FileVault gets enabled (verified OFF 2026-08-06), a permanent GUI login makes
+  the LaunchAgent+menu-bar path attractive, or real multi-process needs emerge.
