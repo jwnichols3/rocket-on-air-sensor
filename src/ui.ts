@@ -204,7 +204,7 @@ export const UI_HTML = `<!doctype html>
   }
 </style>
 </head>
-<body class="off">
+<body>
   <header>
     <span id="wordmark">on-air</span>
     <span id="pill" class="pill off">OFF AIR</span>
@@ -377,7 +377,19 @@ export const UI_HTML = `<!doctype html>
 
     function pad(n) { return (n < 10 ? '0' : '') + n; }
 
+    var lastLoggedKey = null;
+
+    function logKey(s) {
+      return s.intended + '|' + s.source + '|' + (s.message === null || s.message === undefined ? '' : s.message);
+    }
+
     function addLogRow(s) {
+      // Heartbeats and unchanged reconnect snapshots repeat the same (intended, source,
+      // message) as the last logged row - skip them so the feed shows real changes only.
+      var key = logKey(s);
+      if (key === lastLoggedKey) return;
+      lastLoggedKey = key;
+
       if (logEmpty) { logEmpty.remove(); logEmpty = null; }
       var now = new Date();
       var time = pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
