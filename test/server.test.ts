@@ -280,6 +280,7 @@ test('GET /display serves the self-contained page', async () => {
   const html = await res.text();
   assert.match(html, /EventSource/);
   assert.match(html, /ON AIR/);
+  assert.match(html, /WATCHDOG_SILENT_MS/);
   await h.close();
 });
 

@@ -66,14 +66,17 @@ across restarts; on-air writes and detector heartbeats never modify it.
 
 Server-sent events (`text/event-stream`): a `status` event with the full status JSON
 on connect, another on every successful write (state or message), and a keep-alive
-comment every 15s. `ageSeconds` is computed at send time.
+`status` event every 15s per connection - a real event, so clients can detect a dead
+stream, with `ageSeconds` computed at send time.
 
 ### `GET /display`
 
 A self-contained HTML tally page (inline CSS/JS) for fullscreen/kiosk use. Renders ON
 AIR (red) / OFF AIR (dark) live via `/events`; a set message replaces the wordmark
 text but never the state color; shows a DISCONNECTED overlay when the stream drops
-and a stale badge when detector-sourced state exceeds 5 minutes of age.
+and a stale badge when detector-sourced state exceeds 5 minutes of age. A client-side
+watchdog also shows the overlay after ~45s of silence even without a socket error
+(e.g. a dead TCP connection with no RST), and reconnects automatically.
 
 ## Light failures are not write failures
 

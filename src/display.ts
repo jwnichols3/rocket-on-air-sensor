@@ -42,11 +42,29 @@ export const DISPLAY_HTML = `<!doctype html>
   <div id="overlay">DISCONNECTED</div>
   <script>
     var STALE_AFTER_SECONDS = 300;
+    var WATCHDOG_SILENT_MS = 45000;
     var token = new URLSearchParams(location.search).get('token');
-    var es = new EventSource('/events' + (token ? '?token=' + encodeURIComponent(token) : ''));
     var word = document.getElementById('word');
     var last = null;
     var lastAt = 0;
+    var es;
+
+    function connect() {
+      if (es) {
+        try { es.close(); } catch (e) {}
+      }
+      es = new EventSource('/events' + (token ? '?token=' + encodeURIComponent(token) : ''));
+      es.addEventListener('status', function (e) {
+        document.body.classList.remove('disconnected');
+        last = JSON.parse(e.data);
+        lastAt = Date.now();
+        render(last);
+      });
+      es.onerror = function () {
+        document.body.classList.add('disconnected');
+      };
+      lastAt = Date.now();
+    }
 
     function effectiveAgeSeconds() {
       if (last === null) return 0;
@@ -64,20 +82,18 @@ export const DISPLAY_HTML = `<!doctype html>
       document.body.classList.toggle('off', !on);
       var text = (s.message !== null && s.message !== undefined) ? s.message : (on ? 'ON AIR' : 'OFF AIR');
       word.textContent = text;
-      word.style.fontSize = text.length > 12 ? '9vw' : '18vw';
+      word.style.fontSize = text.length > 60 ? '5vw' : text.length > 12 ? '9vw' : '18vw';
       refreshStale();
     }
 
-    es.addEventListener('status', function (e) {
-      document.body.classList.remove('disconnected');
-      last = JSON.parse(e.data);
-      lastAt = Date.now();
-      render(last);
-    });
-    es.onerror = function () {
-      document.body.classList.add('disconnected');
-    };
+    connect();
     setInterval(refreshStale, 30000);
+    setInterval(function () {
+      if (Date.now() - lastAt > WATCHDOG_SILENT_MS) {
+        document.body.classList.add('disconnected');
+        connect();
+      }
+    }, 10000);
   </script>
 </body>
 </html>

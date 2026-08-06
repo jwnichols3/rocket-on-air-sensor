@@ -31,14 +31,26 @@ export function createSseHub(heartbeatMs = 15_000): SseHub {
       });
       res.write(statusEvent(snapshot()));
       clients.add(res);
-      const timer = setInterval(() => res.write(':hb\n\n'), heartbeatMs);
+      const timer = setInterval(() => {
+        try {
+          res.write(statusEvent(snapshot()));
+        } catch {
+          detach(res);
+        }
+      }, heartbeatMs);
       timer.unref?.();
       timers.set(res, timer);
       res.on('close', () => detach(res));
     },
     broadcast(data) {
       const payload = statusEvent(data);
-      for (const res of clients) res.write(payload);
+      for (const res of [...clients]) {
+        try {
+          res.write(payload);
+        } catch {
+          detach(res);
+        }
+      }
     },
     closeAll() {
       for (const res of [...clients]) {

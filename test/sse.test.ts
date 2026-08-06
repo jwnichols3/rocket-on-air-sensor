@@ -14,10 +14,10 @@ class FakeRes {
     this.headers = headers;
     return this;
   }
-  write(chunk: string): boolean {
+  write = (chunk: string): boolean => {
     this.chunks.push(chunk);
     return true;
-  }
+  };
   end(): this {
     this.ended = true;
     return this;
@@ -66,14 +66,32 @@ test('closeAll ends every client and empties the hub', () => {
   assert.equal(hub.count(), 0);
 });
 
-test('heartbeat comments flow until detach', async () => {
+test('heartbeat sends fresh status events until detach', async () => {
   const hub = createSseHub(20);
   const res = new FakeRes();
-  hub.attach(asRes(res), () => ({}));
+  let n = 0;
+  hub.attach(asRes(res), () => ({ n: ++n }));
   await sleep(70);
-  assert.ok(res.chunks.filter((c) => c === ':hb\n\n').length >= 2);
+  const statusEvents = res.chunks.filter((c) => c.startsWith('event: status'));
+  assert.ok(statusEvents.length >= 3); // snapshot + at least 2 heartbeats
+  assert.notEqual(statusEvents.at(-1), statusEvents[0]); // snapshot re-evaluated per beat
   hub.closeAll();
   const count = res.chunks.length;
   await sleep(50);
   assert.equal(res.chunks.length, count); // timer stopped
+});
+
+test('a throwing client is detached and does not break broadcast', () => {
+  const hub = createSseHub();
+  const bad = new FakeRes();
+  const good = new FakeRes();
+  hub.attach(asRes(bad), () => ({}));
+  hub.attach(asRes(good), () => ({}));
+  bad.write = () => {
+    throw new Error('EPIPE');
+  };
+  hub.broadcast({ x: 1 });
+  assert.equal(hub.count(), 1);
+  assert.ok(good.chunks.at(-1)!.includes('"x":1'));
+  hub.closeAll();
 });
