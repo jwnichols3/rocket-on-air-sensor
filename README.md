@@ -1,58 +1,82 @@
 # rocket-on-air-sensor
 
-Sense when a Zoom or Google Meet call is in progress on Rocket's Mac and signal another
-machine to turn an on-air light on or off.
+This system turns an on-air light on when Rocket is in a Zoom or Google Meet call.
+It turns the on-air light off when the call ends.
 
-## Status
-
-Greenfield. Architecture is open. See `CONTEXT.md` for the problem statement and the
-open questions we need to resolve before building.
-
-## The idea
+## Architecture
 
 ```
-[Mac in a call?] --sense--> [detector] --message--> [receiver device] --> [on-air light]
+[work Mac] --detector--> [On-air API on the Receiver] --> [on-air light]
+                              ^
+                              | manual control: /ui, curl, Stream Deck (Companion)
 ```
 
-Three unknowns, all to be determined:
+- The **Detector** runs on the work Mac. It senses the call state. It is not built
+  yet. GitHub issue #5 in this repo has the research.
+- The **Receiver** runs the **On-air API**. The On-air API is the source of truth for
+  the call state. The Receiver is a Mac Mini now. A Raspberry Pi can be the Receiver
+  later (D-4).
+- The **on-air light** is the `/display` browser page (D-12). Light hardware is on
+  hold.
 
-1. **Sensing** - how to reliably detect a Zoom/Meet call in progress (mic/camera in use,
-   process detection, calendar, something else).
-2. **Transport** - how the detector tells the receiver (MQTT, HTTP, Home Assistant,
-   direct GPIO over network, etc.).
-3. **Receiver + light hardware** - what device drives the light (Raspberry Pi, ESP32,
-   smart plug, busylight-style USB device, etc.).
+`CONTEXT.md` holds the glossary, the invariants, and all decisions (D-1..D-13).
 
-## Running the API
+## Parts
+
+| Part | What it does |
+|---|---|
+| `GET /status`, `PUT /state`, `POST /on`, `POST /off` | Read and write the call state |
+| `PUT /message`, `DELETE /message` | Set or clear the display message |
+| `GET /events` (SSE), `GET /events/ws` (WebSocket) | Push status to clients |
+| `GET /display` | The on-air light: a fullscreen tally page |
+| `GET /ui` | Control panel and API console |
+| `GET /admin/health`, `POST /admin/restart` | Service health and remote restart |
+| `deploy/onair` | CLI that installs and controls the Mac service |
+| `deploy/onair.service` | systemd unit for the Raspberry Pi |
+
+The full On-air API contract is in `docs/api-contract.md`.
+
+## Quick start
+
+Quick start runs the On-air API locally, for development or a first look. For a
+deployed Receiver, see `INSTALL.md`.
 
 ```sh
 npm install && npm run build && npm start   # or: npm run dev
 ```
 
-One-command run (e.g. on a Pi), no clone needed: `npx --yes github:jwnichols3/rocket-on-air-sensor`.
-See `docs/pi-setup.md` for Pi service + kiosk display setup.
+Then open `http://localhost:8484/ui`.
 
-Config via env: `ONAIR_PORT` (default 8484), `ONAIR_STATE_FILE` (default `~/.onair/state.json`), `ONAIR_TOKEN` (optional bearer auth). Contract: `docs/api-contract.md`.
+Configuration comes from environment variables: `ONAIR_PORT` (default 8484),
+`ONAIR_STATE_FILE` (default `~/.onair/state.json`), and `ONAIR_TOKEN` (optional
+bearer auth).
 
-Interim tally display: open `http://<host>:8484/display` fullscreen (kiosk). Set a
-custom message with `curl -X PUT :8484/message -d '{"text": "BE QUIET"}'`, clear with
-`DELETE /message`.
+## Install
 
-Dark control panel + API console: open `http://<host>:8484/ui`.
+`INSTALL.md` has the instructions for each layer:
 
-Bitfocus Companion integration (button + status feedback): `docs/companion-setup.md`.
+1. **Host** - run the On-air API as a supervised service (Mac launchd or Pi systemd).
+2. **Client** - connect the on-air light, the control panel, and manual control.
+3. **Companion** - control the call state from a Stream Deck.
 
-## Run as a Mac service
-
-On the Mac Mini, run the API as a supervised LaunchDaemon that survives
-reboots and crashes (no GUI login needed):
+## Development
 
 ```sh
-git clone https://github.com/jwnichols3/rocket-on-air-sensor.git && cd rocket-on-air-sensor
-npm install && npm run build
-sudo deploy/onair install
+npm test          # type-check + unit tests
+npm run dev       # run from source with tsx
 ```
 
-Manage it with `onair status|start|stop|restart|reload|logs|disable|enable`.
-See `docs/mac-setup.md` for the full verb table, `--sudoers`, and setup
-caveats.
+The service has zero production npm dependencies. The system requires Node.js 22
+or later.
+
+## Documents
+
+| Document | Content |
+|---|---|
+| `CONTEXT.md` | Problem, glossary, invariants, decisions |
+| `INSTALL.md` | Install instructions by layer |
+| `docs/api-contract.md` | The On-air API contract |
+| `docs/mac-setup.md` | Mac service setup and the `onair` CLI |
+| `docs/pi-setup.md` | Raspberry Pi service and kiosk setup |
+| `docs/companion-setup.md` | Bitfocus Companion configuration |
+| `docs/research/` | Research notes: light hardware, call detection, Companion |
