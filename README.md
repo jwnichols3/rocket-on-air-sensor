@@ -38,4 +38,6 @@ Interim tally display: open `http://<host>:8484/display` fullscreen (kiosk). Set
 custom message with `curl -X PUT :8484/message -d '{"text": "BE QUIET"}'`, clear with
 `DELETE /message`.
 
+Dark control panel + API console: open `http://<host>:8484/ui`.
+
 Bitfocus Companion integration (button + status feedback): `docs/companion-setup.md`.

@@ -95,6 +95,16 @@ and a stale badge when detector-sourced state exceeds 5 minutes of age. A client
 watchdog also shows the overlay after ~45s of silence even without a socket error
 (e.g. a dead TCP connection with no RST), and reconnects automatically.
 
+### `GET /ui`
+
+A self-contained dark control-panel page (inline CSS/JS): live state pill + connection
+status driven by `/events`, ON/OFF buttons, message set/clear, a capped live event
+feed, and an API console with one row per endpoint (editable JSON body where
+applicable, response pane, copy-as-curl). Holds no server state - the page is a
+function of the last `/events` payload plus per-row response data. Same token
+handling as `/display` (`?token=` on the GET); the page itself sends the bearer
+header on writes when a token is entered into the page.
+
 ## Light failures are not write failures
 
 A write always succeeds if the body is valid: `intended` is updated and persisted even
@@ -106,7 +116,7 @@ response and in `GET /status`. Clients that care check `confirmed`.
 Off by default. If the `ONAIR_TOKEN` env var is set, every endpoint requires
 `Authorization: Bearer <token>`; wrong or missing token gets `401`. Because
 `EventSource` cannot set headers, the read-only GETs (`/status`, `/events`,
-`/display`) also accept `?token=<token>`; writes accept the header only. An empty
+`/display`, `/ui`) also accept `?token=<token>`; writes accept the header only. An empty
 `ONAIR_TOKEN` is a startup error, never bypassable auth.
 
 ## Errors

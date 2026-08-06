@@ -5,6 +5,7 @@ import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
 import { createSseHub, type SseHub } from './sse.js';
 import type { Confirmed, OnAirState, StateStore } from './state.js';
+import { UI_HTML } from './ui.js';
 import { createWsBridge, type WsBridge } from './ws.js';
 
 export interface ServerDeps {
@@ -25,6 +26,7 @@ const ROUTES: Record<string, string[]> = {
   '/message': ['PUT', 'DELETE'],
   '/events': ['GET'],
   '/display': ['GET'],
+  '/ui': ['GET'],
 };
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -209,6 +211,12 @@ async function handle(
   if (path === '/display') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(DISPLAY_HTML);
+    return;
+  }
+
+  if (path === '/ui') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(UI_HTML);
     return;
   }
 

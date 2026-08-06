@@ -337,6 +337,27 @@ test('token via query works on GETs only', async () => {
   await h.close();
 });
 
+test('GET /ui serves the control panel + API console page', async () => {
+  const h = await boot();
+  const res = await fetch(`${h.base}/ui`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /text\/html/);
+  const html = await res.text();
+  assert.match(html, /EventSource/);
+  assert.match(html, /WATCHDOG_SILENT_MS/);
+  for (const marker of ['/status', '/state', '/on', '/off', '/message', 'DELETE']) {
+    assert.ok(html.includes(marker), `expected UI_HTML to contain ${marker}`);
+  }
+  await h.close();
+});
+
+test('GET /ui is token-gated like other GETs', async () => {
+  const h = await boot('sekrit');
+  assert.equal((await fetch(`${h.base}/ui`)).status, 401);
+  assert.equal((await fetch(`${h.base}/ui?token=sekrit`)).status, 200);
+  await h.close();
+});
+
 test('GET /events sends a snapshot then an event per write', async () => {
   const h = await boot();
   const controller = new AbortController();
