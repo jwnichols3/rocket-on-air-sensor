@@ -52,7 +52,7 @@ to proceed if that check fails.
 
 Tradeoff: without `--sudoers`, every mutating `onair` verb prompts for your
 password (or needs a cached sudo ticket) each time, and `onair status`
-degrades to `supervised: unknown` when there's no ticket. With `--sudoers`,
+degrades to `supervised: no (state=unknown ...)` when there's no ticket. With `--sudoers`,
 anyone with local shell access as your user can restart, stop, or disable the
 daemon without a password - scoped to this one launchd label, but still a
 standing grant. Remove it with `sudo rm /etc/sudoers.d/onair`.

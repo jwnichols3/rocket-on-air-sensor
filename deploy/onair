@@ -38,7 +38,10 @@ ENV_ONAIR_PORT="${ONAIR_PORT:-}"
 ENV_ONAIR_TOKEN="${ONAIR_TOKEN:-}"
 ENV_ONAIR_STATE_FILE="${ONAIR_STATE_FILE:-}"
 CLI_ENV="$TARGET_HOME/.onair/cli.env"
-if [[ -f "$CLI_ENV" ]]; then
+# Skip sourcing under sudo (EUID 0): cli.env is user-writable, and sourcing it
+# as root would execute arbitrary user-controlled code with root privileges.
+# ONAIR_* env vars set in the caller's environment still pass through.
+if [[ "$(id -u)" -ne 0 && -f "$CLI_ENV" ]]; then
   # shellcheck disable=SC1090
   source "$CLI_ENV"
 fi
@@ -83,11 +86,27 @@ health_check_once() {
   curl -fsS -m 2 "$(health_url)" >/dev/null 2>&1
 }
 
-# Every mutating verb polls up to 5s and prints PASS/FAIL.
+# Fetches /admin/health and prints its body, or nothing on failure. Kept
+# dependency-free (grep, not a JSON parser) since the only field we care
+# about is stateFileWritable.
+health_body() {
+  curl -fsS -m 2 "$(health_url)" 2>/dev/null
+}
+
+# Every mutating verb polls up to 5s and prints PASS/FAIL. Also fails (even
+# though the HTTP check passed) when the health body reports
+# stateFileWritable:false - that's the daemon-can't-persist-state failure
+# mode (e.g. a root-owned ~/.onair from a bad install), and a poll that
+# ignores it would report PASS while writes silently fail.
 mutating_health_poll() {
   local deadline=$((SECONDS + 5))
+  local body
   while (( SECONDS < deadline )); do
-    if health_check_once; then
+    if body="$(health_body)" && [[ -n "$body" ]]; then
+      if printf '%s' "$body" | grep -q '"stateFileWritable":false'; then
+        echo "health: FAIL (stateFileWritable is false - state directory not writable by the daemon)"
+        return 1
+      fi
       echo "health: PASS"
       return 0
     fi
@@ -109,7 +128,15 @@ is_loaded() {
 # ---------------------------------------------------------------------------
 cmd_install() {
   local sudoers_flag="${1:-}"
-  mkdir -p "$TARGET_HOME/.onair/logs"
+  # Create as TARGET_USER, not root: install runs under sudo, so a plain
+  # `mkdir -p` here would leave ~/.onair root-owned and the daemon (which runs
+  # as TARGET_USER) unable to write state. Works both invoked via sudo (EUID
+  # 0, TARGET_USER set from SUDO_USER) and run directly (EUID != 0, plain mkdir).
+  if [[ "$(id -u)" -eq 0 ]]; then
+    sudo -u "$TARGET_USER" mkdir -p "$TARGET_HOME/.onair/logs"
+  else
+    mkdir -p "$TARGET_HOME/.onair/logs"
+  fi
 
   local node_bin
   node_bin="$(command -v node || true)"
@@ -122,6 +149,14 @@ cmd_install() {
     echo "onair: template not found at $TEMPLATE" >&2
     exit 1
   fi
+
+  local sub_value
+  for sub_value in "$node_bin" "$APPDIR" "$TARGET_USER" "$TARGET_HOME" "$ONAIR_PORT" "$STATE_FILE"; do
+    if [[ "$sub_value" == *'&'* || "$sub_value" == *'|'* || "$sub_value" == *'\'* ]]; then
+      echo "onair: path contains characters the installer cannot render safely" >&2
+      exit 1
+    fi
+  done
 
   local tmp_plist
   tmp_plist="$(mktemp /tmp/com.rocket.onair.plist.XXXXXX)"

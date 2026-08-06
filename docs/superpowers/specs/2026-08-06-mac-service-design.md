@@ -67,9 +67,11 @@ Reads `ONAIR_PORT` (default 8484) and `ONAIR_TOKEN` from env or
 - `POST /admin/restart` - **403 when `ONAIR_TOKEN` is not configured** (the one
   endpoint that refuses to exist without auth - remote process-kill must not be
   open); 401 on wrong/missing token; else 202 `{"restarting":true}`, then after
-  the response flushes: close server + `process.exit(0)`. KeepAlive respawns;
-  identical under Pi systemd `Restart=always`. Exit must be deferred (setTimeout/
-  res 'finish') so the 202 reaches the client.
+  the response flushes: `process.exit(0)` (no `server.close()` - atomic
+  tmp+rename state persistence means no in-flight write can be corrupted by an
+  abrupt exit, so the extra close-then-exit step buys nothing). KeepAlive
+  respawns; identical under Pi systemd `Restart=always`. Exit must be deferred
+  (`res.on('finish'|'close', ...)`) so the 202 reaches the client.
 - Contract doc updated; error table gains 403.
 
 ### 4. `/ui` Admin card (`src/ui.ts`, ~40 lines)
