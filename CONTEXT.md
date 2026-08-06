@@ -124,3 +124,14 @@ else (state, light control, API) lives on the receiver.
   needs git+network at (re)start and builds on install; pin a tag/commit when
   reproducibility matters. Kiosk Pi can point at any host's `/display` - it does not
   need to run the API itself.
+- **D-11 (2026-08-05)** WebSocket status endpoint (`GET /events/ws`, for Bitfocus
+  Companion's generic-websocket module) is hand-rolled rather than adding a `ws`
+  dependency: usage is server-push-only, which keeps the implementation small and
+  preserves the zero-production-dependency rule. Limits documented in code: inbound
+  frames ignored except ping/close. Research: `docs/research/2026-08-05-companion-integration.md`;
+  Companion config: `docs/companion-setup.md`.
+- **D-12 (2026-08-05)** Light hardware is ON HOLD: the `/display` browser page (D-9)
+  is the light, not just an interim. #1 (hardware pick) and #6 (LED driver) are
+  parked; the hardware research doc stands ready for whenever this reopens.
+  Consequence: `confirmed` stays `"unknown"` (no-op driver), so all status feedback
+  (display, Companion) keys off `intended`.
