@@ -145,3 +145,15 @@ else (state, light control, API) lives on the receiver.
   on `/ui`. Zero new dependencies; symmetric with `deploy/onair.service`. Revisit
   if: FileVault gets enabled (verified OFF 2026-08-06), a permanent GUI login makes
   the LaunchAgent+menu-bar path attractive, or real multi-process needs emerge.
+- **D-14 (2026-08-06)** Host install is config-file-first and wizard-driven: the
+  service reads `~/.onair/config.env` itself at startup (Node's stable
+  `process.loadEnvFile`; real env still wins), so the plist/unit carries no
+  `ONAIR_*` config and never changes after install. Fresh install is `git clone` +
+  `sudo deploy/bootstrap` on both hosts; install runs an interactive `onair setup`
+  Q&A (port, token, state file) that is re-runnable anytime to change config
+  (rewrite file + restart - no re-render, no reload trap). `onair update` is the
+  single health-gated update verb with automatic rollback. The Pi unit drops
+  `npx github:` at boot (network-dependent start, verified exit-128-silent failure)
+  for a local checkout. Research: `docs/research/2026-08-06-host-install-simplification.md`.
+  Rejected there with evidence: Node SEA/compiled binaries, Docker on the Mac,
+  Nix, Ansible (deferred until the Mac needs multiple launchd jobs).
