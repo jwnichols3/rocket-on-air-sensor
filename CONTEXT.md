@@ -157,3 +157,12 @@ else (state, light control, API) lives on the receiver.
   for a local checkout. Research: `docs/research/2026-08-06-host-install-simplification.md`.
   Rejected there with evidence: Node SEA/compiled binaries, Docker on the Mac,
   Nix, Ansible (deferred until the Mac needs multiple launchd jobs).
+- **D-15 (2026-08-06)** One-line install: `curl -fsSL .../deploy/get-onair | bash` -
+  a thin self-contained shim that clones the repo to a stable home
+  (`~/code/rocket-on-air-sensor`, `ONAIR_DIR` overrides) and hands off to
+  `deploy/bootstrap`, which self-escalates (per-command sudo, prompted once) so no
+  command is typed with a `sudo` prefix. The shim reconnects stdin to `/dev/tty`
+  when piped so the setup wizard still asks its questions (the Homebrew lesson).
+  npx-based install rejected: the npx cache is not a stable home for a plist to
+  point at, and it double-builds; amends D-10 - `npx github:` remains only a
+  throwaway demo, never an install or boot path.
