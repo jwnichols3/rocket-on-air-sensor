@@ -21,6 +21,7 @@ export function isOnAirState(v: unknown): v is OnAirState {
     (s.confirmed === 'on' || s.confirmed === 'off' || s.confirmed === 'unknown') &&
     typeof s.source === 'string' &&
     typeof s.updatedAt === 'string' &&
+    !Number.isNaN(Date.parse(s.updatedAt)) &&
     (s.message === undefined || s.message === null || typeof s.message === 'string')
   );
 }

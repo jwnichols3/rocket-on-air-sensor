@@ -9,12 +9,15 @@ import { defaultState, StateStore, type Confirmed, type OnAirState } from '../sr
 class StubDriver implements LightDriver {
   calls: boolean[] = [];
   fail = false;
+  /** When set, set() throws this value instead of an Error (tests non-Error throw handling). */
+  throwValue: unknown = undefined;
   /** When set, set() waits for this promise to resolve before returning. */
   gate: Promise<void> | null = null;
 
   async set(onAir: boolean): Promise<Confirmed> {
     this.calls.push(onAir);
     if (this.gate) await this.gate;
+    if (this.throwValue !== undefined) throw this.throwValue;
     if (this.fail) throw new Error('light unreachable');
     return onAir ? 'on' : 'off';
   }
@@ -138,6 +141,21 @@ test('malformed and invalid bodies get 400 with error shape', async () => {
   await h.close();
 });
 
+test('driver throwing a non-Error value still succeeds the write and logs the string', async () => {
+  const lines: string[] = [];
+  const h = await boot(undefined, (line) => lines.push(line));
+  h.driver.throwValue = 'light offline';
+  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.confirmed, 'unknown');
+  assert.ok(
+    lines.some((line) => line.includes('light offline')),
+    `expected a log line containing "light offline", got: ${JSON.stringify(lines)}`,
+  );
+  await h.close();
+});
+
 test('unknown path 404, wrong method 405', async () => {
   const h = await boot();
   assert.equal((await fetch(`${h.base}/nope`)).status, 404);
@@ -157,6 +175,15 @@ test('token gate: 401 without or with wrong bearer, 200 with right one', async (
     (await fetch(`${h.base}/status`, { headers: { authorization: 'Bearer sekrit' } })).status,
     200,
   );
+  await h.close();
+});
+
+test('auth gate runs before routing: unknown path 401s without a token, not 404', async () => {
+  // Intentional ordering (see issue #7): checking auth before the route map means an
+  // unauthenticated caller can't distinguish "wrong token" from "path doesn't exist",
+  // so the route map isn't leaked to unauthenticated probes.
+  const h = await boot('sekrit');
+  assert.equal((await fetch(`${h.base}/nope`)).status, 401);
   await h.close();
 });
 

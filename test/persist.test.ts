@@ -44,6 +44,17 @@ test('load throws on valid JSON with invalid shape', async () => {
   await assert.rejects(() => loadState(file), /invalid shape/);
 });
 
+test('load throws when updatedAt does not parse as a date', async () => {
+  const file = await tmpStateFile();
+  await saveState(file, defaultState());
+  await writeFile(
+    file,
+    JSON.stringify({ intended: 'on', confirmed: 'unknown', source: 'detector', updatedAt: 'yesterday' }),
+    'utf8',
+  );
+  await assert.rejects(() => loadState(file), /invalid shape/);
+});
+
 test('pre-message state files load with message null', async () => {
   const file = await tmpStateFile();
   await saveState(file, defaultState());

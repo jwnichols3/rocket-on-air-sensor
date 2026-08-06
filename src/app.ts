@@ -1,7 +1,7 @@
 import type { Server } from 'node:http';
 import { NoopDriver, type LightDriver } from './driver.js';
 import { loadState, saveState } from './persist.js';
-import { createApiServer } from './server.js';
+import { createApiServer, errorMessage } from './server.js';
 import { createSseHub } from './sse.js';
 import { defaultState, StateStore } from './state.js';
 
@@ -29,7 +29,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
   try {
     store.setConfirmed(await driver.set(store.get().intended === 'on'));
   } catch (err) {
-    log(`[onair] boot driver re-apply failed: ${(err as Error).message}`);
+    log(`[onair] boot driver re-apply failed: ${errorMessage(err)}`);
     store.setConfirmed('unknown');
   }
 

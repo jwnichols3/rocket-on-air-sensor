@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
@@ -43,9 +44,28 @@ export function createApiServer(deps: ServerDeps): Server {
 
   return createServer((req, res) => {
     handle(req, res, deps, enqueueWrite, hub, log).catch((err) => {
-      sendJson(res, 500, { error: `internal error: ${(err as Error).message}` });
+      if (!res.headersSent) {
+        sendJson(res, 500, { error: `internal error: ${errorMessage(err)}` });
+      } else {
+        // Can't send a JSON error once headers are out; destroy so the client sees a clear
+        // connection failure instead of a silently hung or truncated response.
+        res.destroy();
+        log(`[onair] response failed after headers sent: ${errorMessage(err)}`);
+      }
     });
   });
+}
+
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  // timingSafeEqual throws on length mismatch; unequal lengths are already not a match.
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -91,7 +111,7 @@ async function doWrite(
   try {
     confirmed = await deps.driver.set(onAir);
   } catch (err) {
-    log(`[onair] driver.set(${onAir}) failed: ${(err as Error).message}`);
+    log(`[onair] driver.set(${onAir}) failed: ${errorMessage(err)}`);
     confirmed = 'unknown';
   }
   deps.store.setConfirmed(confirmed);
@@ -112,8 +132,10 @@ async function handle(
   const method = req.method ?? 'GET';
 
   if (deps.token !== undefined) {
-    const headerOk = req.headers.authorization === `Bearer ${deps.token}`;
-    const queryOk = method === 'GET' && url.searchParams.get('token') === deps.token;
+    const authHeader = req.headers.authorization;
+    const headerOk = typeof authHeader === 'string' && timingSafeStringEqual(authHeader, `Bearer ${deps.token}`);
+    const queryToken = url.searchParams.get('token');
+    const queryOk = method === 'GET' && queryToken !== null && timingSafeStringEqual(queryToken, deps.token);
     if (!headerOk && !queryOk) {
       sendJson(res, 401, { error: 'missing or invalid bearer token' });
       return;
@@ -129,6 +151,11 @@ async function handle(
     sendJson(res, 405, { error: `${method} not allowed on ${path}` });
     return;
   }
+
+  // Drain the body for every route below that doesn't call readBody() itself, so an
+  // unread body doesn't stall the socket and break keep-alive for the next request.
+  const willReadBody = (path === '/state' || path === '/message') && method === 'PUT';
+  if (!willReadBody) req.resume();
 
   if (path === '/status') {
     sendJson(res, 200, statusBody(deps));
@@ -160,7 +187,7 @@ async function handle(
       const body: unknown = JSON.parse(await readBody(req));
       ({ text } = body as { text?: unknown });
     } catch (err) {
-      sendJson(res, 400, { error: `malformed JSON body: ${(err as Error).message}` });
+      sendJson(res, 400, { error: `malformed JSON body: ${errorMessage(err)}` });
       return;
     }
     if (typeof text !== 'string' || text.trim() === '') {
@@ -187,7 +214,7 @@ async function handle(
       const body: unknown = JSON.parse(await readBody(req));
       ({ onAir, source } = body as { onAir?: unknown; source?: unknown });
     } catch (err) {
-      sendJson(res, 400, { error: `malformed JSON body: ${(err as Error).message}` });
+      sendJson(res, 400, { error: `malformed JSON body: ${errorMessage(err)}` });
       return;
     }
     if (typeof onAir !== 'boolean') {
