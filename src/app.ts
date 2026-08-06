@@ -4,6 +4,7 @@ import { loadState, saveState } from './persist.js';
 import { createApiServer, errorMessage } from './server.js';
 import { createSseHub } from './sse.js';
 import { defaultState, StateStore } from './state.js';
+import { createWsBridge } from './ws.js';
 
 export interface AppOptions {
   stateFile: string;
@@ -34,12 +35,14 @@ export async function createApp(opts: AppOptions): Promise<App> {
   }
 
   const hub = createSseHub();
+  const wsBridge = createWsBridge();
   const server: Server = createApiServer({
     store,
     driver,
     persist: (state) => saveState(opts.stateFile, state),
     token: opts.token,
     hub,
+    ws: wsBridge,
     log,
   });
 
@@ -54,6 +57,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     close: () =>
       new Promise((resolve, reject) => {
         hub.closeAll();
+        wsBridge.closeAll();
         server.closeIdleConnections();
         server.close((err) => (err ? reject(err) : resolve()));
       }),

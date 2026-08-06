@@ -1,9 +1,11 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { Duplex } from 'node:stream';
 import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
 import { createSseHub, type SseHub } from './sse.js';
 import type { Confirmed, OnAirState, StateStore } from './state.js';
+import { createWsBridge, type WsBridge } from './ws.js';
 
 export interface ServerDeps {
   store: StateStore;
@@ -11,6 +13,7 @@ export interface ServerDeps {
   persist: (state: OnAirState) => Promise<void>;
   token?: string;
   hub?: SseHub;
+  ws?: WsBridge;
   log?: (line: string) => void;
 }
 
@@ -33,6 +36,7 @@ export function createApiServer(deps: ServerDeps): Server {
   }
 
   const hub = deps.hub ?? createSseHub();
+  const ws = deps.ws ?? createWsBridge();
   const log = deps.log ?? console.log;
 
   let writeChain: Promise<void> = Promise.resolve();
@@ -42,8 +46,8 @@ export function createApiServer(deps: ServerDeps): Server {
     return next;
   }
 
-  return createServer((req, res) => {
-    handle(req, res, deps, enqueueWrite, hub, log).catch((err) => {
+  const server = createServer((req, res) => {
+    handle(req, res, deps, enqueueWrite, hub, ws, log).catch((err) => {
       if (!res.headersSent) {
         sendJson(res, 500, { error: `internal error: ${errorMessage(err)}` });
       } else {
@@ -54,6 +58,31 @@ export function createApiServer(deps: ServerDeps): Server {
       }
     });
   });
+
+  server.on('upgrade', (req: IncomingMessage, socket: Duplex) => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    if (url.pathname !== '/events/ws') {
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    if (deps.token !== undefined) {
+      const authHeader = req.headers.authorization;
+      const headerOk = typeof authHeader === 'string' && timingSafeStringEqual(authHeader, `Bearer ${deps.token}`);
+      const queryToken = url.searchParams.get('token');
+      const queryOk = queryToken !== null && timingSafeStringEqual(queryToken, deps.token);
+      if (!headerOk && !queryOk) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+    }
+
+    ws.handleUpgrade(req, socket, () => statusBody(deps));
+  });
+
+  return server;
 }
 
 export function errorMessage(err: unknown): string {
@@ -83,9 +112,10 @@ function persistCurrent(deps: ServerDeps): Promise<void> {
   return deps.persist({ ...deps.store.get(), confirmed: 'unknown' });
 }
 
-function broadcastAndSend(res: ServerResponse, deps: ServerDeps, hub: SseHub): void {
+function broadcastAndSend(res: ServerResponse, deps: ServerDeps, hub: SseHub, ws: WsBridge): void {
   const body = statusBody(deps);
   hub.broadcast(body);
+  ws.broadcast(body);
   sendJson(res, 200, body);
 }
 
@@ -126,6 +156,7 @@ async function handle(
   deps: ServerDeps,
   enqueueWrite: EnqueueWrite,
   hub: SseHub,
+  ws: WsBridge,
   log: (line: string) => void,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -182,7 +213,7 @@ async function handle(
         deps.store.clearMessage();
         await persistCurrent(deps);
       });
-      broadcastAndSend(res, deps, hub);
+      broadcastAndSend(res, deps, hub, ws);
       return;
     }
     let text: unknown;
@@ -206,7 +237,7 @@ async function handle(
       deps.store.setMessage(messageText);
       await persistCurrent(deps);
     });
-    broadcastAndSend(res, deps, hub);
+    broadcastAndSend(res, deps, hub, ws);
     return;
   }
 
@@ -229,11 +260,11 @@ async function handle(
       return;
     }
     await enqueueWrite(() => doWrite(deps, onAir, source ?? 'manual', log));
-    broadcastAndSend(res, deps, hub);
+    broadcastAndSend(res, deps, hub, ws);
     return;
   }
 
   // POST /on | /off
   await enqueueWrite(() => doWrite(deps, path === '/on', url.searchParams.get('source') ?? 'manual', log));
-  broadcastAndSend(res, deps, hub);
+  broadcastAndSend(res, deps, hub, ws);
 }

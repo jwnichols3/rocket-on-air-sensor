@@ -69,6 +69,23 @@ on connect, another on every successful write (state or message), and a keep-ali
 `status` event every 15s per connection - a real event, so clients can detect a dead
 stream, with `ageSeconds` computed at send time.
 
+### `GET /events/ws`
+
+WebSocket status stream, server-push-only - a hand-rolled minimal implementation (zero
+dependencies), not a general-purpose WebSocket server. Same payload, heartbeat, and
+auth semantics as `GET /events`: the full status JSON as a text frame on connect,
+another on every successful write, and a heartbeat text frame every 15s per
+connection. Honors `?token=` the same way `GET /events` does (see Auth below).
+
+Inbound messages from the client are ignored - the server never needs to receive
+application data over this connection. The two client control frames it does honor:
+a `ping` gets a `pong` echoing the payload, and a `close` gets a `close` reply before
+the socket is torn down. Any other inbound frame is silently ignored (but still
+parsed, so it doesn't desync the frame stream).
+
+Intended for Bitfocus Companion's `generic-websocket` module - see
+`docs/companion-setup.md`.
+
 ### `GET /display`
 
 A self-contained HTML tally page (inline CSS/JS) for fullscreen/kiosk use. Renders ON

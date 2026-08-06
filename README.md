@@ -37,3 +37,5 @@ Config via env: `ONAIR_PORT` (default 8484), `ONAIR_STATE_FILE` (default `~/.ona
 Interim tally display: open `http://<host>:8484/display` fullscreen (kiosk). Set a
 custom message with `curl -X PUT :8484/message -d '{"text": "BE QUIET"}'`, clear with
 `DELETE /message`.
+
+Bitfocus Companion integration (button + status feedback): `docs/companion-setup.md`.
