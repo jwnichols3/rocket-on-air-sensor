@@ -60,6 +60,13 @@ read_config() {
   printf '%s' "$value"
 }
 
+# valid_port ARG - true if ARG is an integer in 1-65535.
+valid_port() {
+  local p="$1"
+  [[ "$p" =~ ^[0-9]+$ ]] || return 1
+  (( p >= 1 && p <= 65535 ))
+}
+
 ONAIR_PORT="$(read_config ONAIR_PORT)"
 ONAIR_PORT="${ONAIR_PORT:-8484}"
 ONAIR_TOKEN="$(read_config ONAIR_TOKEN)"
@@ -72,7 +79,12 @@ usage() {
 usage: onair <verb> [args]
 
 verbs:
-  install [--sudoers]  render plist, install to launchd, bootstrap
+  install [--sudoers]  render plist, install to launchd, bootstrap (runs
+                        setup first if $CONFIG_FILE doesn't exist yet)
+  setup [--non-interactive]
+                        interactive Q&A for port/token/state file; writes
+                        $CONFIG_FILE (0600); restarts if the daemon is up.
+                        Re-runnable any time to reconfigure.
   uninstall            bootout, remove plist/newsyslog/symlink/sudoers
   start                bootstrap if not loaded, else kickstart
   stop                 bootout (returns at next boot; see 'disable')
@@ -142,6 +154,18 @@ is_loaded() {
   sudo_launchctl print "$T" >/dev/null 2>&1
 }
 
+# ensure_target_dir DIR - mkdir -p as TARGET_USER, whether invoked directly
+# or via sudo. A plain root-owned mkdir under sudo would leave the directory
+# unwritable by the daemon, which always runs as TARGET_USER.
+ensure_target_dir() {
+  local dir="$1"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    sudo -u "$TARGET_USER" mkdir -p "$dir"
+  else
+    mkdir -p "$dir"
+  fi
+}
+
 # One-time migration: the config file used to be ~/.onair/cli.env. If it
 # exists and the new ~/.onair/config.env doesn't, copy it over (owner
 # TARGET_USER, mode 0600) and say so. cli.env is not read after this.
@@ -161,13 +185,17 @@ cmd_install() {
   # `mkdir -p` here would leave ~/.onair root-owned and the daemon (which runs
   # as TARGET_USER) unable to write state. Works both invoked via sudo (EUID
   # 0, TARGET_USER set from SUDO_USER) and run directly (EUID != 0, plain mkdir).
-  if [[ "$(id -u)" -eq 0 ]]; then
-    sudo -u "$TARGET_USER" mkdir -p "$TARGET_HOME/.onair/logs"
-  else
-    mkdir -p "$TARGET_HOME/.onair/logs"
-  fi
+  ensure_target_dir "$TARGET_HOME/.onair/logs"
 
   migrate_cli_env
+
+  # A fresh install with no config.env yet (and nothing to migrate from
+  # cli.env) gets the wizard before the daemon ever starts, so the first
+  # boot already uses the chosen values instead of defaults. Interactive
+  # only on a TTY - cmd_setup makes that call itself.
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    cmd_setup __internal_from_install__
+  fi
 
   local node_bin
   node_bin="$(command -v node || true)"
@@ -255,6 +283,115 @@ EOF
   fi
   sudo install -o root -g wheel -m 0440 "$tmp" "$SUDOERS_FILE"
   rm -f "$tmp"
+}
+
+cmd_setup() {
+  local non_interactive=false
+  local from_install=false
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --non-interactive) non_interactive=true ;;
+      __internal_from_install__) from_install=true ;;
+      *)
+        echo "onair: setup: unknown argument: $a" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  ensure_target_dir "$(dirname "$CONFIG_FILE")"
+  migrate_cli_env
+
+  # Current effective values (env > config file > built-in default). Read
+  # fresh here since migrate_cli_env may have just created config.env.
+  local cur_port cur_token cur_state
+  cur_port="$(read_config ONAIR_PORT)"; cur_port="${cur_port:-8484}"
+  cur_token="$(read_config ONAIR_TOKEN)"
+  cur_state="$(read_config ONAIR_STATE_FILE)"; cur_state="${cur_state:-$TARGET_HOME/.onair/state.json}"
+
+  local new_port="$cur_port" new_token="$cur_token" new_state="$cur_state"
+
+  local interactive=false
+  if [[ -t 0 && "$non_interactive" != "true" ]]; then
+    interactive=true
+  fi
+
+  if [[ "$interactive" == "true" ]]; then
+    local ans
+
+    # `read -r` returns nonzero on EOF; under `set -e` that would kill the
+    # script mid-wizard if stdin closes early, so every read is guarded with
+    # `|| true` and validated afterward instead of trusted to succeed.
+
+    while true; do
+      read -r -p "Port [$cur_port]: " ans || true
+      ans="${ans:-$cur_port}"
+      if valid_port "$ans"; then
+        new_port="$ans"
+        break
+      fi
+      echo "onair: invalid port '$ans' - must be an integer 1-65535" >&2
+    done
+
+    local default_choice="k"
+    [[ -z "$cur_token" ]] && default_choice="n"
+    while true; do
+      read -r -p "Token [k]eep/[g]enerate/[e]nter/[n]one ($default_choice): " ans || true
+      ans="${ans:-$default_choice}"
+      case "$ans" in
+        k|K) new_token="$cur_token"; break ;;
+        g|G) new_token="$(uuidgen | tr 'A-Z' 'a-z')"; break ;;
+        e|E) read -r -p "Enter token: " new_token || true; break ;;
+        n|N) new_token=""; break ;;
+        *) echo "onair: invalid choice '$ans' - enter k, g, e, or n" >&2 ;;
+      esac
+    done
+
+    read -r -p "State file [$cur_state]: " ans || true
+    new_state="${ans:-$cur_state}"
+  fi
+
+  # Was the daemon reachable before config.env changes under it? Probed with
+  # curl (health_check_once), deliberately NOT is_loaded/launchctl - launchctl
+  # needs sudo, and setup must stay sudo-free when the daemon is down. This
+  # uses the CURRENT $ONAIR_PORT/$ONAIR_TOKEN (read at script startup, before
+  # this function reassigns them below), i.e. what the daemon is actually
+  # listening on right now.
+  local daemon_was_up=false
+  if health_check_once; then
+    daemon_was_up=true
+  fi
+
+  local tmp_config
+  tmp_config="$(mktemp /tmp/onair.config.XXXXXX)"
+  cat > "$tmp_config" <<EOF
+# $CONFIG_FILE - onair service configuration.
+# Managed by 'onair setup' (rerun any time to change these values). Real
+# environment variables override the values below.
+ONAIR_PORT=$new_port
+ONAIR_TOKEN=$new_token
+ONAIR_STATE_FILE=$new_state
+EOF
+  install -o "$TARGET_USER" -m 0600 "$tmp_config" "$CONFIG_FILE"
+  rm -f "$tmp_config"
+  echo "onair: wrote $CONFIG_FILE"
+
+  # The rest of this run (restart/health-poll below, or cmd_install's own
+  # flow if we were called from there) should see the values just written.
+  ONAIR_PORT="$new_port"
+  ONAIR_TOKEN="$new_token"
+  STATE_FILE="$new_state"
+
+  if [[ "$from_install" == "true" ]]; then
+    return 0
+  fi
+
+  if [[ "$daemon_was_up" == "true" ]]; then
+    cmd_restart
+  else
+    echo "onair: daemon not running - run 'sudo onair install' to start it"
+  fi
 }
 
 cmd_uninstall() {
@@ -384,6 +521,7 @@ shift
 
 case "$verb" in
   install) cmd_install "${1:-}" ;;
+  setup) cmd_setup "$@" ;;
   uninstall) cmd_uninstall ;;
   start) cmd_start ;;
   stop) cmd_stop ;;
