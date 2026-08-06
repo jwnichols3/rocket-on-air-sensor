@@ -129,6 +129,20 @@ export const UI_HTML = `<!doctype html>
   .btn-on.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 20px rgba(224,49,49,0.5), inset 0 1px 0 rgba(255,255,255,0.15); }
   .btn-off.active { background: #20232a; border-color: #3a3d42; color: var(--text); }
 
+  .err-strip {
+    margin-top: 8px;
+    min-height: 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: opacity 0.15s, transform 0.15s;
+    overflow: hidden;
+    word-break: break-all;
+  }
+  .err-strip.show { opacity: 1; transform: translateY(0); }
+
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   #msg-input {
     flex: 1; min-width: 180px;
@@ -207,6 +221,7 @@ export const UI_HTML = `<!doctype html>
         <button id="btn-on" class="btn btn-big btn-on">ON</button>
         <button id="btn-off" class="btn btn-big btn-off">OFF</button>
       </div>
+      <div id="controls-err" class="err-strip"></div>
     </section>
 
     <section class="card">
@@ -218,6 +233,7 @@ export const UI_HTML = `<!doctype html>
         <button id="msg-clear" class="btn btn-sm">Clear</button>
       </div>
       <div id="msg-current">Current: <b>(none)</b></div>
+      <div id="msg-err" class="err-strip"></div>
     </section>
 
     <section class="card">
@@ -301,8 +317,33 @@ export const UI_HTML = `<!doctype html>
     var msgInput = document.getElementById('msg-input');
     var msgCounter = document.getElementById('msg-counter');
     var msgCurrent = document.getElementById('msg-current');
+    var controlsErr = document.getElementById('controls-err');
+    var msgErr = document.getElementById('msg-err');
     var log = document.getElementById('log');
     var logEmpty = document.getElementById('log-empty');
+
+    function setErr(el, text) {
+      el.textContent = text;
+      el.classList.add('show');
+    }
+    function clearErr(el) {
+      el.classList.remove('show');
+    }
+    function reportWrite(promise, label, errEl) {
+      promise.then(function (res) {
+        if (res.ok) { clearErr(errEl); return; }
+        return res.text().then(function (txt) {
+          var msg = txt;
+          try {
+            var parsed = JSON.parse(txt);
+            if (parsed && parsed.error) msg = parsed.error;
+          } catch (e) {}
+          setErr(errEl, label + ' -> ' + res.status + (msg ? ' ' + msg : ''));
+        });
+      }).catch(function (err) {
+        setErr(errEl, label + ' -> ' + (err && err.message ? err.message : String(err)));
+      });
+    }
 
     var last = null;
     var lastAt = 0;
@@ -369,6 +410,9 @@ export const UI_HTML = `<!doctype html>
     }
 
     function render(s) {
+      // A fresh status event means we're back in sync - clear any stale write errors.
+      clearErr(controlsErr);
+      clearErr(msgErr);
       var on = s.intended === 'on';
       pill.textContent = on ? 'ON AIR' : 'OFF AIR';
       pill.className = 'pill ' + (on ? 'on' : 'off');
@@ -380,7 +424,7 @@ export const UI_HTML = `<!doctype html>
     }
 
     function doAction(path) {
-      fetch(path + '?source=webui', { method: 'POST', headers: authHeaders() }).catch(function () {});
+      reportWrite(fetch(path + '?source=webui', { method: 'POST', headers: authHeaders() }), 'POST ' + path, controlsErr);
     }
     btnOn.addEventListener('click', function () { doAction('/on'); });
     btnOff.addEventListener('click', function () { doAction('/off'); });
@@ -391,10 +435,14 @@ export const UI_HTML = `<!doctype html>
     document.getElementById('msg-set').addEventListener('click', function () {
       var headers = authHeaders();
       headers['content-type'] = 'application/json';
-      fetch('/message', { method: 'PUT', headers: headers, body: JSON.stringify({ text: msgInput.value }) }).catch(function () {});
+      reportWrite(
+        fetch('/message', { method: 'PUT', headers: headers, body: JSON.stringify({ text: msgInput.value }) }),
+        'PUT /message',
+        msgErr,
+      );
     });
     document.getElementById('msg-clear').addEventListener('click', function () {
-      fetch('/message', { method: 'DELETE', headers: authHeaders() }).catch(function () {});
+      reportWrite(fetch('/message', { method: 'DELETE', headers: authHeaders() }), 'DELETE /message', msgErr);
     });
 
     function buildCurl(method, path, bodyText) {
