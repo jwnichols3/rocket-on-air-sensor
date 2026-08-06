@@ -87,20 +87,24 @@ has already changed.
 
 ## `~/.onair/cli.env`
 
-The `onair` CLI itself needs `ONAIR_PORT` and `ONAIR_TOKEN` to talk to the
-running API (health checks, `reset-state`, building the sudoers scope, etc).
-It reads them from the environment first, falling back to
-`~/.onair/cli.env` if present (sourced as shell). This is separate from the
-plist's `EnvironmentVariables` - the plist controls what the *daemon* sees;
-`cli.env` controls what the *CLI* uses to reach it. Keep them consistent, or
-set `ONAIR_TOKEN` in the shell before running `install` so both get it at
-once (see below).
+The `onair` CLI itself needs `ONAIR_PORT`, `ONAIR_TOKEN`, and (if you're not
+using the default path) `ONAIR_STATE_FILE` to talk to the running API and
+manage it (health checks, `reset-state`'s direct-file fallback when the API
+isn't responding, building the sudoers scope, etc). It reads them from the
+environment first, falling back to `~/.onair/cli.env` if present (sourced as
+shell). This is separate from the plist's `EnvironmentVariables` -
+day-to-day, the plist controls what the *daemon* sees, `cli.env` controls
+what the *CLI* uses to reach it - but `onair install` also sources `cli.env`
+to render the plist in the first place, so at install time the same file
+sets both. Keep them consistent, or set `ONAIR_TOKEN` (and `ONAIR_STATE_FILE`,
+if used) in the shell before running `install` so both get it at once.
 
 Example `~/.onair/cli.env`:
 
 ```sh
 ONAIR_PORT=8484
 ONAIR_TOKEN=some-secret-value
+ONAIR_STATE_FILE=/Users/john/.onair/state.json
 ```
 
 ## Pinned node / nvm caveat
@@ -144,8 +148,9 @@ threshold, compressed with `J`) so the file doesn't grow unbounded. View with
 ## Restart-by-exit symmetry
 
 `POST /admin/restart` doesn't restart anything itself - it just exits the
-process cleanly (`202 {"restarting": true}` is sent first, then the server
-closes and calls `process.exit(0)`). The supervisor is what actually brings
+process cleanly (`202 {"restarting": true}` is sent first, then, once that
+response has flushed, the process calls `process.exit(0)` - no
+`server.close()`, nothing else to shut down). The supervisor is what actually brings
 it back: launchd's `KeepAlive` here, systemd's `Restart=always` on the Pi
 (`docs/pi-setup.md`). Same admin route, same mechanism, same behavior on
 either machine - "restart" is universally "exit and let the supervisor
@@ -155,11 +160,13 @@ notice."
 
 `http://<host>:8484/ui` has an Admin card showing health fields (pid, uptime,
 node version, state file writable) polled from `/admin/health` every 10s and
-on SSE reconnect, plus a Restart button. The button requires `ONAIR_TOKEN` to
-be configured - `POST /admin/restart` returns 403 without one (the one
-endpoint that refuses to exist unauthenticated, since it's a remote
-process-kill), and the card shows a hint to set `ONAIR_TOKEN` when restart is
-unavailable rather than a live button.
+on SSE reconnect, plus a Restart button. The button is always enabled once
+the first health poll succeeds, regardless of whether `ONAIR_TOKEN` is
+configured - `POST /admin/restart` returns 403 without one (the one endpoint
+that refuses to exist unauthenticated, since it's a remote process-kill).
+Only after a click gets that 403 does the card show a "set `ONAIR_TOKEN` to
+enable remote restart" hint in its error strip; the button itself is
+unaffected and stays clickable.
 
 ## Troubleshooting
 

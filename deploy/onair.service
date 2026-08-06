@@ -18,7 +18,7 @@ Environment=ONAIR_PORT=8484
 # Note: npx wraps the real node process; graceful shutdown depends on npm
 # forwarding SIGTERM to the child (works in practice, noted for transparency).
 ExecStart=/usr/bin/env npx --yes github:jwnichols3/rocket-on-air-sensor
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
