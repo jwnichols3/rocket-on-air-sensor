@@ -41,3 +41,18 @@ custom message with `curl -X PUT :8484/message -d '{"text": "BE QUIET"}'`, clear
 Dark control panel + API console: open `http://<host>:8484/ui`.
 
 Bitfocus Companion integration (button + status feedback): `docs/companion-setup.md`.
+
+## Run as a Mac service
+
+On the Mac Mini, run the API as a supervised LaunchDaemon that survives
+reboots and crashes (no GUI login needed):
+
+```sh
+git clone https://github.com/jwnichols3/rocket-on-air-sensor.git && cd rocket-on-air-sensor
+npm install && npm run build
+sudo deploy/onair install
+```
+
+Manage it with `onair status|start|stop|restart|reload|logs|disable|enable`.
+See `docs/mac-setup.md` for the full verb table, `--sudoers`, and setup
+caveats.
