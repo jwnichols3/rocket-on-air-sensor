@@ -33,21 +33,38 @@ if [[ "$CURRENT_USER" == "root" && -n "${SUDO_USER:-}" ]]; then TARGET_USER="$SU
 TARGET_HOME="$(dscl . -read "/Users/$TARGET_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
 if [[ -z "$TARGET_HOME" ]]; then TARGET_HOME="$HOME"; fi
 
-# --- config: env wins over ~/.onair/cli.env, which wins over the defaults ---
-ENV_ONAIR_PORT="${ONAIR_PORT:-}"
-ENV_ONAIR_TOKEN="${ONAIR_TOKEN:-}"
-ENV_ONAIR_STATE_FILE="${ONAIR_STATE_FILE:-}"
-CLI_ENV="$TARGET_HOME/.onair/cli.env"
-# Skip sourcing under sudo (EUID 0): cli.env is user-writable, and sourcing it
-# as root would execute arbitrary user-controlled code with root privileges.
-# ONAIR_* env vars set in the caller's environment still pass through.
-if [[ "$(id -u)" -ne 0 && -f "$CLI_ENV" ]]; then
-  # shellcheck disable=SC1090
-  source "$CLI_ENV"
-fi
-ONAIR_PORT="${ENV_ONAIR_PORT:-${ONAIR_PORT:-8484}}"
-ONAIR_TOKEN="${ENV_ONAIR_TOKEN:-${ONAIR_TOKEN:-}}"
-STATE_FILE="${ENV_ONAIR_STATE_FILE:-${ONAIR_STATE_FILE:-$TARGET_HOME/.onair/state.json}}"
+# --- config: a real env var wins over ~/.onair/config.env, which wins over
+# the defaults. The config file is NEVER sourced or eval'd (it's user-
+# writable, and this runs as root under sudo) - only `KEY=value` lines are
+# parsed with grep/cut, with one pair of surrounding quotes stripped. ---
+CONFIG_FILE="${ONAIR_CONFIG:-$TARGET_HOME/.onair/config.env}"
+
+# read_config KEY - prints env var KEY if set (non-empty), else the value of
+# the LAST matching `^KEY=` line in $CONFIG_FILE with one pair of surrounding
+# single/double quotes stripped, else nothing.
+read_config() {
+  local key="$1" line value
+  local env_value="${!key:-}"
+  if [[ -n "$env_value" ]]; then
+    printf '%s' "$env_value"
+    return 0
+  fi
+  [[ -f "$CONFIG_FILE" ]] || return 0
+  line="$(grep "^${key}=" "$CONFIG_FILE" 2>/dev/null | tail -n 1)"
+  [[ -n "$line" ]] || return 0
+  value="$(printf '%s\n' "$line" | cut -d'=' -f2-)"
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s' "$value"
+}
+
+ONAIR_PORT="$(read_config ONAIR_PORT)"
+ONAIR_PORT="${ONAIR_PORT:-8484}"
+ONAIR_TOKEN="$(read_config ONAIR_TOKEN)"
+STATE_FILE="$(read_config ONAIR_STATE_FILE)"
+STATE_FILE="${STATE_FILE:-$TARGET_HOME/.onair/state.json}"
 LOG_FILE="$TARGET_HOME/.onair/logs/onair.log"
 
 usage() {
@@ -69,7 +86,7 @@ verbs:
   enable                launchctl enable, then start
 
 Reads ONAIR_PORT (default 8484) and ONAIR_TOKEN from the environment or
-$CLI_ENV.
+$CONFIG_FILE.
 EOF
 }
 
@@ -125,6 +142,18 @@ is_loaded() {
   sudo_launchctl print "$T" >/dev/null 2>&1
 }
 
+# One-time migration: the config file used to be ~/.onair/cli.env. If it
+# exists and the new ~/.onair/config.env doesn't, copy it over (owner
+# TARGET_USER, mode 0600) and say so. cli.env is not read after this.
+migrate_cli_env() {
+  local cli_env="$TARGET_HOME/.onair/cli.env"
+  local config_env="$TARGET_HOME/.onair/config.env"
+  if [[ -f "$cli_env" && ! -f "$config_env" ]]; then
+    install -o "$TARGET_USER" -m 0600 "$cli_env" "$config_env"
+    echo "onair: migrated $cli_env to $config_env"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 cmd_install() {
   local sudoers_flag="${1:-}"
@@ -137,6 +166,8 @@ cmd_install() {
   else
     mkdir -p "$TARGET_HOME/.onair/logs"
   fi
+
+  migrate_cli_env
 
   local node_bin
   node_bin="$(command -v node || true)"
@@ -151,7 +182,7 @@ cmd_install() {
   fi
 
   local sub_value
-  for sub_value in "$node_bin" "$APPDIR" "$TARGET_USER" "$TARGET_HOME" "$ONAIR_PORT" "$STATE_FILE"; do
+  for sub_value in "$node_bin" "$APPDIR" "$TARGET_USER" "$TARGET_HOME"; do
     if [[ "$sub_value" == *'&'* || "$sub_value" == *'|'* || "$sub_value" == *'\'* ]]; then
       echo "onair: path contains characters the installer cannot render safely" >&2
       exit 1
@@ -167,15 +198,7 @@ cmd_install() {
     -e "s|@APPDIR@|$APPDIR|g" \
     -e "s|@USER@|$TARGET_USER|g" \
     -e "s|@HOME@|$TARGET_HOME|g" \
-    -e "s|@PORT@|$ONAIR_PORT|g" \
-    -e "s|@STATE_FILE@|$STATE_FILE|g" \
     "$TEMPLATE" > "$tmp_plist"
-
-  if [[ -n "$ONAIR_TOKEN" ]]; then
-    # Appended only when set in the installer's environment - never baked into
-    # the template or committed to git.
-    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:ONAIR_TOKEN string $ONAIR_TOKEN" "$tmp_plist"
-  fi
 
   if ! plutil -lint "$tmp_plist" >/dev/null; then
     echo "onair: rendered plist failed plutil -lint" >&2
