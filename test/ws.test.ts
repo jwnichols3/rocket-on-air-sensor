@@ -386,3 +386,65 @@ test('a ping pipelined in the same write as the handshake still gets a pong (hea
   client.close();
   await app.close();
 });
+
+test('shutdown does not hang on a half-open peer that never sends its own FIN', async () => {
+  const app = await bootApp();
+
+  // allowHalfOpen:true is the key: a normal net.Socket auto-sends its own FIN once it
+  // reads EOF (the server's close-frame-then-FIN from closeAll), which is what let the
+  // earlier end()-only fix look safe in probes. A half-open client - or a dead/frozen
+  // real-world peer that stops responding at the TCP level - never does that, so it's
+  // the actual regression case: closeAll()'s socket.end() alone would wait forever for a
+  // FIN this socket will never send back.
+  const socket = net.connect({ port: app.port, host: '127.0.0.1', allowHalfOpen: true });
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('error', reject);
+  });
+  socket.on('error', () => {});
+
+  const req =
+    `GET /events/ws HTTP/1.1\r\n` +
+    `Host: 127.0.0.1:${app.port}\r\n` +
+    `Upgrade: websocket\r\n` +
+    `Connection: Upgrade\r\n` +
+    `Sec-WebSocket-Key: ${FIXED_KEY}\r\n` +
+    `Sec-WebSocket-Version: 13\r\n\r\n`;
+  socket.write(req);
+
+  // Read past the handshake response and the first (snapshot) frame, so the connection
+  // is genuinely "up" before we test shutdown - not just stuck mid-handshake.
+  let buf = Buffer.alloc(0);
+  let headerParsed = false;
+  await new Promise<void>((resolve) => {
+    function onData(chunk: Buffer): void {
+      buf = Buffer.concat([buf, chunk]);
+      if (!headerParsed) {
+        const idx = buf.indexOf('\r\n\r\n');
+        if (idx === -1) return;
+        buf = buf.subarray(idx + 4);
+        headerParsed = true;
+      }
+      if (buf.length < 2) return;
+      const byte1 = buf[1]!;
+      let len = byte1 & 0x7f;
+      let pos = 2;
+      if (len === 126) {
+        if (buf.length < pos + 2) return;
+        len = buf.readUInt16BE(pos);
+        pos += 2;
+      }
+      if (buf.length < pos + len) return;
+      socket.off('data', onData);
+      resolve();
+    }
+    socket.on('data', onData);
+  });
+
+  const outcome = await Promise.race([
+    app.close().then(() => 'closed' as const),
+    sleep(3000).then(() => 'timeout' as const),
+  ]);
+  socket.destroy();
+  assert.equal(outcome, 'closed', 'app.close() must not hang on a half-open peer at shutdown');
+});

@@ -132,7 +132,11 @@ export function createWsBridge(heartbeatMs = 15_000): WsBridge {
       const key = req.headers['sec-websocket-key'];
       const isWebSocketUpgrade = typeof upgradeHeader === 'string' && upgradeHeader.toLowerCase() === 'websocket';
       if (!isWebSocketUpgrade || typeof key !== 'string' || key.trim() === '') {
-        socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+        // end()'s callback fires once the reply is flushed and the writable side is
+        // done - only then do we force-destroy, so a slow/lingering peer can't stop the
+        // socket from ever closing (a bare end() alone waits for the peer's own FIN,
+        // which a half-open or dead peer may never send).
+        socket.end('HTTP/1.1 400 Bad Request\r\n\r\n', () => socket.destroy());
         return;
       }
 
@@ -196,10 +200,25 @@ export function createWsBridge(heartbeatMs = 15_000): WsBridge {
     },
     closeAll() {
       for (const socket of [...clients]) {
+        let destroyed = false;
+        const forceDestroy = (): void => {
+          if (destroyed) return;
+          destroyed = true;
+          clearTimeout(fallback);
+          socket.destroy();
+        };
+        // A bare end() only sends our FIN and then waits for the peer's own FIN before
+        // the socket fully closes - a half-open client (or one that's just gone dark at
+        // shutdown) may never send it, hanging server.close() forever. So: destroy once
+        // the close frame is flushed (the common case), and destroy unconditionally
+        // after ~1s regardless (covers a jammed send buffer where the callback itself
+        // never fires). Whichever runs first cancels the other via `destroyed`.
+        const fallback = setTimeout(forceDestroy, 1_000);
+        fallback.unref?.();
         try {
-          socket.end(encodeFrame(OPCODE_CLOSE, Buffer.alloc(0)));
+          socket.end(encodeFrame(OPCODE_CLOSE, Buffer.alloc(0)), forceDestroy);
         } catch {
-          // best effort
+          forceDestroy();
         }
         detach(socket);
       }

@@ -67,7 +67,9 @@ export function createApiServer(deps: ServerDeps): Server {
 
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname !== '/events/ws') {
-      socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
+      // end()'s callback forces the socket closed once the reply is flushed, rather than
+      // waiting on the peer's own FIN (which a half-open or dead peer may never send).
+      socket.end('HTTP/1.1 404 Not Found\r\n\r\n', () => socket.destroy());
       return;
     }
 
@@ -77,7 +79,7 @@ export function createApiServer(deps: ServerDeps): Server {
       const queryToken = url.searchParams.get('token');
       const queryOk = queryToken !== null && timingSafeStringEqual(queryToken, deps.token);
       if (!headerOk && !queryOk) {
-        socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n', () => socket.destroy());
         return;
       }
     }
