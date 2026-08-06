@@ -63,6 +63,7 @@ export function errorMessage(err: unknown): string {
 function timingSafeStringEqual(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(b, 'utf8');
+  // Early length-mismatch return leaks token length via timing — accepted for this LAN threat model.
   // timingSafeEqual throws on length mismatch; unequal lengths are already not a match.
   if (bufA.length !== bufB.length) return false;
   return timingSafeEqual(bufA, bufB);
@@ -154,6 +155,8 @@ async function handle(
 
   // Drain the body for every route below that doesn't call readBody() itself, so an
   // unread body doesn't stall the socket and break keep-alive for the next request.
+  // This condition must list exactly the routes/methods that call readBody() below —
+  // adding a body-reading route without updating it will cause req.resume() to eat the body first.
   const willReadBody = (path === '/state' || path === '/message') && method === 'PUT';
   if (!willReadBody) req.resume();
 
