@@ -450,10 +450,17 @@ export const UI_HTML = `<!doctype html>
         setErr(adminErr, 'GET /admin/health -> ' + (err && err.message ? err.message : String(err)));
       });
     }
-    adminRefresh.addEventListener('click', function () { loadHealth(); });
+    adminRefresh.addEventListener('click', function () {
+      if (restarting) return;
+      loadHealth();
+    });
+
+    var POLL_MAX_ATTEMPTS = 60;
 
     function pollHealthUntilBack() {
+      var attempts = 0;
       var timer = setInterval(function () {
+        attempts++;
         fetch(adminHealthUrl()).then(function (res) {
           if (!res.ok) return;
           return res.json().then(function (body) {
@@ -465,6 +472,14 @@ export const UI_HTML = `<!doctype html>
           });
         }).catch(function () {
           // Connection refused / reset while the process is restarting - keep polling.
+        }).then(function () {
+          if (attempts >= POLL_MAX_ATTEMPTS && restarting) {
+            clearInterval(timer);
+            restarting = false;
+            btnRestart.textContent = 'Restart';
+            btnRestart.disabled = !healthLoadedOnce;
+            setErr(adminErr, 'service did not come back after restart - check "onair status"');
+          }
         });
       }, 1000);
     }
@@ -495,11 +510,12 @@ export const UI_HTML = `<!doctype html>
           btnRestart.textContent = 'Restart';
           btnRestart.disabled = !healthLoadedOnce;
         });
-      }).catch(function (err) {
-        setErr(adminErr, 'POST /admin/restart -> ' + (err && err.message ? err.message : String(err)));
-        restarting = false;
-        btnRestart.textContent = 'Restart';
-        btnRestart.disabled = !healthLoadedOnce;
+      }).catch(function () {
+        // The server exits right after flushing the 202, so a connection reset on
+        // this fetch is the normal success path - not an error. Proceed exactly as
+        // the success path does.
+        clearErr(adminErr);
+        pollHealthUntilBack();
       });
     });
 
