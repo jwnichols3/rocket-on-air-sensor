@@ -82,3 +82,13 @@ sudo raspi-config
 - This is a cold-machine convenience for a home project, not a
   supply-chain-hardened installer. If provenance matters, pin a commit or tag
   (`#v0.1.0` or `#<sha>`) rather than tracking the default branch.
+- npm configs with `ignore-scripts` (or strict allow-scripts policies) silently
+  skip the `prepare` build on git installs. If you see "Cannot find module
+  .../dist/index.js" (not an install-time error), check `npm config get
+  ignore-scripts` and ensure it's false.
+- **Kiosk binary name**: current Raspberry Pi OS ships `chromium`; older images
+  use `chromium-browser`. Check which exists with `which chromium chromium-browser`
+  and update the autostart command accordingly.
+- **Screen blanking on Wayland**: raspi-config's Screen Blanking option
+  historically targets X11. Under Wayland (labwc/wayfire), behavior varies by
+  release—verify the blanking state on your device after enabling/disabling.
