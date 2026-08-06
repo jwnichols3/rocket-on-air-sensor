@@ -297,11 +297,13 @@ export const UI_HTML = `<!doctype html>
     var token = localStorage.getItem('onair-token') || '';
     var tokenInput = document.getElementById('token');
     tokenInput.value = token;
-    tokenInput.addEventListener('change', function () {
+    function onTokenChange() {
       token = tokenInput.value;
       localStorage.setItem('onair-token', token);
       connect();
-    });
+    }
+    tokenInput.addEventListener('change', onTokenChange);
+    tokenInput.addEventListener('input', onTokenChange);
 
     function authHeaders() {
       var h = {};
@@ -445,13 +447,20 @@ export const UI_HTML = `<!doctype html>
       reportWrite(fetch('/message', { method: 'DELETE', headers: authHeaders() }), 'DELETE /message', msgErr);
     });
 
+    function shQuote(s) {
+      // Safe embedding inside a single-quoted shell arg: close the quote, insert an
+      // escaped literal quote, reopen the quote. A quote character becomes 4 chars.
+      return s.replace(/'/g, "'\\''");
+    }
+
     function buildCurl(method, path, bodyText) {
       var cmd = "curl -X " + method + " '" + location.origin + path + "'";
       if (bodyText !== undefined && bodyText !== null && bodyText !== '') {
-        cmd += " -d '" + bodyText.replace(/'/g, "'\\\\''") + "'";
+        cmd += " -H 'Content-Type: application/json'";
+        cmd += " -d '" + shQuote(bodyText) + "'";
       }
       if (token) {
-        cmd += " -H 'Authorization: Bearer " + token + "'";
+        cmd += " -H 'Authorization: Bearer " + shQuote(token) + "'";
       }
       return cmd;
     }
@@ -493,6 +502,7 @@ export const UI_HTML = `<!doctype html>
       sendBtn.addEventListener('click', function () {
         var bodyText = textarea ? textarea.value : undefined;
         var headers = authHeaders();
+        if (bodyText !== undefined) headers['content-type'] = 'application/json';
         var opts = { method: cfg.method, headers: headers };
         if (bodyText !== undefined) opts.body = bodyText;
         fetch(cfg.path, opts).then(function (res) {
