@@ -75,8 +75,8 @@ else (state, light control, API) lives on the receiver.
 - [x] REST API shape: endpoints, auth, port, state model - resolved, see
       `docs/api-contract.md` and D-5..D-7.
 - [ ] Light behavior: binary on/off only, or colors/states (in call vs camera on)?
-- [ ] Pi packaging: npx-style one-command install - Node on Pi, or alternative
-      (pipx, docker, systemd unit) if npx is a poor fit?
+- [x] Pi packaging: npx one-command install + systemd unit - resolved, see D-10 and
+      `docs/pi-setup.md`.
 - [ ] How does the API confirm the light actually changed (ack/status from the light)
       vs just recording intent?
 
@@ -118,3 +118,9 @@ else (state, light control, API) lives on the receiver.
   updates. Safety rule: the display's background color always reflects on-air state;
   a message can never hide ON AIR. Spec:
   `docs/superpowers/specs/2026-08-05-onair-display-design.md`.
+- **D-10 (2026-08-05)** Distribution: `npx --yes github:jwnichols3/rocket-on-air-sensor`
+  (npm `bin` + `prepare` build; no npm publish), systemd unit template in `deploy/`,
+  setup + kiosk doc in `docs/pi-setup.md`. Tradeoffs accepted for a home project:
+  needs git+network at (re)start and builds on install; pin a tag/commit when
+  reproducibility matters. Kiosk Pi can point at any host's `/display` - it does not
+  need to run the API itself.
