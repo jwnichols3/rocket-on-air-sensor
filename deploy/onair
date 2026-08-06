@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+# onair - install/manage the on-air API as a macOS launchd LaunchDaemon.
+#
+# Modern launchctl subcommands only (bootstrap/bootout/kickstart/print/enable/
+# disable) - never the legacy load/unload. See docs/mac-setup.md.
+set -euo pipefail
+
+LABEL=com.rocket.onair
+T="system/$LABEL"
+PLIST_PATH="/Library/LaunchDaemons/$LABEL.plist"
+NEWSYSLOG_CONF="/etc/newsyslog.d/onair.conf"
+SUDOERS_FILE="/etc/sudoers.d/onair"
+BIN_LINK="/usr/local/bin/onair"
+LAUNCHCTL="/bin/launchctl"
+
+# --- resolve the real app checkout, even through the /usr/local/bin/onair symlink ---
+resolve_script_path() {
+  local source="${BASH_SOURCE[0]}" dir
+  while [[ -h "$source" ]]; do
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    if [[ "$source" != /* ]]; then source="$dir/$source"; fi
+  done
+  cd -P "$(dirname "$source")" && pwd
+}
+DEPLOY_DIR="$(resolve_script_path)"
+APPDIR="$(cd -P "$DEPLOY_DIR/.." && pwd)"
+TEMPLATE="$DEPLOY_DIR/com.rocket.onair.plist.template"
+
+# --- resolve the real (non-root) target user + home, whether invoked directly or via sudo ---
+CURRENT_USER="$(id -un)"
+if [[ "$CURRENT_USER" == "root" && -n "${SUDO_USER:-}" ]]; then TARGET_USER="$SUDO_USER"; else TARGET_USER="$CURRENT_USER"; fi
+TARGET_HOME="$(dscl . -read "/Users/$TARGET_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+if [[ -z "$TARGET_HOME" ]]; then TARGET_HOME="$HOME"; fi
+
+# --- config: env wins over ~/.onair/cli.env, which wins over the defaults ---
+ENV_ONAIR_PORT="${ONAIR_PORT:-}"
+ENV_ONAIR_TOKEN="${ONAIR_TOKEN:-}"
+ENV_ONAIR_STATE_FILE="${ONAIR_STATE_FILE:-}"
+CLI_ENV="$TARGET_HOME/.onair/cli.env"
+if [[ -f "$CLI_ENV" ]]; then
+  # shellcheck disable=SC1090
+  source "$CLI_ENV"
+fi
+ONAIR_PORT="${ENV_ONAIR_PORT:-${ONAIR_PORT:-8484}}"
+ONAIR_TOKEN="${ENV_ONAIR_TOKEN:-${ONAIR_TOKEN:-}}"
+STATE_FILE="${ENV_ONAIR_STATE_FILE:-${ONAIR_STATE_FILE:-$TARGET_HOME/.onair/state.json}}"
+LOG_FILE="$TARGET_HOME/.onair/logs/onair.log"
+
+usage() {
+  cat >&2 <<EOF
+usage: onair <verb> [args]
+
+verbs:
+  install [--sudoers]  render plist, install to launchd, bootstrap
+  uninstall            bootout, remove plist/newsyslog/symlink/sudoers
+  start                bootstrap if not loaded, else kickstart
+  stop                 bootout (returns at next boot; see 'disable')
+  restart              kickstart -k
+  reload               bootout+bootstrap (plist/env changes; kickstart -k
+                        alone does not re-read the plist)
+  status                supervised + responding two-layer check
+  logs [-f]             tail (or follow) $LOG_FILE
+  reset-state            clear on-air state via API (or state file), restart
+  disable               launchctl disable (persists across reboot)
+  enable                launchctl enable, then start
+
+Reads ONAIR_PORT (default 8484) and ONAIR_TOKEN from the environment or
+$CLI_ENV.
+EOF
+}
+
+# --- health check: GET /admin/health, token via query string (GET-only auth path) ---
+health_url() {
+  if [[ -n "$ONAIR_TOKEN" ]]; then
+    printf 'http://localhost:%s/admin/health?token=%s' "$ONAIR_PORT" "$ONAIR_TOKEN"
+  else
+    printf 'http://localhost:%s/admin/health' "$ONAIR_PORT"
+  fi
+}
+
+health_check_once() {
+  curl -fsS -m 2 "$(health_url)" >/dev/null 2>&1
+}
+
+# Every mutating verb polls up to 5s and prints PASS/FAIL.
+mutating_health_poll() {
+  local deadline=$((SECONDS + 5))
+  while (( SECONDS < deadline )); do
+    if health_check_once; then
+      echo "health: PASS"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "health: FAIL"
+  return 1
+}
+
+# --- launchctl wrappers ---
+sudo_launchctl() {
+  sudo "$LAUNCHCTL" "$@"
+}
+
+is_loaded() {
+  sudo_launchctl print "$T" >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+cmd_install() {
+  local sudoers_flag="${1:-}"
+  mkdir -p "$TARGET_HOME/.onair/logs"
+
+  local node_bin
+  node_bin="$(command -v node || true)"
+  if [[ -z "$node_bin" ]]; then
+    echo "onair: node not found in PATH - install failed" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$TEMPLATE" ]]; then
+    echo "onair: template not found at $TEMPLATE" >&2
+    exit 1
+  fi
+
+  local tmp_plist
+  tmp_plist="$(mktemp /tmp/com.rocket.onair.plist.XXXXXX)"
+  # This is the exact sed pipeline used to render the template; verification
+  # reproduces it byte-for-byte against a scratch dir.
+  sed \
+    -e "s|@NODE@|$node_bin|g" \
+    -e "s|@APPDIR@|$APPDIR|g" \
+    -e "s|@USER@|$TARGET_USER|g" \
+    -e "s|@HOME@|$TARGET_HOME|g" \
+    -e "s|@PORT@|$ONAIR_PORT|g" \
+    -e "s|@STATE_FILE@|$STATE_FILE|g" \
+    "$TEMPLATE" > "$tmp_plist"
+
+  if [[ -n "$ONAIR_TOKEN" ]]; then
+    # Appended only when set in the installer's environment - never baked into
+    # the template or committed to git.
+    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:ONAIR_TOKEN string $ONAIR_TOKEN" "$tmp_plist"
+  fi
+
+  if ! plutil -lint "$tmp_plist" >/dev/null; then
+    echo "onair: rendered plist failed plutil -lint" >&2
+    rm -f "$tmp_plist"
+    exit 1
+  fi
+
+  sudo install -o root -g wheel -m 0644 "$tmp_plist" "$PLIST_PATH"
+  rm -f "$tmp_plist"
+
+  write_newsyslog_conf
+
+  sudo ln -sf "$DEPLOY_DIR/onair" "$BIN_LINK"
+
+  sudo_launchctl bootstrap system "$PLIST_PATH"
+
+  if [[ "$sudoers_flag" == "--sudoers" ]]; then
+    install_sudoers
+  fi
+
+  mutating_health_poll
+}
+
+write_newsyslog_conf() {
+  local tmp
+  tmp="$(mktemp /tmp/onair.newsyslog.XXXXXX)"
+  cat > "$tmp" <<EOF
+# logfilename                          [owner:group]    mode count size  when  flags
+$LOG_FILE   $TARGET_USER:staff       644  5     10000 *     J
+EOF
+  sudo install -o root -g wheel -m 0644 "$tmp" "$NEWSYSLOG_CONF"
+  rm -f "$tmp"
+}
+
+install_sudoers() {
+  local tmp
+  tmp="$(mktemp /tmp/onair.sudoers.XXXXXX)"
+  cat > "$tmp" <<EOF
+# Managed by 'onair install --sudoers'. Scopes passwordless sudo to exactly the
+# launchctl subcommands the onair CLI issues against $LABEL - nothing broader.
+# Remove with: sudo rm $SUDOERS_FILE
+$TARGET_USER ALL=(root) NOPASSWD: $LAUNCHCTL bootstrap system $PLIST_PATH, \\
+  $LAUNCHCTL bootout $T, \\
+  $LAUNCHCTL kickstart $T, \\
+  $LAUNCHCTL kickstart -k $T, \\
+  $LAUNCHCTL print $T, \\
+  $LAUNCHCTL enable $T, \\
+  $LAUNCHCTL disable $T
+EOF
+  if ! visudo -cf "$tmp" >/dev/null; then
+    echo "onair: generated sudoers file failed visudo -cf, not installing" >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  sudo install -o root -g wheel -m 0440 "$tmp" "$SUDOERS_FILE"
+  rm -f "$tmp"
+}
+
+cmd_uninstall() {
+  if is_loaded; then
+    sudo_launchctl bootout "$T"
+  fi
+  sudo rm -f "$PLIST_PATH" "$NEWSYSLOG_CONF" "$SUDOERS_FILE" "$BIN_LINK"
+  mutating_health_poll || true
+}
+
+cmd_start() {
+  if is_loaded; then
+    sudo_launchctl kickstart "$T"
+  else
+    sudo_launchctl bootstrap system "$PLIST_PATH"
+  fi
+  mutating_health_poll
+}
+
+cmd_stop() {
+  sudo_launchctl bootout "$T"
+  echo "returns at next boot; use \`onair disable\` for persistent off"
+  mutating_health_poll || true
+}
+
+cmd_restart() {
+  sudo_launchctl kickstart -k "$T"
+  mutating_health_poll
+}
+
+cmd_reload() {
+  echo "reload: 'kickstart -k' restarts the process but does not re-read the" >&2
+  echo "plist from disk; reload does bootout+bootstrap so plist/env changes" >&2
+  echo "(e.g. after re-running install) actually take effect." >&2
+  if is_loaded; then
+    sudo_launchctl bootout "$T"
+  fi
+  sudo_launchctl bootstrap system "$PLIST_PATH"
+  mutating_health_poll
+}
+
+cmd_status() {
+  local supervised=no state="unknown" pid="unknown" last_exit="unknown" disabled="unknown"
+  local print_out=""
+  # -n: never prompt for a password. Without a cached/NOPASSWD sudo ticket,
+  # status degrades to "supervised: unknown" instead of hanging or exiting 1.
+  if print_out="$(sudo -n "$LAUNCHCTL" print "$T" 2>/dev/null)"; then
+    supervised=yes
+    state="$(printf '%s\n' "$print_out" | awk -F' = ' '/^[[:space:]]*state = /{print $2; exit}')"
+    pid="$(printf '%s\n' "$print_out" | awk -F' = ' '/^[[:space:]]*pid = /{print $2; exit}')"
+    last_exit="$(printf '%s\n' "$print_out" | awk -F' = ' '/last exit (code|status) = /{print $2; exit}')"
+    if printf '%s\n' "$print_out" | grep -qE 'disabled = (1|true)'; then
+      disabled=yes
+    elif printf '%s\n' "$print_out" | grep -qE 'disabled = (0|false)'; then
+      disabled=no
+    fi
+    [[ -z "$state" ]] && state="unknown" || true
+    [[ -z "$pid" ]] && pid="unknown" || true
+    [[ -z "$last_exit" ]] && last_exit="unknown" || true
+  fi
+
+  local responding=no
+  if health_check_once; then
+    responding=yes
+  fi
+
+  echo "supervised: $supervised (state=$state pid=$pid last-exit=$last_exit disabled=$disabled)"
+  echo "responding: $responding"
+
+  # Only both layers down counts as failure - a not-yet-installed/unauthorized
+  # daemon that's still answering on the port (e.g. run by hand) is healthy.
+  if [[ "$supervised" == no && "$responding" == no ]]; then
+    return 1
+  fi
+  return 0
+}
+
+cmd_logs() {
+  local follow="${1:-}"
+  if [[ ! -f "$LOG_FILE" ]]; then
+    echo "onair: no log file at $LOG_FILE yet" >&2
+    exit 1
+  fi
+  if [[ "$follow" == "-f" ]]; then
+    tail -f "$LOG_FILE"
+  else
+    tail -n 100 "$LOG_FILE"
+  fi
+}
+
+cmd_reset_state() {
+  if health_check_once; then
+    local -a auth=()
+    if [[ -n "$ONAIR_TOKEN" ]]; then
+      auth=(-H "Authorization: Bearer $ONAIR_TOKEN")
+    fi
+    # "${auth[@]+"${auth[@]}"}" (not bare "${auth[@]}"): bash 3.2 - macOS's
+    # /bin/bash - throws "unbound variable" expanding an empty array under
+    # `set -u` without this guard.
+    curl -fsS -m 2 -X POST "${auth[@]+"${auth[@]}"}" "http://localhost:$ONAIR_PORT/off" >/dev/null || true
+    curl -fsS -m 2 -X DELETE "${auth[@]+"${auth[@]}"}" "http://localhost:$ONAIR_PORT/message" >/dev/null || true
+  else
+    rm -f "$STATE_FILE"
+  fi
+  sudo_launchctl kickstart -k "$T"
+  mutating_health_poll
+}
+
+cmd_disable() {
+  sudo_launchctl disable "$T"
+  mutating_health_poll || true
+}
+
+cmd_enable() {
+  sudo_launchctl enable "$T"
+  cmd_start
+}
+
+# ---------------------------------------------------------------------------
+if [[ $# -lt 1 ]]; then
+  usage
+  exit 1
+fi
+
+verb="$1"
+shift
+
+case "$verb" in
+  install) cmd_install "${1:-}" ;;
+  uninstall) cmd_uninstall ;;
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_restart ;;
+  reload) cmd_reload ;;
+  status) cmd_status ;;
+  logs) cmd_logs "${1:-}" ;;
+  reset-state) cmd_reset_state ;;
+  disable) cmd_disable ;;
+  enable) cmd_enable ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
