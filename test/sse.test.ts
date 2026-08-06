@@ -95,3 +95,17 @@ test('a throwing client is detached and does not break broadcast', () => {
   assert.ok(good.chunks.at(-1)!.includes('"x":1'));
   hub.closeAll();
 });
+
+test('a client whose heartbeat write throws is detached and its timer stops', async () => {
+  const hub = createSseHub(20);
+  const res = new FakeRes();
+  hub.attach(asRes(res), () => ({}));
+  res.write = () => {
+    throw new Error('EPIPE');
+  };
+  await sleep(50); // first heartbeat throws -> detach
+  assert.equal(hub.count(), 0);
+  const count = res.chunks.length;
+  await sleep(50);
+  assert.equal(res.chunks.length, count); // timer cleared, no further attempts
+});
