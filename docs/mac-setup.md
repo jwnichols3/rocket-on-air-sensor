@@ -33,9 +33,9 @@ hands off to `onair install` on macOS.
   (asks port/token/state file on a TTY; keeps defaults otherwise)
 - resolves `node` from `PATH` and renders `deploy/com.rocket.onair.plist.template`
   into a plist (absolute paths for node, app dir, user, and home only -
-  daemons get a bare `PATH` and no `HOME`, so nothing can rely on a shell
-  env; port, token, and state file are not in the plist - the service reads
-  them from `~/.onair/config.env` itself)
+  daemons get a bare `PATH` and no shell env, so the plist sets `HOME`
+  explicitly; port, token, and state file are not in the plist - the service
+  reads them from `~/.onair/config.env` itself)
 - lints the rendered plist with `plutil -lint`
 - installs it to `/Library/LaunchDaemons/com.rocket.onair.plist`, owned
   `root:wheel`, mode `0644`

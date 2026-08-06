@@ -40,8 +40,10 @@ Use this option for the Mac Mini. The service starts at boot, needs no GUI login
 and restarts after a crash.
 
 On a fresh install, `sudo deploy/bootstrap` runs a setup wizard before the service
-starts. It asks three questions and shows the current or default value for each,
-so pressing Enter keeps that value:
+starts. The wizard needs a terminal: in a non-interactive shell (for example a
+plain `ssh host 'sudo deploy/bootstrap'`), it writes the defaults without
+questions. It asks three questions and shows the current or default value for
+each, so pressing Enter keeps that value:
 
 - Port (default `8484`).
 - Token: keep, generate, enter, or none (default: none).
@@ -103,8 +105,8 @@ On the Pi, there is no CLI. Edit `~/.onair/config.env` directly, then run
 
 ### Update the host
 
-On the Mac, run `onair update`. It fetches, rebuilds, and restarts only after a
-health check passes; it rolls back automatically if the check fails. Run
+On the Mac, run `onair update`. It fetches, rebuilds, restarts, and then runs a
+health check; it rolls back to the previous build if the check fails. Run
 `onair update --check-only` first to list pending commits without applying them.
 
 On the Pi, run `git pull && sudo deploy/bootstrap`. It rebuilds and restarts the
