@@ -2,6 +2,9 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from './app.js';
+import { loadConfig } from './config.js';
+
+loadConfig();
 
 function parsePort(raw: string | undefined): number {
   if (raw === undefined) return 8484;
