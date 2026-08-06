@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from './app.js';

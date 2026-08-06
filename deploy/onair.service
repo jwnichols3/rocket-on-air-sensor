@@ -1,0 +1,18 @@
+[Unit]
+Description=On-air API service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %i templating only works for onair@.service (template units) - this is a plain
+# unit file, so set the real user directly (e.g. "pi").
+User=pi
+Environment=ONAIR_PORT=8484
+# Environment=ONAIR_TOKEN=change-me
+ExecStart=/usr/bin/env npx --yes github:jwnichols3/rocket-on-air-sensor
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

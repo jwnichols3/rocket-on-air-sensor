@@ -29,6 +29,9 @@ Three unknowns, all to be determined:
 npm install && npm run build && npm start   # or: npm run dev
 ```
 
+One-command run (e.g. on a Pi), no clone needed: `npx --yes github:jwnichols3/rocket-on-air-sensor`.
+See `docs/pi-setup.md` for Pi service + kiosk display setup.
+
 Config via env: `ONAIR_PORT` (default 8484), `ONAIR_STATE_FILE` (default `~/.onair/state.json`), `ONAIR_TOKEN` (optional bearer auth). Contract: `docs/api-contract.md`.
 
 Interim tally display: open `http://<host>:8484/display` fullscreen (kiosk). Set a
