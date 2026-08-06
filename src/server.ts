@@ -1,5 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
+import { accessSync, constants as fsConstants } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { dirname } from 'node:path';
 import type { Duplex } from 'node:stream';
 import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
@@ -16,6 +18,10 @@ export interface ServerDeps {
   hub?: SseHub;
   ws?: WsBridge;
   log?: (line: string) => void;
+  /** State file path, used only for the /admin/health writability check. */
+  stateFile?: string;
+  /** Called (once) to actually exit the process for POST /admin/restart. Defaults to process.exit(0). */
+  exitFn?: () => void;
 }
 
 const ROUTES: Record<string, string[]> = {
@@ -27,6 +33,8 @@ const ROUTES: Record<string, string[]> = {
   '/events': ['GET'],
   '/display': ['GET'],
   '/ui': ['GET'],
+  '/admin/health': ['GET'],
+  '/admin/restart': ['POST'],
 };
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -48,8 +56,13 @@ export function createApiServer(deps: ServerDeps): Server {
     return next;
   }
 
-  const server = createServer((req, res) => {
-    handle(req, res, deps, enqueueWrite, hub, ws, log).catch((err) => {
+  // Declared before assignment so the request handler below can close over the
+  // eventual Server instance (needed for /admin/health's bound-port lookup);
+  // it's only ever read once a request has arrived, by which point listen()
+  // has already assigned it.
+  let server: Server;
+  server = createServer((req, res) => {
+    handle(req, res, deps, enqueueWrite, hub, ws, log, server).catch((err) => {
       if (!res.headersSent) {
         sendJson(res, 500, { error: `internal error: ${errorMessage(err)}` });
       } else {
@@ -157,6 +170,30 @@ async function doWrite(
 
 type EnqueueWrite = (run: () => Promise<void>) => Promise<void>;
 
+function isStateFileWritable(stateFile: string | undefined): boolean {
+  if (stateFile === undefined) return false;
+  try {
+    accessSync(stateFile, fsConstants.W_OK);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+    // State file doesn't exist yet - what matters is whether it *could* be created.
+    try {
+      accessSync(dirname(stateFile), fsConstants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function boundPort(server: Server): number {
+  const address = server.address();
+  // Falls back to 0 if called before listen() resolves; routes only run once the
+  // server is listening and handling a real connection, so this is unreachable in practice.
+  return typeof address === 'object' && address !== null ? address.port : 0;
+}
+
 async function handle(
   req: IncomingMessage,
   res: ServerResponse,
@@ -165,6 +202,7 @@ async function handle(
   hub: SseHub,
   ws: WsBridge,
   log: (line: string) => void,
+  server: Server,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
@@ -200,6 +238,36 @@ async function handle(
 
   if (path === '/status') {
     sendJson(res, 200, statusBody(deps));
+    return;
+  }
+
+  if (path === '/admin/health') {
+    sendJson(res, 200, {
+      uptime: process.uptime(),
+      pid: process.pid,
+      nodeVersion: process.version,
+      port: boundPort(server),
+      stateFileWritable: isStateFileWritable(deps.stateFile),
+    });
+    return;
+  }
+
+  if (path === '/admin/restart') {
+    if (deps.token === undefined) {
+      sendJson(res, 403, { error: 'restart requires ONAIR_TOKEN to be configured' });
+      return;
+    }
+    sendJson(res, 202, { restarting: true });
+    const exitFn = deps.exitFn ?? (() => process.exit(0));
+    let exited = false;
+    const doExit = (): void => {
+      if (exited) return;
+      exited = true;
+      exitFn();
+    };
+    res.on('finish', doExit);
+    res.on('close', doExit);
+    setTimeout(doExit, 250).unref();
     return;
   }
 

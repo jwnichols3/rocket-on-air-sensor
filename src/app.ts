@@ -44,6 +44,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     hub,
     ws: wsBridge,
     log,
+    stateFile: opts.stateFile,
   });
 
   await new Promise<void>((resolve) => server.listen(opts.port, resolve));

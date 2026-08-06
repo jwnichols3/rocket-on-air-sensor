@@ -105,6 +105,35 @@ function of the last `/events` payload plus per-row response data. Same token
 handling as `/display` (`?token=` on the GET); the page itself sends the bearer
 header on writes when a token is entered into the page.
 
+### `GET /admin/health`
+
+Liveness/health check for the launchd/systemd supervisor and the `/ui` Admin card.
+Read-only: token-gated like other GETs (`?token=` accepted).
+
+```json
+{
+  "uptime": 123.4,
+  "pid": 4821,
+  "nodeVersion": "v22.9.0",
+  "port": 8484,
+  "stateFileWritable": true
+}
+```
+
+`uptime` is process uptime in seconds. `port` is the server's actual bound port.
+`stateFileWritable` is true iff the state file (or, when it doesn't exist yet, its
+parent directory) is writable.
+
+### `POST /admin/restart`
+
+Triggers a graceful process exit so the supervisor (launchd `KeepAlive`, systemd
+`Restart=always`) respawns the service. The one endpoint that refuses to exist
+without auth, since it's a remote process-kill: **403** `{"error": "restart
+requires ONAIR_TOKEN to be configured"}` when `ONAIR_TOKEN` isn't set, regardless
+of any token supplied. When a token is configured, normal auth applies (401 on
+wrong/missing token). On success: `202 {"restarting": true}`, and the process
+exits only after the response has been flushed to the client.
+
 ## Light failures are not write failures
 
 A write always succeeds if the body is valid: `intended` is updated and persisted even
@@ -127,6 +156,7 @@ Shape: `{"error": "<human-readable message>"}`.
 |---|---|
 | `400` | Malformed JSON, missing/non-boolean `onAir` |
 | `401` | Token configured and absent/wrong |
+| `403` | `POST /admin/restart` called with no `ONAIR_TOKEN` configured |
 | `404` | Unknown path |
 | `405` | Known path, wrong method |
 

@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { chmodSync, rmSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
 import type { Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { LightDriver } from '../src/driver.js';
@@ -30,7 +34,12 @@ interface Harness {
   close: () => Promise<void>;
 }
 
-async function boot(token?: string, log?: (line: string) => void): Promise<Harness> {
+interface BootExtras {
+  stateFile?: string;
+  exitFn?: () => void;
+}
+
+async function boot(token?: string, log?: (line: string) => void, extras?: BootExtras): Promise<Harness> {
   const driver = new StubDriver();
   const persisted: OnAirState[] = [];
   const deps: ServerDeps = {
@@ -41,6 +50,8 @@ async function boot(token?: string, log?: (line: string) => void): Promise<Harne
     },
     token,
     log,
+    stateFile: extras?.stateFile,
+    exitFn: extras?.exitFn,
   };
   const server: Server = createApiServer(deps);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -390,5 +401,101 @@ test('GET /events sends a snapshot then an event per write', async () => {
   assert.equal(events[1]!.intended, 'on'); // after POST /on
   assert.equal(events[2]!.message, 'HI'); // after PUT /message
   controller.abort();
+  await h.close();
+});
+
+test('GET /admin/health returns health shape with stateFileWritable true for a not-yet-created but writable path', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'onair-admin-'));
+  const stateFile = join(dir, 'state.json');
+  const h = await boot(undefined, undefined, { stateFile });
+  const res = await fetch(`${h.base}/admin/health`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(typeof body.uptime, 'number');
+  assert.equal(body.pid, process.pid);
+  assert.equal(body.nodeVersion, process.version);
+  assert.equal(typeof body.port, 'number');
+  assert.ok(h.base.endsWith(`:${body.port}`));
+  assert.equal(body.stateFileWritable, true);
+  await h.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('GET /admin/health reports stateFileWritable false when the state file directory is not writable', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'onair-admin-ro-'));
+  chmodSync(dir, 0o555);
+  const stateFile = join(dir, 'state.json');
+  const h = await boot(undefined, undefined, { stateFile });
+  try {
+    const res = await fetch(`${h.base}/admin/health`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.stateFileWritable, false);
+  } finally {
+    await h.close();
+    chmodSync(dir, 0o755);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /admin/health is token-gated like /status, including ?token=', async () => {
+  const h = await boot('sekrit');
+  assert.equal((await fetch(`${h.base}/admin/health`)).status, 401);
+  assert.equal(
+    (await fetch(`${h.base}/admin/health`, { headers: { authorization: 'Bearer wrong' } })).status,
+    401,
+  );
+  assert.equal(
+    (await fetch(`${h.base}/admin/health`, { headers: { authorization: 'Bearer sekrit' } })).status,
+    200,
+  );
+  assert.equal((await fetch(`${h.base}/admin/health?token=sekrit`)).status, 200);
+  await h.close();
+});
+
+test('POST /admin/restart returns 403 without a configured token and never calls exitFn', async () => {
+  let calls = 0;
+  const h = await boot(undefined, undefined, { exitFn: () => calls++ });
+  const res = await fetch(`${h.base}/admin/restart`, { method: 'POST' });
+  assert.equal(res.status, 403);
+  assert.deepEqual(await res.json(), { error: 'restart requires ONAIR_TOKEN to be configured' });
+  await sleep(10);
+  assert.equal(calls, 0);
+  await h.close();
+});
+
+test('POST /admin/restart returns 401 with a wrong token when a token is configured, and never calls exitFn', async () => {
+  let calls = 0;
+  const h = await boot('sekrit', undefined, { exitFn: () => calls++ });
+  const res = await fetch(`${h.base}/admin/restart`, { method: 'POST' });
+  assert.equal(res.status, 401);
+  const wrong = await fetch(`${h.base}/admin/restart`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer wrong' },
+  });
+  assert.equal(wrong.status, 401);
+  await sleep(10);
+  assert.equal(calls, 0);
+  await h.close();
+});
+
+test('POST /admin/restart returns 202 with the right token and calls exitFn exactly once after the response is received', async () => {
+  let calls = 0;
+  const h = await boot('sekrit', undefined, { exitFn: () => calls++ });
+  const res = await fetch(`${h.base}/admin/restart`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sekrit' },
+  });
+  assert.equal(res.status, 202);
+  assert.deepEqual(await res.json(), { restarting: true });
+  await sleep(50);
+  assert.equal(calls, 1);
+  await h.close();
+});
+
+test('GET /admin/restart returns 405', async () => {
+  const h = await boot();
+  const res = await fetch(`${h.base}/admin/restart`);
+  assert.equal(res.status, 405);
   await h.close();
 });
