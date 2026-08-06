@@ -17,18 +17,25 @@ exits unexpectedly. It's administered through the `onair` CLI (wraps
 ```sh
 git clone https://github.com/jwnichols3/rocket-on-air-sensor.git
 cd rocket-on-air-sensor
-npm install
-npm run build
-sudo deploy/onair install
+sudo deploy/bootstrap
 ```
+
+`deploy/bootstrap` checks for git and Node.js 22+, runs `npm ci` and `npm run
+build` as the invoking (non-root) user even when called under `sudo`, then
+hands off to `onair install` on macOS.
 
 `onair install`:
 
 - creates `~/.onair/logs`
+- migrates `~/.onair/cli.env` to `~/.onair/config.env` if the old file exists
+  and the new one does not
+- runs `onair setup` first, if `~/.onair/config.env` still does not exist
+  (asks port/token/state file on a TTY; keeps defaults otherwise)
 - resolves `node` from `PATH` and renders `deploy/com.rocket.onair.plist.template`
-  into a plist (absolute paths for node, app dir, user, home, port, state
-  file - daemons get a bare `PATH` and no `HOME`, so nothing can rely on a
-  shell env)
+  into a plist (absolute paths for node, app dir, user, and home only -
+  daemons get a bare `PATH` and no `HOME`, so nothing can rely on a shell
+  env; port, token, and state file are not in the plist - the service reads
+  them from `~/.onair/config.env` itself)
 - lints the rendered plist with `plutil -lint`
 - installs it to `/Library/LaunchDaemons/com.rocket.onair.plist`, owned
   `root:wheel`, mode `0644`
@@ -38,13 +45,14 @@ sudo deploy/onair install
 - `launchctl bootstrap`s the daemon
 - polls `/admin/health` for up to 5s and prints `health: PASS`/`FAIL`
 
-Never hand-edit the installed plist - rerun `sudo deploy/onair install`
-instead.
+Never hand-edit the installed plist - rerun `sudo deploy/bootstrap` (or
+`sudo onair install`, on an already-built checkout) instead.
 
 ### `--sudoers`
 
-`sudo deploy/onair install --sudoers` additionally writes
-`/etc/sudoers.d/onair`, a NOPASSWD entry scoped to the exact `launchctl`
+`sudo deploy/bootstrap --sudoers` (forwarded to `onair install --sudoers`;
+or run `sudo onair install --sudoers` directly on an already-built checkout)
+additionally writes `/etc/sudoers.d/onair`, a NOPASSWD entry scoped to the exact `launchctl`
 subcommands the CLI issues against the `com.rocket.onair` label (bootstrap,
 bootout, kickstart, kickstart -k, print, enable, disable) - nothing broader.
 It's validated with `visudo -cf` before being installed, and install refuses
@@ -61,7 +69,8 @@ standing grant. Remove it with `sudo rm /etc/sudoers.d/onair`.
 
 | Verb | Behavior |
 |---|---|
-| `install [--sudoers]` | Render plist, lint, install, write newsyslog conf, symlink `onair` into `/usr/local/bin`, bootstrap, health-poll. |
+| `install [--sudoers]` | Migrate `cli.env`, run `setup` if `config.env` doesn't exist, render plist, lint, install, write newsyslog conf, symlink `onair` into `/usr/local/bin`, bootstrap, health-poll. |
+| `setup [--non-interactive]` | Interactive Q&A for port/token/state file (or keeps current values, non-interactively); writes `~/.onair/config.env` (`0600`); restarts if the daemon is up. Re-runnable any time. |
 | `uninstall` | Bootout (if loaded), remove plist/newsyslog conf/sudoers file/symlink, health-poll (failure expected/ignored). |
 | `start` | `kickstart` if already loaded, else `bootstrap`. Health-polls. |
 | `stop` | `bootout`. Prints that it returns at next boot (`RunAtLoad`); use `disable` for persistent off. Health-polls (failure expected/ignored). |
@@ -72,40 +81,57 @@ standing grant. Remove it with `sudo rm /etc/sudoers.d/onair`.
 | `reset-state` | If the API responds: `POST /off` + `DELETE /message` over HTTP; else `rm` the state file directly. Then `kickstart -k` and health-poll. |
 | `disable` | `launchctl disable` (persists across reboot). Health-polls (failure expected/ignored). |
 | `enable` | `launchctl enable`, then runs `start`. |
+| `update [--check-only\|--dry-run] [--yes]` | Fetch, fast-forward the checkout, `npm ci`, rebuild, swap in the new `dist`, restart (reload if the node path changed), health-poll; rolls back to the previous build on failed health. `--check-only`/`--dry-run` only lists pending commits. `--yes` skips the confirm prompt (implied when stdin isn't a TTY). Refuses a dirty tree or a checkout with no upstream branch. |
 
 Every mutating verb polls `/admin/health` for up to 5s afterward and prints
 `health: PASS` or `health: FAIL`.
 
-## Reload after env or plist changes
+## Reload after host-layout changes
 
-`kickstart -k` restarts the *process* but does not make launchd re-read the
-plist from disk. If you change `ONAIR_PORT`, `ONAIR_TOKEN`, or anything else
-that only takes effect via the plist (i.e. you re-ran `install`), you must
-`onair reload` (bootout + bootstrap), not `onair restart` - otherwise the
-daemon keeps running with the old environment even though the file on disk
-has already changed.
+Config changes (port, token, state file) never need a reload. The service
+reads `~/.onair/config.env` itself at startup, and `onair setup` restarts it
+for you (a plain restart is enough - the plist itself does not change).
 
-## `~/.onair/cli.env`
+Only host-layout changes need `onair install` + `onair reload`: the node
+path changed (e.g. a new Homebrew install location), or the checkout moved
+to a different directory. `onair update` already handles the node-path case
+itself - it reloads only when the path baked into the plist no longer
+matches `command -v node`, otherwise it restarts.
 
-The `onair` CLI itself needs `ONAIR_PORT`, `ONAIR_TOKEN`, and (if you're not
-using the default path) `ONAIR_STATE_FILE` to talk to the running API and
-manage it (health checks, `reset-state`'s direct-file fallback when the API
-isn't responding, building the sudoers scope, etc). It reads them from the
-environment first, falling back to `~/.onair/cli.env` if present (sourced as
-shell). This is separate from the plist's `EnvironmentVariables` -
-day-to-day, the plist controls what the *daemon* sees, `cli.env` controls
-what the *CLI* uses to reach it - but `onair install` also sources `cli.env`
-to render the plist in the first place, so at install time the same file
-sets both. Keep them consistent, or set `ONAIR_TOKEN` (and `ONAIR_STATE_FILE`,
-if used) in the shell before running `install` so both get it at once.
+`kickstart -k` (what `onair restart` runs) restarts the *process* but does
+not make launchd re-read the plist from disk. `onair reload` does bootout +
+bootstrap, so a re-rendered plist actually takes effect.
 
-Example `~/.onair/cli.env`:
+## `~/.onair/config.env`
+
+The service reads `ONAIR_PORT`, `ONAIR_TOKEN`, and `ONAIR_STATE_FILE` from
+`~/.onair/config.env` itself at startup (`src/config.ts`, Node's
+`process.loadEnvFile`). The `onair` CLI reads the same file, with the same
+precedence, to talk to the running API and manage it (health checks,
+`reset-state`'s direct-file fallback, building the sudoers scope, etc). A
+real environment variable always wins over the file; override the file's
+path with `ONAIR_CONFIG`.
+
+Change values with `onair setup` (asks port/token/state file, shows the
+current value as the default, restarts the daemon if it's running) or by
+hand-editing the file and running `onair restart`. `onair setup` writes the
+file atomically, owned by your user, mode `0600` (it can hold the token).
+
+Format: `KEY="value"` lines, `#` comments allowed. Example
+`~/.onair/config.env`:
 
 ```sh
-ONAIR_PORT=8484
-ONAIR_TOKEN=some-secret-value
-ONAIR_STATE_FILE=/Users/john/.onair/state.json
+ONAIR_PORT="8484"
+ONAIR_TOKEN="some-secret-value"
+ONAIR_STATE_FILE="/Users/john/.onair/state.json"
 ```
+
+### Migration from `cli.env`
+
+Earlier versions used `~/.onair/cli.env` (sourced as shell). `onair install`
+and `onair setup` each copy it to `config.env` (mode `0600`) the first time
+either runs, if `config.env` doesn't exist yet, and print one line saying
+so. `cli.env` is not read after that.
 
 ## Pinned node / nvm caveat
 

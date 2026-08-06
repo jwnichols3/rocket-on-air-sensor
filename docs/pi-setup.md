@@ -13,37 +13,65 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
 
-Then run it directly:
+Clone the repo and bootstrap it:
 
 ```sh
-npx --yes github:jwnichols3/rocket-on-air-sensor
+git clone https://github.com/jwnichols3/rocket-on-air-sensor.git
+cd rocket-on-air-sensor
+sudo deploy/bootstrap
 ```
 
-First run is slow (git clone + `npm install` + `npm run build` via the `prepare`
-script). Needs git and network access at start.
+`deploy/bootstrap`:
 
-### As a systemd service
+- checks that git and Node 22+ are present
+- runs `npm ci` and `npm run build` as the invoking (non-root) user, even
+  under `sudo`
+- renders `deploy/onair.service.template` into `/etc/systemd/system/onair.service`
+  (fills in the node path, this checkout's directory, and your Pi user and
+  home)
+- runs `systemd-analyze verify` on the rendered unit when available
+- installs the unit, runs `daemon-reload`, then `enable --now`
+- polls `/admin/health` for up to 5s and prints `health: PASS`/`FAIL`
+
+The rendered unit runs `node dist/index.js` from this checkout. It does not
+run `npx github:...` at boot: fetching and building at every start needs
+network access before the service is up, and a Pi that boots before the
+network is ready would fail silently.
+
+### Configuration
+
+The service reads `~/.onair/config.env` at startup (`EnvironmentFile=-` in
+the unit; the leading `-` means a missing file is not an error - the service
+starts with defaults). There is no setup wizard on the Pi - `onair setup`
+needs `launchctl`, which is Mac only. Create or edit the file directly, then
+restart:
 
 ```sh
-sudo cp deploy/onair.service /etc/systemd/system/onair.service
-sudo nano /etc/systemd/system/onair.service   # set User=, uncomment ONAIR_TOKEN if wanted
-sudo systemctl daemon-reload
-sudo systemctl enable --now onair
+mkdir -p ~/.onair
+nano ~/.onair/config.env
 ```
 
-**Updating**: `npx github:...` re-resolves the default branch on every run, so a
-restart picks up the latest code:
+```sh
+ONAIR_PORT="8484"
+ONAIR_TOKEN="some-secret-value"
+ONAIR_STATE_FILE="/home/pi/.onair/state.json"
+```
 
 ```sh
 sudo systemctl restart onair
 ```
 
-For reproducibility (pin instead of always tracking `main`), reference a tag or
-commit in both the manual command and `ExecStart`:
+A real environment variable set on the service always wins over the file
+(`src/config.ts`).
 
+### Updating
+
+```sh
+git pull && sudo deploy/bootstrap
 ```
-github:jwnichols3/rocket-on-air-sensor#v0.1.0
-```
+
+`deploy/bootstrap` rebuilds the checkout and, if the service is already
+active, restarts it to pick up the new build. Re-running it is always safe.
 
 ## 2. Kiosk display Pi (interim tally, issue #8)
 
@@ -76,19 +104,14 @@ sudo raspi-config
 
 ## 3. Caveats
 
-- `npx github:...` needs git and network access at the time it runs - it's not a
-  pre-built artifact.
-- First boot/first run is slow: it's cloning and building from source.
-- This is a cold-machine convenience for a home project, not a
-  supply-chain-hardened installer. If provenance matters, pin a commit or tag
-  (`#v0.1.0` or `#<sha>`) rather than tracking the default branch.
-- npm configs with `ignore-scripts` (or strict allow-scripts policies) silently
-  skip the `prepare` build on git installs. If you see "Cannot find module
-  .../dist/index.js" (not an install-time error), check `npm config get
-  ignore-scripts` and ensure it's false.
+- `deploy/bootstrap` needs git and network access to clone and to `npm ci` -
+  but only when you install or update, not at every service start.
+- The service checkout is a plain git clone, not a supply-chain-hardened
+  installer. If provenance matters, check out a tag or commit instead of
+  tracking the default branch before running `deploy/bootstrap`.
 - **Kiosk binary name**: current Raspberry Pi OS ships `chromium`; older images
   use `chromium-browser`. Check which exists with `which chromium chromium-browser`
   and update the autostart command accordingly.
 - **Screen blanking on Wayland**: raspi-config's Screen Blanking option
   historically targets X11. Under Wayland (labwc/wayfire), behavior varies by
-  release—verify the blanking state on your device after enabling/disabling.
+  release - verify the blanking state on your device after enabling/disabling.

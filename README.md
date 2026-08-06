@@ -19,7 +19,7 @@ It turns the on-air light off when the call ends.
 - The **on-air light** is the `/display` browser page (D-12). Light hardware is on
   hold.
 
-`CONTEXT.md` holds the glossary, the invariants, and all decisions (D-1..D-13).
+`CONTEXT.md` holds the glossary, the invariants, and all decisions (D-1..D-14).
 
 ## Parts
 
@@ -31,8 +31,9 @@ It turns the on-air light off when the call ends.
 | `GET /display` | The on-air light: a fullscreen tally page |
 | `GET /ui` | Control panel and API console |
 | `GET /admin/health`, `POST /admin/restart` | Service health and remote restart |
-| `deploy/onair` | CLI that installs and controls the Mac service |
-| `deploy/onair.service` | systemd unit for the Raspberry Pi |
+| `deploy/onair` | CLI that installs, configures (`setup`), updates, and controls the Mac service |
+| `deploy/bootstrap` | Builds and installs the host on either machine: `deploy/onair install` on the Mac, a rendered systemd unit on the Pi |
+| `deploy/onair.service.template` | systemd unit template for the Raspberry Pi, rendered by `deploy/bootstrap` |
 
 The full On-air API contract is in `docs/api-contract.md`.
 
@@ -49,7 +50,8 @@ Then open `http://localhost:8484/ui`.
 
 Configuration comes from environment variables: `ONAIR_PORT` (default 8484),
 `ONAIR_STATE_FILE` (default `~/.onair/state.json`), and `ONAIR_TOKEN` (optional
-bearer auth).
+bearer auth). It also reads `~/.onair/config.env` if present; a real environment
+variable always wins over the file (`src/config.ts`).
 
 ## Install
 

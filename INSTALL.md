@@ -22,21 +22,34 @@ Each layer builds on the one before it. Install the host first.
 Pick one host. The host runs the On-air API. The On-air API is the source of truth
 for the call state.
 
+Both options use the same two commands:
+
+```sh
+git clone https://github.com/jwnichols3/rocket-on-air-sensor.git
+cd rocket-on-air-sensor
+sudo deploy/bootstrap
+```
+
+`deploy/bootstrap` checks for git and Node.js 22+, builds the project, then
+installs and starts the host as a supervised service: a **LaunchDaemon** on the
+Mac, a **systemd** unit on the Pi.
+
 ### Option A: Mac (launchd service)
 
 Use this option for the Mac Mini. The service starts at boot, needs no GUI login,
 and restarts after a crash.
 
-```sh
-git clone https://github.com/jwnichols3/rocket-on-air-sensor.git
-cd rocket-on-air-sensor
-npm install && npm run build
-sudo deploy/onair install
-```
+On a fresh install, `sudo deploy/bootstrap` runs a setup wizard before the service
+starts. It asks three questions and shows the current or default value for each,
+so pressing Enter keeps that value:
 
-The installer renders the launchd plist, installs it, starts the service, and runs
-a health check. It prints PASS when the service responds. It also links itself to
-`/usr/local/bin/onair`, so the `onair` command works from any directory afterward.
+- Port (default `8484`).
+- Token: keep, generate, enter, or none (default: none).
+- State file path (default `~/.onair/state.json`).
+
+`deploy/bootstrap` prints `health: PASS` when the service responds. It also links
+itself to `/usr/local/bin/onair`, so the `onair` command works from any directory
+afterward.
 
 Control the service with the `onair` CLI:
 
@@ -47,22 +60,16 @@ onair logs -f     # follow the log
 onair reset-state # force the call state to off and clear the message
 ```
 
-`docs/mac-setup.md` has the full verb table, the `--sudoers` option, and the
-caveats (node path, how to reload the plist, log rotation).
+`docs/mac-setup.md` has the full verb table and the `--sudoers` option.
 
 ### Option B: Raspberry Pi (systemd service)
 
-```sh
-git clone https://github.com/jwnichols3/rocket-on-air-sensor.git
-cd rocket-on-air-sensor
-sudo cp deploy/onair.service /etc/systemd/system/
-sudo nano /etc/systemd/system/onair.service   # set User= to your Pi user
-sudo systemctl daemon-reload
-sudo systemctl enable --now onair
-```
+Run the same two commands shown above. `deploy/bootstrap` renders a systemd unit
+from `deploy/onair.service.template`, installs it, and starts it. There is no
+setup wizard on the Pi; see "Configure the host" below to set a port, token, or
+state file path other than the defaults.
 
-The unit runs `npx --yes github:jwnichols3/rocket-on-air-sensor`. It needs network
-access at start. `docs/pi-setup.md` has the full setup.
+`docs/pi-setup.md` has the full setup, plus the kiosk display option.
 
 ### Verify the host
 
@@ -75,7 +82,10 @@ Both commands must return JSON. `stateFileWritable` must be `true`.
 
 ### Configure the host
 
-Set environment variables in the service definition:
+The host reads its configuration from `~/.onair/config.env`. A real environment
+variable always wins over the file. The service loads this file itself at
+startup, so the plist (Mac) and the systemd unit (Pi) never change when you
+change configuration.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -83,12 +93,22 @@ Set environment variables in the service definition:
 | `ONAIR_STATE_FILE` | `~/.onair/state.json` | Where the call state persists |
 | `ONAIR_TOKEN` | unset | Bearer token; also enables `POST /admin/restart` |
 
-On the Mac, put the variables in `~/.onair/cli.env` (or export them in your shell).
-Then run `sudo deploy/onair install` again to render a new plist. Then run
-`onair reload`. A plain `onair restart` does not read plist changes.
+On the Mac, run `onair setup` to change values. It asks the same three questions
+as the install wizard, shows the current value as the default, and restarts the
+service if it is running. Re-run it any time. You can also edit
+`~/.onair/config.env` directly, then run `onair restart`.
 
-On the Pi, edit the unit file. Then run `sudo systemctl daemon-reload`. Then run
+On the Pi, there is no CLI. Edit `~/.onair/config.env` directly, then run
 `sudo systemctl restart onair`.
+
+### Update the host
+
+On the Mac, run `onair update`. It fetches, rebuilds, and restarts only after a
+health check passes; it rolls back automatically if the check fails. Run
+`onair update --check-only` first to list pending commits without applying them.
+
+On the Pi, run `git pull && sudo deploy/bootstrap`. It rebuilds and restarts the
+service if it is already active.
 
 ## Layer 2: Client
 
