@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 
 export interface WsBridge {
-  handleUpgrade(req: IncomingMessage, socket: Duplex, snapshot: () => unknown): void;
+  handleUpgrade(req: IncomingMessage, socket: Duplex, snapshot: () => unknown, head?: Buffer): void;
   broadcast(data: unknown): void;
   closeAll(): void;
   count(): number;
@@ -55,6 +55,12 @@ export function createWsBridge(heartbeatMs = 15_000): WsBridge {
   // ignoring everything else; returns the unconsumed remainder. Throws on malformed or
   // oversized frames - callers must catch and destroy the socket, never let this escape
   // the 'data' handler.
+  //
+  // Deliberately does not enforce the RFC 6455 MUST on client frames being masked: if the
+  // mask bit is unset we just use the payload as-is instead of failing the connection. This
+  // endpoint is server-push-only (we never act on inbound application data, only ping/close),
+  // so accepting a technically-invalid unmasked frame is harmless and one less way for an
+  // otherwise-fine client to get disconnected.
   function consumeFrames(socket: Duplex, buf: Buffer): Buffer {
     let remaining: Buffer = buf;
     for (;;) {
@@ -116,13 +122,17 @@ export function createWsBridge(heartbeatMs = 15_000): WsBridge {
   }
 
   return {
-    handleUpgrade(req, socket, snapshot) {
+    handleUpgrade(req, socket, snapshot, head) {
+      // Attached first, before any write - a socket-level error during the handshake
+      // itself (e.g. the peer resetting the connection) must not crash the process for
+      // want of an 'error' listener.
+      socket.on('error', () => detach(socket));
+
       const upgradeHeader = req.headers.upgrade;
       const key = req.headers['sec-websocket-key'];
       const isWebSocketUpgrade = typeof upgradeHeader === 'string' && upgradeHeader.toLowerCase() === 'websocket';
       if (!isWebSocketUpgrade || typeof key !== 'string' || key.trim() === '') {
-        socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
-        socket.destroy();
+        socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
         return;
       }
 
@@ -160,7 +170,20 @@ export function createWsBridge(heartbeatMs = 15_000): WsBridge {
         }
       });
       socket.on('close', () => detach(socket));
-      socket.on('error', () => detach(socket));
+
+      // Bytes the client pipelined immediately after the handshake request (before we'd
+      // even attached the 'data' listener above) arrive via Node's upgrade 'head' buffer
+      // instead of a 'data' event - e.g. a ping sent in the same write as the handshake.
+      // Seed the parser with them now so nothing is silently dropped.
+      if (head && head.length > 0) {
+        buf = Buffer.concat([buf, head]);
+        try {
+          buf = consumeFrames(socket, buf);
+        } catch {
+          detach(socket);
+          socket.destroy();
+        }
+      }
     },
     broadcast(data) {
       for (const socket of [...clients]) {
@@ -174,11 +197,10 @@ export function createWsBridge(heartbeatMs = 15_000): WsBridge {
     closeAll() {
       for (const socket of [...clients]) {
         try {
-          socket.write(encodeFrame(OPCODE_CLOSE, Buffer.alloc(0)));
+          socket.end(encodeFrame(OPCODE_CLOSE, Buffer.alloc(0)));
         } catch {
           // best effort
         }
-        socket.destroy();
         detach(socket);
       }
     },

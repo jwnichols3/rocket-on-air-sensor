@@ -4,6 +4,7 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { createApp, type App } from '../src/app.js';
 import type { LightDriver } from '../src/driver.js';
 import type { Confirmed } from '../src/state.js';
@@ -59,7 +60,7 @@ function encodeClientFrame(opcode: number, payload: Buffer): Buffer {
   return Buffer.concat([header, maskKey, masked]);
 }
 
-async function connectWs(port: number, path = '/events/ws'): Promise<WsTestClient> {
+async function connectWs(port: number, path = '/events/ws', pipelinedBytes?: Buffer): Promise<WsTestClient> {
   const socket = net.connect(port, '127.0.0.1');
   await new Promise<void>((resolve, reject) => {
     socket.once('connect', resolve);
@@ -74,7 +75,12 @@ async function connectWs(port: number, path = '/events/ws'): Promise<WsTestClien
     `Sec-WebSocket-Key: ${FIXED_KEY}\r\n` +
     `Sec-WebSocket-Version: 13\r\n` +
     `\r\n`;
-  socket.write(req);
+  // Concatenated into one write (rather than two) so that, over loopback, any bytes the
+  // caller wants pipelined right after the handshake land in the same TCP segment as the
+  // request - that's what exercises Node's upgrade 'head' buffer instead of a follow-up
+  // 'data' event.
+  const reqBuf = Buffer.from(req, 'utf8');
+  socket.write(pipelinedBytes && pipelinedBytes.length > 0 ? Buffer.concat([reqBuf, pipelinedBytes]) : reqBuf);
 
   let buf = Buffer.alloc(0);
   const headerEnd = await new Promise<number>((resolve) => {
@@ -276,6 +282,106 @@ test('SSE parity: PUT /message shows up on the WS stream too', async () => {
   });
   const frame = await framePromise;
   assert.equal(frame.message, 'HI');
+
+  client.close();
+  await app.close();
+});
+
+test('a ping split across two writes still parses; two frames in one write are both handled', async () => {
+  const app = await bootApp();
+  const client = await connectWs(app.port);
+  await client.nextJson(); // snapshot
+
+  // Split write: the frame header/mask/payload for a masked ping "hi" arrives in two
+  // pieces with a gap - the parser must hold the partial frame in its buffer rather than
+  // choke on it.
+  const pingFrame = encodeClientFrame(0x9, Buffer.from('hi', 'utf8'));
+  client.socket.write(pingFrame.subarray(0, 3));
+  await sleep(20);
+  client.socket.write(pingFrame.subarray(3));
+  const pong1 = await client.nextFrame();
+  assert.equal(pong1.opcode, 0x0a);
+  assert.equal(pong1.payload.toString('utf8'), 'hi');
+
+  // Two complete frames concatenated into a single write - the parser must consume both
+  // in one pass, not just the first.
+  const frameA = encodeClientFrame(0x9, Buffer.from('a', 'utf8'));
+  const frameB = encodeClientFrame(0x9, Buffer.from('b', 'utf8'));
+  client.socket.write(Buffer.concat([frameA, frameB]));
+  const pongA = await client.nextFrame();
+  const pongB = await client.nextFrame();
+  assert.equal(pongA.payload.toString('utf8'), 'a');
+  assert.equal(pongB.payload.toString('utf8'), 'b');
+
+  client.close();
+  await app.close();
+});
+
+test('inbound frame declaring an oversized (>64KB) payload destroys the connection', async () => {
+  const app = await bootApp();
+  const client = await connectWs(app.port);
+  await client.nextJson(); // snapshot
+
+  const closePromise = new Promise<void>((resolve) => client.socket.once('close', resolve));
+  client.socket.on('error', () => {}); // the abrupt destroy may surface as a reset here
+
+  // A masked binary frame (opcode 0x2) declaring a 128-bit-encoded length of 200,000
+  // bytes - well over the 64KB cap. The server must reject this from the length header
+  // alone, without waiting for (or requiring) the declared payload to actually arrive.
+  const header = Buffer.alloc(2 + 8);
+  header[0] = 0x80 | 0x2;
+  header[1] = 0x80 | 127;
+  header.writeBigUInt64BE(BigInt(200_000), 2);
+  client.socket.write(header);
+
+  await closePromise;
+  await app.close();
+});
+
+test('upgrade request missing Sec-WebSocket-Key gets 400 and the socket ends', async () => {
+  const app = await bootApp();
+  const socket = net.connect(app.port, '127.0.0.1');
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('error', reject);
+  });
+  socket.on('error', () => {});
+
+  const req =
+    `GET /events/ws HTTP/1.1\r\n` +
+    `Host: 127.0.0.1:${app.port}\r\n` +
+    `Upgrade: websocket\r\n` +
+    `Connection: Upgrade\r\n` +
+    `Sec-WebSocket-Version: 13\r\n` +
+    `\r\n`; // no Sec-WebSocket-Key
+  socket.write(req);
+
+  const closePromise = new Promise<void>((resolve) => socket.once('close', resolve));
+  const status = await new Promise<number>((resolve) => {
+    let buf = Buffer.alloc(0);
+    socket.on('data', (chunk: Buffer) => {
+      buf = Buffer.concat([buf, chunk]);
+      const idx = buf.indexOf('\r\n\r\n');
+      if (idx !== -1) resolve(Number(buf.subarray(0, idx).toString('utf8').split('\r\n')[0]!.split(' ')[1]));
+    });
+  });
+  assert.equal(status, 400);
+  await closePromise;
+
+  await app.close();
+});
+
+test('a ping pipelined in the same write as the handshake still gets a pong (head bytes)', async () => {
+  const app = await bootApp();
+  const pingFrame = encodeClientFrame(0x9, Buffer.from('pipe', 'utf8'));
+  const client = await connectWs(app.port, '/events/ws', pingFrame);
+
+  const snapshot = await client.nextFrame();
+  assert.equal(snapshot.opcode, 0x1);
+
+  const pong = await client.nextFrame();
+  assert.equal(pong.opcode, 0x0a);
+  assert.equal(pong.payload.toString('utf8'), 'pipe');
 
   client.close();
   await app.close();

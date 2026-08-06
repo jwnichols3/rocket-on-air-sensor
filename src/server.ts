@@ -59,11 +59,15 @@ export function createApiServer(deps: ServerDeps): Server {
     });
   });
 
-  server.on('upgrade', (req: IncomingMessage, socket: Duplex) => {
+  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    // Standard hardening: attached before anything else can fail, so a socket-level
+    // error while we're still deciding 404/401/handoff doesn't crash the process. Once
+    // handleUpgrade takes over below it attaches its own (real) error handler.
+    socket.on('error', () => {});
+
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname !== '/events/ws') {
-      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-      socket.destroy();
+      socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
       return;
     }
 
@@ -73,13 +77,12 @@ export function createApiServer(deps: ServerDeps): Server {
       const queryToken = url.searchParams.get('token');
       const queryOk = queryToken !== null && timingSafeStringEqual(queryToken, deps.token);
       if (!headerOk && !queryOk) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
+        socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n');
         return;
       }
     }
 
-    ws.handleUpgrade(req, socket, () => statusBody(deps));
+    ws.handleUpgrade(req, socket, () => statusBody(deps), head);
   });
 
   return server;
