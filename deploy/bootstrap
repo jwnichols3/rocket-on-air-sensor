@@ -66,7 +66,10 @@ run_as_invoking_user() {
 
 build() {
   local reporoot="$1"
-  ( cd "$reporoot" && run_as_invoking_user npm ci )
+  # --ignore-scripts skips the lockfile's "prepare" hook (which itself runs
+  # "npm run build") so the explicit build below is the only build that
+  # runs, instead of running twice back to back.
+  ( cd "$reporoot" && run_as_invoking_user npm ci --ignore-scripts )
   ( cd "$reporoot" && run_as_invoking_user npm run build )
 }
 
@@ -145,13 +148,45 @@ read_port() {
   printf '8484'
 }
 
-# health_poll PORT - GET /admin/health, up to 5s, print PASS/FAIL (same
-# curl-based poll deploy/onair uses).
+# read_token - same precedence/parsing as read_port: ONAIR_TOKEN env wins,
+# else the last "^ONAIR_TOKEN=" line from $ONAIR_CONFIG or
+# $TARGET_HOME/.onair/config.env with one pair of surrounding quotes
+# stripped (mirrors deploy/onair's read_config); else empty.
+read_token() {
+  if [[ -n "${ONAIR_TOKEN:-}" ]]; then
+    printf '%s' "$ONAIR_TOKEN"
+    return 0
+  fi
+  local config_file="${ONAIR_CONFIG:-$TARGET_HOME/.onair/config.env}"
+  local line value
+  if [[ -f "$config_file" ]]; then
+    line="$(grep '^ONAIR_TOKEN=' "$config_file" 2>/dev/null | tail -n 1)"
+    if [[ -n "$line" ]]; then
+      value="$(printf '%s\n' "$line" | cut -d'=' -f2-)"
+      case "$value" in
+        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+      esac
+      printf '%s' "$value"
+      return 0
+    fi
+  fi
+  printf ''
+}
+
+# health_poll PORT TOKEN - GET /admin/health, up to 5s, print PASS/FAIL
+# (same curl-based poll deploy/onair uses). TOKEN is appended as
+# ?token=... when non-empty, since the route 401s when ONAIR_TOKEN is
+# configured (mirrors deploy/onair's health_url).
 health_poll() {
-  local port="$1"
+  local port="$1" token="$2"
+  local url="http://localhost:$port/admin/health"
+  if [[ -n "$token" ]]; then
+    url="${url}?token=${token}"
+  fi
   local deadline=$((SECONDS + 5))
   while (( SECONDS < deadline )); do
-    if curl -fsS -m 2 "http://localhost:$port/admin/health" >/dev/null 2>&1; then
+    if curl -fsS -m 2 "$url" >/dev/null 2>&1; then
       echo "health: PASS"
       return 0
     fi
@@ -191,13 +226,30 @@ dispatch_linux() {
     fi
   fi
 
+  # Capture whether the unit was already running BEFORE we touch it, so a
+  # re-run of bootstrap can tell "fresh install" from "re-install over a
+  # live process" below.
+  local was_active=false
+  if systemctl is-active --quiet onair 2>/dev/null; then
+    was_active=true
+  fi
+
   install -m 0644 "$tmp_unit" /etc/systemd/system/onair.service
   rm -f "$tmp_unit"
 
   systemctl daemon-reload
   systemctl enable --now onair
 
-  health_poll "$(read_port)"
+  # "enable --now" only starts the unit if it wasn't already running; on a
+  # re-run over a live process it's a no-op, which would leave the OLD
+  # build's process serving requests. Force a restart so the freshly built
+  # code is always what's running after bootstrap completes.
+  if [[ "$was_active" == "true" ]]; then
+    systemctl restart onair
+    echo "bootstrap: onair was already running - restarted to pick up the new build"
+  fi
+
+  health_poll "$(read_port)" "$(read_token)"
 }
 
 dispatch() {
