@@ -26,7 +26,10 @@ The one-line install clones the repo (or reuses an existing checkout) and hands 
 to `deploy/bootstrap`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+# private repo (current): needs the gh CLI, logged in
+gh api repos/jwnichols3/rocket-on-air-sensor/contents/deploy/get-onair -H "Accept: application/vnd.github.raw" | bash
+# if the repo becomes public, this shorter form works instead:
+# curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
 ```
 
 It checks for git and Node.js 22+ first, with an install hint if either is missing.

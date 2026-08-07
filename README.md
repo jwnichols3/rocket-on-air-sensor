@@ -57,7 +57,10 @@ variable always wins over the file (`src/config.ts`).
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+# private repo (current): needs the gh CLI, logged in
+gh api repos/jwnichols3/rocket-on-air-sensor/contents/deploy/get-onair -H "Accept: application/vnd.github.raw" | bash
+# if the repo becomes public, this shorter form works instead:
+# curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
 ```
 
 `INSTALL.md` has the instructions for each layer:
