@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# deploy/get-onair - one-line install shim, served raw and run standalone:
+#   curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+#
+# This script is the entire install surface until the clone step below
+# succeeds - it must not read any other file from this repo before that.
+# It checks prerequisites, clones (or reuses) the checkout, then hands off
+# to deploy/bootstrap inside it. Bootstrap does the rest (build, install,
+# escalate for the privileged steps) - this script never calls sudo itself.
+set -euo pipefail
+
+REPO_URL="https://github.com/jwnichols3/rocket-on-air-sensor.git"
+DEST="${ONAIR_DIR:-$HOME/code/rocket-on-air-sensor}"
+
+# install_hint - one-line, platform-specific instructions for getting
+# Node.js 22+ on PATH. Printed on prereq failure only.
+install_hint() {
+  case "$(uname -s)" in
+    Darwin)
+      echo "get-onair: install it with: brew install node" >&2
+      ;;
+    Linux)
+      echo "get-onair: install it with: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs" >&2
+      ;;
+    *)
+      echo "get-onair: install Node.js 22+ for your platform: https://nodejs.org/" >&2
+      ;;
+  esac
+}
+
+check_prereqs() {
+  if ! command -v git >/dev/null 2>&1; then
+    echo "get-onair: git not found in PATH - install git and re-run" >&2
+    exit 1
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    echo "get-onair: node not found in PATH - Node.js 22+ is required" >&2
+    install_hint
+    exit 1
+  fi
+  local ver major
+  ver="$(node --version)"   # e.g. v22.4.0
+  major="${ver#v}"
+  major="${major%%.*}"
+  if ! [[ "$major" =~ ^[0-9]+$ ]] || (( major < 22 )); then
+    echo "get-onair: node $ver found, but Node 22+ is required" >&2
+    install_hint
+    exit 1
+  fi
+}
+
+# origin_matches URL - true when URL points at this repo, accepting the
+# https-with/without-.git and ssh forms (strip a trailing .git from both
+# sides, then compare against the two bare forms).
+origin_matches() {
+  local bare="${1%.git}"
+  case "$bare" in
+    https://github.com/jwnichols3/rocket-on-air-sensor|\
+    git@github.com:jwnichols3/rocket-on-air-sensor)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# setup_dest - DEST already a checkout of this repo: reuse it (no pull -
+# updates are `onair update`'s job, not this script's). DEST exists as
+# something else: loud error, name the dir and the ONAIR_DIR override.
+# DEST absent: clone it, creating parent dirs first.
+setup_dest() {
+  if [[ -e "$DEST" ]]; then
+    local origin
+    if origin="$(git -C "$DEST" remote get-url origin 2>/dev/null)" && origin_matches "$origin"; then
+      echo "get-onair: reusing existing checkout at $DEST"
+      return 0
+    fi
+    echo "get-onair: $DEST already exists and is not a checkout of $REPO_URL - remove it, or set ONAIR_DIR to install somewhere else" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$DEST")"
+  git clone "$REPO_URL" "$DEST"
+}
+
+# handoff ARGS... - execs deploy/bootstrap inside DEST, forwarding every
+# argument. When this script's own stdin isn't a terminal (the curl | bash
+# case) but /dev/tty can be opened, reattach stdin to it for the handoff so
+# the setup wizard's questions still reach a real terminal. When /dev/tty
+# can't be opened either (true headless - cron, CI), hand off with no
+# terminal at all; the wizard notices and writes its defaults.
+handoff() {
+  if [[ -t 0 ]]; then
+    exec "$DEST/deploy/bootstrap" "$@"
+  fi
+  # Probe /dev/tty in a subshell first: a failed open prints bash's own
+  # error message before a same-line '2>/dev/null' on the real redirect
+  # would take effect (redirections apply left to right), so the probe has
+  # to be isolated instead of suppressed inline.
+  if ( exec 3< /dev/tty ) 2>/dev/null; then
+    exec "$DEST/deploy/bootstrap" "$@" < /dev/tty
+  fi
+  echo "get-onair: no terminal available for the setup wizard - it will write defaults" >&2
+  exec "$DEST/deploy/bootstrap" "$@"
+}
+
+main() {
+  check_prereqs
+  setup_dest
+  handoff "$@"
+}
+
+main "$@"

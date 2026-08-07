@@ -33,6 +33,7 @@ It turns the on-air light off when the call ends.
 | `GET /admin/health`, `POST /admin/restart` | Service health and remote restart |
 | `deploy/onair` | CLI that installs, configures (`setup`), updates, and controls the Mac service |
 | `deploy/bootstrap` | Builds and installs the host on either machine: `deploy/onair install` on the Mac, a rendered systemd unit on the Pi |
+| `deploy/get-onair` | Self-contained one-line install shim: clones (or reuses) the repo, then hands off to `deploy/bootstrap` |
 | `deploy/onair.service.template` | systemd unit template for the Raspberry Pi, rendered by `deploy/bootstrap` |
 
 The full On-air API contract is in `docs/api-contract.md`.
@@ -54,6 +55,10 @@ bearer auth). It also reads `~/.onair/config.env` if present; a real environment
 variable always wins over the file (`src/config.ts`).
 
 ## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+```
 
 `INSTALL.md` has the instructions for each layer:
 

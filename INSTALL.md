@@ -22,26 +22,39 @@ Each layer builds on the one before it. Install the host first.
 Pick one host. The host runs the On-air API. The On-air API is the source of truth
 for the call state.
 
-Both options use the same two commands:
+The one-line install clones the repo (or reuses an existing checkout) and hands off
+to `deploy/bootstrap`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+```
+
+It checks for git and Node.js 22+ first, with an install hint if either is missing.
+The checkout lands in `~/code/rocket-on-air-sensor`; set `ONAIR_DIR` to use a
+different path.
+
+Already have a checkout, or want to read `deploy/bootstrap` before running it? Use
+the two-step form instead - both do the same thing:
 
 ```sh
 git clone https://github.com/jwnichols3/rocket-on-air-sensor.git
 cd rocket-on-air-sensor
-sudo deploy/bootstrap
+deploy/bootstrap
 ```
 
 `deploy/bootstrap` checks for git and Node.js 22+, builds the project, then
 installs and starts the host as a supervised service: a **LaunchDaemon** on the
-Mac, a **systemd** unit on the Pi.
+Mac, a **systemd** unit on the Pi. Run it plain, without a `sudo` prefix - it asks
+for your password itself when it needs to install the service.
 
 ### Option A: Mac (launchd service)
 
 Use this option for the Mac Mini. The service starts at boot, needs no GUI login,
 and restarts after a crash.
 
-On a fresh install, `sudo deploy/bootstrap` runs a setup wizard before the service
+On a fresh install, `deploy/bootstrap` runs a setup wizard before the service
 starts. The wizard needs a terminal: in a non-interactive shell (for example a
-plain `ssh host 'sudo deploy/bootstrap'`), it writes the defaults without
+plain `ssh host 'deploy/bootstrap'`), it writes the defaults without
 questions. It asks three questions and shows the current or default value for
 each, so pressing Enter keeps that value:
 
@@ -109,7 +122,7 @@ On the Mac, run `onair update`. It fetches, rebuilds, restarts, and then runs a
 health check; it rolls back to the previous build if the check fails. Run
 `onair update --check-only` first to list pending commits without applying them.
 
-On the Pi, run `git pull && sudo deploy/bootstrap`. It rebuilds and restarts the
+On the Pi, run `git pull && deploy/bootstrap`. It rebuilds and restarts the
 service if it is already active.
 
 ## Layer 2: Client

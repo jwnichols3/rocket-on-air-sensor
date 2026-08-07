@@ -14,15 +14,27 @@ exits unexpectedly. It's administered through the `onair` CLI (wraps
 
 ## Install
 
+One-liner install, from anywhere:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+```
+
+It checks for git and Node.js 22+, clones (or reuses) a checkout at
+`~/code/rocket-on-air-sensor` (override with `ONAIR_DIR`), and hands off to
+`deploy/bootstrap`. `INSTALL.md` has the two-step alternative for an existing
+checkout.
+
 ```sh
 git clone https://github.com/jwnichols3/rocket-on-air-sensor.git
 cd rocket-on-air-sensor
-sudo deploy/bootstrap
+deploy/bootstrap
 ```
 
 `deploy/bootstrap` checks for git and Node.js 22+, runs `npm ci` and `npm run
 build` as the invoking (non-root) user even when called under `sudo`, then
-hands off to `onair install` on macOS.
+hands off to `onair install` on macOS. Run it plain, without `sudo` - it asks
+for your password itself when it installs the service.
 
 `onair install`:
 
@@ -45,12 +57,12 @@ hands off to `onair install` on macOS.
 - `launchctl bootstrap`s the daemon
 - polls `/admin/health` for up to 5s and prints `health: PASS`/`FAIL`
 
-Never hand-edit the installed plist - rerun `sudo deploy/bootstrap` (or
+Never hand-edit the installed plist - rerun `deploy/bootstrap` (or
 `sudo onair install`, on an already-built checkout) instead.
 
 ### `--sudoers`
 
-`sudo deploy/bootstrap --sudoers` (forwarded to `onair install --sudoers`;
+`deploy/bootstrap --sudoers` (forwarded to `onair install --sudoers`;
 or run `sudo onair install --sudoers` directly on an already-built checkout)
 additionally writes `/etc/sudoers.d/onair`, a NOPASSWD entry scoped to the exact `launchctl`
 subcommands the CLI issues against the `com.rocket.onair` label (bootstrap,

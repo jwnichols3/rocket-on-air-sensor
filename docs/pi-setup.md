@@ -13,13 +13,27 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
 
-Clone the repo and bootstrap it:
+One-liner install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+```
+
+It checks for git and Node.js 22+, clones (or reuses) a checkout at
+`~/code/rocket-on-air-sensor` (override with `ONAIR_DIR`), and hands off to
+`deploy/bootstrap`.
+
+Already have a checkout, or want to read `deploy/bootstrap` before running it?
+Clone and bootstrap it directly instead - both do the same thing:
 
 ```sh
 git clone https://github.com/jwnichols3/rocket-on-air-sensor.git
 cd rocket-on-air-sensor
-sudo deploy/bootstrap
+deploy/bootstrap
 ```
+
+Run `deploy/bootstrap` plain, without a `sudo` prefix - it asks for your
+password itself when it needs to install the service.
 
 `deploy/bootstrap`:
 
@@ -67,7 +81,7 @@ A real environment variable set on the service always wins over the file
 ### Updating
 
 ```sh
-git pull && sudo deploy/bootstrap
+git pull && deploy/bootstrap
 ```
 
 `deploy/bootstrap` rebuilds the checkout and, if the service is already
