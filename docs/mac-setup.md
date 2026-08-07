@@ -58,12 +58,12 @@ for your password itself when it installs the service.
 - polls `/admin/health` for up to 5s and prints `health: PASS`/`FAIL`
 
 Never hand-edit the installed plist - rerun `deploy/bootstrap` (or
-`sudo onair install`, on an already-built checkout) instead.
+`onair install`, on an already-built checkout; it escalates itself) instead.
 
 ### `--sudoers`
 
 `deploy/bootstrap --sudoers` (forwarded to `onair install --sudoers`;
-or run `sudo onair install --sudoers` directly on an already-built checkout)
+or run `onair install --sudoers` directly on an already-built checkout)
 additionally writes `/etc/sudoers.d/onair`, a NOPASSWD entry scoped to the exact `launchctl`
 subcommands the CLI issues against the `com.rocket.onair` label (bootstrap,
 bootout, kickstart, kickstart -k, print, enable, disable) - nothing broader.
@@ -221,8 +221,8 @@ unaffected and stays clickable.
   regardless, so it won't fail closed on its own.
 - **`Bootstrap failed: 5` (or similar `launchctl` errno)** - almost always a
   permissions/ownership problem: the plist isn't `root:wheel 0644`, or you're
-  not running the command as root/via sudo. Re-run `sudo deploy/onair
-  install` rather than hand-fixing permissions.
+  not running the command as root/via sudo. Re-run `onair install` (it
+  escalates itself) rather than hand-fixing permissions.
 - **Plist edited (or reinstalled) but behavior unchanged** - this is the
   `kickstart -k` vs plist re-read issue above. Run `onair reload`, not
   `onair restart`.

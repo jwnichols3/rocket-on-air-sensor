@@ -284,6 +284,9 @@ dispatch() {
   os="$(uname -s)"
   case "$os" in
     Darwin)
+      if [ "$(id -u)" -ne 0 ]; then
+        echo "bootstrap: installing the service - you may be prompted for your password"
+      fi
       exec "$reporoot/deploy/onair" install "$@"
       ;;
     Linux)
