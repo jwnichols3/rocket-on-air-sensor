@@ -2,9 +2,11 @@
 # deploy/bootstrap - one-command install from a repo checkout: verify
 # prerequisites, build, then dispatch to the platform-specific installer
 # (macOS: deploy/onair install; Linux+systemd: render/install a systemd
-# unit). Run as root (sudo) on Linux - it writes /etc/systemd/system and
-# enables the service; on macOS deploy/onair itself asks for sudo where it
-# needs it.
+# unit). Run it plain (no sudo prefix) - on Linux it escalates itself via
+# sudo for just the privileged systemd/install steps (writing
+# /etc/systemd/system and enabling the service); on macOS deploy/onair
+# does the same per command. Running it with a `sudo` prefix still works
+# identically (it just skips straight to already-root).
 set -euo pipefail
 
 usage() {
@@ -196,12 +198,36 @@ health_poll() {
   return 1
 }
 
+# resolve_sudo - sets the global SUDO used to prefix Linux's privileged
+# steps (unit install, daemon-reload, enable --now, restart): "" when
+# already root (so `sudo deploy/bootstrap` - EUID 0 - keeps working
+# identically, SUDO just stays empty), else "sudo" when available, else a
+# clear error. Only called from dispatch_linux, right before those
+# privileged steps - never on macOS, where deploy/onair escalates itself
+# per command.
+resolve_sudo() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    SUDO=""
+  elif command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo"
+  else
+    echo "bootstrap: this step needs root (installing the systemd unit) and 'sudo' was not found in PATH - re-run as root" >&2
+    exit 1
+  fi
+}
+
 dispatch_linux() {
   local reporoot="$1"
 
   if ! command -v systemctl >/dev/null 2>&1; then
     echo "bootstrap: Linux without systemd (no systemctl in PATH) is not supported" >&2
     exit 1
+  fi
+
+  local SUDO
+  resolve_sudo
+  if [[ -n "$SUDO" ]]; then
+    echo "bootstrap: escalating with sudo for the service install - you may be prompted for your password" >&2
   fi
 
   local node_bin
@@ -234,18 +260,18 @@ dispatch_linux() {
     was_active=true
   fi
 
-  install -m 0644 "$tmp_unit" /etc/systemd/system/onair.service
+  $SUDO install -m 0644 "$tmp_unit" /etc/systemd/system/onair.service
   rm -f "$tmp_unit"
 
-  systemctl daemon-reload
-  systemctl enable --now onair
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable --now onair
 
   # "enable --now" only starts the unit if it wasn't already running; on a
   # re-run over a live process it's a no-op, which would leave the OLD
   # build's process serving requests. Force a restart so the freshly built
   # code is always what's running after bootstrap completes.
   if [[ "$was_active" == "true" ]]; then
-    systemctl restart onair
+    $SUDO systemctl restart onair
     echo "bootstrap: onair was already running - restarted to pick up the new build"
   fi
 
@@ -291,7 +317,7 @@ main() {
   build "$reporoot"
 
   if [[ "$build_only" == "true" ]]; then
-    echo "bootstrap: build complete. Next: re-run 'deploy/bootstrap' (macOS) or 'sudo deploy/bootstrap' (Linux) without --build-only to install and start the service."
+    echo "bootstrap: build complete. Next: re-run 'deploy/bootstrap' without --build-only to install and start the service (Linux will prompt for sudo)."
     return 0
   fi
 
