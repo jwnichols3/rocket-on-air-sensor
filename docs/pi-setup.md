@@ -16,10 +16,7 @@ sudo apt install -y nodejs
 One-liner install:
 
 ```sh
-# private repo (current): needs the gh CLI, logged in
-gh api repos/jwnichols3/rocket-on-air-sensor/contents/deploy/get-onair -H "Accept: application/vnd.github.raw" | bash
-# if the repo becomes public, this shorter form works instead:
-# curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
 ```
 
 It checks for git and Node.js 22+, clones (or reuses) a checkout at

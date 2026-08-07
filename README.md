@@ -3,6 +3,15 @@
 This system turns an on-air light on when Rocket is in a Zoom or Google Meet call.
 It turns the on-air light off when the call ends.
 
+Install the host with one command (it asks three setup questions, then starts the
+service):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+```
+
+`INSTALL.md` has the full instructions for every layer.
+
 ## Architecture
 
 ```
@@ -19,7 +28,7 @@ It turns the on-air light off when the call ends.
 - The **on-air light** is the `/display` browser page (D-12). Light hardware is on
   hold.
 
-`CONTEXT.md` holds the glossary, the invariants, and all decisions (D-1..D-14).
+`CONTEXT.md` holds the glossary, the invariants, and all decisions (D-1..D-15).
 
 ## Parts
 
@@ -57,10 +66,7 @@ variable always wins over the file (`src/config.ts`).
 ## Install
 
 ```sh
-# private repo (current): needs the gh CLI, logged in
-gh api repos/jwnichols3/rocket-on-air-sensor/contents/deploy/get-onair -H "Accept: application/vnd.github.raw" | bash
-# if the repo becomes public, this shorter form works instead:
-# curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
 ```
 
 `INSTALL.md` has the instructions for each layer:
