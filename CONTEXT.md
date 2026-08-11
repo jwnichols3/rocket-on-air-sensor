@@ -35,8 +35,12 @@ else (state, light control, API) lives on the receiver.
   - Endpoint to set on-air state ON/OFF (used by the detector AND usable manually,
     independent of any call sensing).
   - Endpoint to query current on-air status.
-- Light: connects to the Pi over Wi-Fi or Bluetooth. Preferred: battery operated and
-  reports its status back to the Pi (so status queries reflect reality, not intent).
+- Light: connects to the Pi over Wi-Fi or Bluetooth (MUST - no GPIO wiring). Preferred:
+  battery operated, so there is no mains cord at the light's location. Bonus: the product
+  family offers both a wireless and a wired variant, ideally behind the same API. Extra
+  credit: the device can be **polled** for its actual on/off state - a genuine device
+  read, not an echo of the last write - so `confirmed` reflects reality, not intent.
+  Full option slate: `docs/research/2026-08-10-onair-light-hardware-slate.md`.
 - Distribution to the Pi should be dead simple - `npx <pkg>` or similar one-command
   install/run. Publishing to Rocket's GitHub (jwnichols3) is available if needed.
 - Rocket has Raspberry Pis on hand and can give SSH access to one for development.
@@ -47,8 +51,8 @@ else (state, light control, API) lives on the receiver.
 - **Receiver** - the role of the device/computer that receives the state change and
   drives the light. Mac Mini first (development), Raspberry Pi as the long-term host
   (D-4). Never the work Mac.
-- **On-air light** - the physical light. Hardware TBD; research ticket open. Wi-Fi or
-  Bluetooth, preferably battery operated with status feedback.
+- **On-air light** - the physical light (or display). Hardware TBD; research ticket open.
+  Wi-Fi or Bluetooth, preferably battery operated and pollable for real status.
 - **Call state** - boolean, ON_AIR / OFF_AIR. The single fact the system communicates.
 - **On-air API** - the REST service on the receiver: set state, query state. The
   system's source of truth, callable by the detector or any other client. Contract:
@@ -70,15 +74,23 @@ else (state, light control, API) lives on the receiver.
 - [ ] Sensing mechanism: mic/camera-in-use (macOS APIs / log stream), process + window
       detection, CGDisplayStream, or Zoom/Meet-specific signals? (vcrec repo has prior
       art on macOS meeting detection - check its detection registry.)
-- [ ] Light hardware: which Wi-Fi/BT tally or busylight? Battery operated preferred,
-      status feedback preferred. (Research ticket open.)
+- [ ] Light hardware: which Wi-Fi/BT tally, busylight or display? Research is done - 17
+      ranked options across consumer/prosumer/production tiers, priced and sourced, in
+      `docs/research/2026-08-10-onair-light-hardware-slate.md` (supersedes the 2026-08-05
+      pass). The pick is Rocket's call; issue #1 carries the summary. Two structural
+      tradeoffs have to be settled by that choice: **battery XOR genuine `confirmed`**
+      (only two products on the whole slate give both), and **battery XOR latency** (a
+      deep-sleeping device cannot be pushed to, so lag equals its poll interval).
 - [x] REST API shape: endpoints, auth, port, state model - resolved, see
       `docs/api-contract.md` and D-5..D-7.
 - [ ] Light behavior: binary on/off only, or colors/states (in call vs camera on)?
 - [x] Pi packaging: npx one-command install + systemd unit - resolved, see D-10 and
       `docs/pi-setup.md`.
 - [ ] How does the API confirm the light actually changed (ack/status from the light)
-      vs just recording intent?
+      vs just recording intent? Partly answered by the 2026-08-10 research: a real read
+      is available on several candidates (Shelly `Switch.GetStatus` -> `output` + measured
+      `apower`, WLED `/json/state` -> `on`, BUSY Bar `/busybar/smart_home/switch`, Hue
+      `reachable`), but every purpose-built battery busylight is write-only by design.
 
 ## Decisions
 
@@ -135,6 +147,11 @@ else (state, light control, API) lives on the receiver.
   parked; the hardware research doc stands ready for whenever this reopens.
   Consequence: `confirmed` stays `"unknown"` (no-op driver), so all status feedback
   (display, Companion) keys off `intended`.
+  Note (2026-08-10, no decision changed): the second research pass
+  (`docs/research/2026-08-10-onair-light-hardware-slate.md`) falsifies the premise behind
+  that consequence - a genuine `confirmed` is now buyable for ~$15 (Athom Tasmota plug,
+  `GET /cm?cmnd=Power`) or ~$28 (Shelly 1 Gen4, `Switch.GetStatus` -> `output`). The hold
+  stands until Rocket picks hardware; #1 and #6 stay parked.
 - **D-13 (2026-08-06)** Mac Mini service management: a system-domain **LaunchDaemon**
   (`com.rocket.onair`, `UserName=john`, `KeepAlive`) supervising `node dist/index.js`
   from a local checkout - chosen over pm2/brew-services/LaunchAgent via a judged

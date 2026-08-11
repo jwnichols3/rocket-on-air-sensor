@@ -1,6 +1,12 @@
 # On-Air Light Hardware Options
 2026-08-05
 
+> **Superseded by `2026-08-10-onair-light-hardware-slate.md`** (17 ranked options across
+> consumer/prosumer/production tiers, five parallel segment researchers + a verifying
+> judge). Kept as the record of the first pass. Two of its conclusions were overturned
+> there: battery-powered smart lamps with local control do exist, and the top pick here
+> (Luxafor Bluetooth Pro) is confirmed write-only from Luxafor's own API docs.
+
 This is the first file in `docs/research/` - there is no established research-notes
 convention in this repo yet. This file establishes one for this task; adjust the
 pattern later if it doesn't fit.
