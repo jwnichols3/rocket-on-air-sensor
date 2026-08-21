@@ -81,6 +81,13 @@ else (state, light control, API) lives on the receiver.
       tradeoffs have to be settled by that choice: **battery XOR genuine `confirmed`**
       (only two products on the whole slate give both), and **battery XOR latency** (a
       deep-sleeping device cannot be pushed to, so lag equals its poll interval).
+      **Update 2026-08-20:** Rocket bought an ELEGOO ESP-32 Super Starter Kit, which
+      reopens the question with a build option. Judged research:
+      `docs/research/2026-08-20-esp32-diy-light.md` (verdict: build, ESPHome firmware,
+      server-push + device-read protocol); plan:
+      `docs/superpowers/plans/2026-08-20-esp32-onair-light.md`. A USB-powered board whose
+      firmware we write dissolves both tensions above. Proposed D-16..D-19 and the
+      D-6/D-12 amendments are drafted in the research doc, pending Rocket's call.
 - [x] REST API shape: endpoints, auth, port, state model - resolved, see
       `docs/api-contract.md` and D-5..D-7.
 - [ ] Light behavior: binary on/off only, or colors/states (in call vs camera on)?
@@ -91,6 +98,11 @@ else (state, light control, API) lives on the receiver.
       is available on several candidates (Shelly `Switch.GetStatus` -> `output` + measured
       `apower`, WLED `/json/state` -> `on`, BUSY Bar `/busybar/smart_home/switch`, Hue
       `reachable`), but every purpose-built battery busylight is write-only by design.
+      Answered in full for the DIY path by the 2026-08-20 research: poll the device's own
+      read every 10s, re-assert on mismatch, decay `confirmed` to `unknown` after 30s.
+      Note the live gap it closes - `setConfirmed` is called only from `src/app.ts:31,34`
+      and `src/server.ts:168`, so today no code path can return `confirmed` to `unknown`
+      without another write, which `docs/api-contract.md:14` already requires.
 
 ## Decisions
 

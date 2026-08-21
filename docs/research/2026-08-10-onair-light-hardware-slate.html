@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>On-Air Light Hardware - Option Slate</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel-2:#1c2129; --line:#2b3038;
+    --ink:#e6edf3; --dim:#9aa4b2; --faint:#6e7681;
+    --on:#ff3b30; --ok:#3fb950; --warn:#d29922; --no:#f85149;
+    --accent:#58a6ff; --accent-2:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1500px;margin:0 auto;padding:32px 20px 80px}
+  header{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:28px}
+  .eyebrow{
+    display:inline-block;font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--on);border:1px solid var(--on);border-radius:3px;padding:3px 9px;margin-bottom:14px;
+    font-weight:600;
+  }
+  h1{margin:0 0 8px;font-size:30px;letter-spacing:-.02em;font-weight:650}
+  h2{margin:44px 0 14px;font-size:20px;letter-spacing:-.01em;border-left:3px solid var(--accent);padding-left:11px}
+  h3{margin:26px 0 8px;font-size:16px;color:var(--ink)}
+  .sub{color:var(--dim);margin:0;max-width:80ch}
+  .meta{color:var(--faint);font-size:13px;margin-top:10px}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+    background:var(--panel-2);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:#a5d6ff;
+    white-space:nowrap;
+  }
+
+  /* requirement cards */
+  .reqs{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:20px 0}
+  .req{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:13px 15px}
+  .req .tag{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+  .req.must .tag{color:var(--no)} .req.pref .tag{color:var(--warn)}
+  .req.bonus .tag{color:var(--accent)} .req.extra .tag{color:var(--accent-2)}
+  .req p{margin:5px 0 0;font-size:13.5px;color:var(--dim)}
+
+  /* controls */
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:18px 0 12px}
+  button{
+    background:var(--panel);color:var(--dim);border:1px solid var(--line);border-radius:999px;
+    padding:6px 14px;font:inherit;font-size:13px;cursor:pointer;transition:.15s;
+  }
+  button:hover{border-color:var(--faint);color:var(--ink)}
+  button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
+  .hint{color:var(--faint);font-size:12.5px;margin-left:auto}
+
+  /* table */
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;min-width:1360px;font-size:13.5px}
+  thead th{
+    position:sticky;top:0;z-index:2;background:var(--panel-2);text-align:left;
+    padding:11px 12px;border-bottom:1px solid var(--line);font-size:11.5px;
+    letter-spacing:.07em;text-transform:uppercase;color:var(--faint);font-weight:600;white-space:nowrap;
+  }
+  tbody td{padding:12px;border-bottom:1px solid var(--line);vertical-align:top}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:#1a2029}
+  tbody tr.top td{background:#171d26}
+  tbody tr.top:hover td{background:#1c232e}
+  .rank{font-weight:700;color:var(--faint);font-variant-numeric:tabular-nums;font-size:15px}
+  tr.top .rank{color:var(--on)}
+  .name{font-weight:650;display:block;margin-bottom:3px;min-width:150px}
+  .note{color:var(--faint);font-size:12px;display:block}
+  .price{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600}
+  .price small{display:block;font-weight:400;color:var(--faint);font-size:11.5px}
+  .score{font-variant-numeric:tabular-nums;font-weight:700;font-size:15px;text-align:center}
+  .s-hi{color:var(--ok)} .s-mid{color:var(--warn)} .s-lo{color:var(--faint)}
+
+  .pill{
+    display:inline-block;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    border-radius:999px;padding:2px 8px;border:1px solid;white-space:nowrap;
+  }
+  .t-consumer{color:#7ee787;border-color:#2d5b38;background:#12241a}
+  .t-prosumer{color:#79c0ff;border-color:#1f4b7a;background:#101f2e}
+  .t-production{color:#d2a8ff;border-color:#553a7a;background:#1d1526}
+  .t-maker{color:#ffa657;border-color:#7a4a1f;background:#2a1c10}
+  .t-baseline{color:var(--dim);border-color:var(--line);background:var(--panel-2)}
+
+  .y{color:var(--ok);font-weight:650}
+  .n{color:var(--no);font-weight:650}
+  .p{color:var(--warn);font-weight:650}
+  .links a{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:5px;
+    padding:3px 8px;margin:0 4px 4px 0;color:var(--dim);white-space:nowrap}
+  .links a:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+  .links a.az:hover{border-color:#ff9900;color:#ff9900}
+
+  /* tensions */
+  .tension{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--on);
+    border-radius:0 8px 8px 0;padding:16px 18px;margin:14px 0}
+  .tension h3{margin:0 0 6px;font-size:15.5px}
+  .tension p{margin:6px 0 0;color:var(--dim);font-size:14px}
+  .tension strong{color:var(--ink)}
+
+  .picks{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:18px 0}
+  .pick{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:16px 17px}
+  .pick.first{border-color:var(--on);box-shadow:0 0 0 1px rgba(255,59,48,.18)}
+  .pick .label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:700}
+  .pick.first .label{color:var(--on)}
+  .pick .who{font-size:17px;font-weight:650;margin:6px 0 2px}
+  .pick .amt{color:var(--ok);font-weight:650;font-size:14px}
+  .pick p{margin:8px 0 0;font-size:13.5px;color:var(--dim)}
+
+  ol.seq{padding-left:20px;color:var(--dim)}
+  ol.seq li{margin:9px 0}
+  ol.seq strong{color:var(--ink)}
+
+  details{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:0;margin:14px 0}
+  summary{cursor:pointer;padding:13px 16px;font-weight:600;color:var(--dim);list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸ ";color:var(--faint)}
+  details[open] summary::before{content:"▾ "}
+  summary:hover{color:var(--ink)}
+  details .body{padding:0 16px 14px}
+  details table{min-width:0;font-size:13px}
+  details tbody td{padding:9px 10px}
+
+  .callout{background:#1c1712;border:1px solid #4a3a1a;border-radius:8px;padding:14px 16px;
+    margin:16px 0;font-size:13.5px;color:#e3c88a}
+  .callout strong{color:#ffd479}
+
+  footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);color:var(--faint);font-size:12.5px}
+  @media (max-width:640px){ .wrap{padding:20px 12px 60px} h1{font-size:23px} .hint{width:100%;margin:4px 0 0} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">● On Air</span>
+  <h1>On-Air Light &amp; Display Hardware - Option Slate</h1>
+  <p class="sub">17 ranked options across consumer, prosumer and production tiers for
+  <code>rocket-on-air-sensor</code>. Five parallel segment researchers, then a judge that
+  re-verified every ranking-decisive claim against the primary source.</p>
+  <p class="meta">Researched 2026-08-10 &middot; supersedes the 2026-08-05 pass &middot;
+  GitHub issue #1 &middot; source of record:
+  <code>docs/research/2026-08-10-onair-light-hardware-slate.md</code></p>
+</header>
+
+<h2>What we're scoring against</h2>
+<div class="reqs">
+  <div class="req must"><span class="tag">R1 &middot; Must</span>
+    <p>Wireless - Wi-Fi or Bluetooth/BLE. No GPIO wiring to the receiver.</p></div>
+  <div class="req pref"><span class="tag">R2 &middot; Strong preference</span>
+    <p>Battery operated. No mains cord at the light's location.</p></div>
+  <div class="req bonus"><span class="tag">R3 &middot; Bonus</span>
+    <p>Family offers both a wireless and a wired variant, ideally same API.</p></div>
+  <div class="req extra"><span class="tag">R4 &middot; Extra credit</span>
+    <p>Pollable for genuine status - a real device read, not an echo of the last write.</p></div>
+  <div class="req"><span class="tag">R5 &middot; Preference</span>
+    <p>Local-network control. Cloud-required is a strong negative.</p></div>
+  <div class="req"><span class="tag">R6 &middot; Preference</span>
+    <p>Node driver on macOS/Linux, ideally zero new production dependencies.</p></div>
+</div>
+<p class="sub" style="font-size:13.5px">Scoring: R1 is a gate, not points. R2 battery 0-4,
+R3 wired sibling 0-1, R4 pollable 0-3, R5 local 0-2, R6 zero-dep driver 0-2. Max 12.
+Ranking modifier from the repo invariant - <strong>false OFF is worse than false ON</strong>:
+a light that dies mid-meeting or lags a call start by minutes fails regardless of score.</p>
+
+<h2>Comparison</h2>
+<div class="controls">
+  <button data-f="all" aria-pressed="true">All 18</button>
+  <button data-f="consumer">Consumer</button>
+  <button data-f="prosumer">Prosumer</button>
+  <button data-f="production">Production</button>
+  <button data-f="maker">Maker</button>
+  <button data-f="battery">Battery only</button>
+  <button data-f="pollable">Pollable only</button>
+  <span class="hint">Amazon links are searches, not verified listings. Direct links were fetched and verified 2026-08-10.</span>
+</div>
+
+<div class="scroll">
+<table id="slate">
+<thead>
+<tr>
+  <th>#</th><th>Device</th><th>Tier</th><th>Battery</th><th>Wired<br>variant</th>
+  <th>Pollable status</th><th>Local</th><th>Node driver</th><th>Price</th>
+  <th>Availability</th><th>Score</th><th>Buy</th>
+</tr>
+</thead>
+<tbody>
+
+<tr class="top" data-tier="prosumer" data-battery="1" data-pollable="1">
+  <td class="rank">1</td>
+  <td><span class="name">BUSY Bar</span><span class="note">Flipper Devices &middot; LED matrix status device</span></td>
+  <td><span class="pill t-prosumer">Prosumer</span></td>
+  <td><span class="y">Yes</span><span class="note">18650 3250 mAh<br>"8 h of active status"</span></td>
+  <td><span class="y">Yes</span><span class="note">same SKU - USB-C virtual LAN serves the identical API</span></td>
+  <td><span class="y">Yes</span><span class="note"><code>GET /busybar/smart_home/switch</code> → <code>{"state":bool}</code>; plus <code>/busybar/screen</code> (actual frame) and <code>/status/power</code> (battery %)</span></td>
+  <td><span class="y">Yes</span></td>
+  <td>Zero-dep <code>fetch</code><span class="note">published OpenAPI 3.1 spec</span></td>
+  <td class="price">$199<small>from $249</small></td>
+  <td>In stock<span class="note">14-21 business days</span></td>
+  <td class="score s-hi">11</td>
+  <td class="links">
+    <a href="https://busy.app/products/busy-bar" target="_blank" rel="noopener">Direct</a>
+    <a class="az" href="https://www.amazon.com/s?k=Busy+Bar+Flipper+Devices" target="_blank" rel="noopener">Amazon</a>
+  </td>
+</tr>
+
+<tr class="top" data-tier="consumer prosumer" data-battery="1" data-pollable="1">
+  <td class="rank">2</td>
+  <td><span class="name">Ulanzi TC001 + AWTRIX 3</span><span class="note">32&times;8 RGB matrix &middot; community firmware</span></td>
+  <td><span class="pill t-consumer">Consumer</span> <span class="pill t-prosumer">fw</span></td>
+  <td><span class="p">Yes-ish</span><span class="note">4400 mAh, ~5 h<br>vendor expects it plugged in</span></td>
+  <td><span class="y">Yes</span><span class="note">same device, USB-C</span></td>
+  <td><span class="y">Yes</span><span class="note"><code>GET /api/stats</code> → <code>matrix</code> bool + <code>bat</code> %; <code>/api/screen</code> = pixel dump. Verified in firmware source.</span></td>
+  <td><span class="y">Yes</span></td>
+  <td>Zero-dep <code>fetch</code><span class="note">after flashing AWTRIX 3</span></td>
+  <td class="price">$45.99</td>
+  <td>In stock</td>
+  <td class="score s-hi">10</td>
+  <td class="links">
+    <a href="https://www.ulanzi.com/products/ulanzi-pixel-smart-clock-2882" target="_blank" rel="noopener">Direct</a>
+    <a class="az" href="https://www.amazon.com/s?k=Ulanzi+TC001+Pixel+Smart+Clock" target="_blank" rel="noopener">Amazon</a>
+    <a href="https://github.com/Blueforcer/awtrix3" target="_blank" rel="noopener">Firmware</a>
+  </td>
+</tr>
+
+<tr class="top" data-tier="production" data-battery="0" data-pollable="1">
+  <td class="rank">3</td>
+  <td><span class="name">Shelly 1 Gen4 + ON AIR sign</span><span class="note">relay + American Recorder studio sign</span></td>
+  <td><span class="pill t-production">Production</span></td>
+  <td><span class="n">No</span><span class="note">mains</span></td>
+  <td><span class="y">Yes</span><span class="note">Shelly Pro DIN/Ethernet, same RPC</span></td>
+  <td><span class="y">Strongest</span><span class="note"><code>GET /rpc/Switch.GetStatus?id=0</code> → <code>output</code>, plus <code>source</code> and <code>apower</code> (measured Watts - proves current actually flows)</span></td>
+  <td><span class="y">Yes</span></td>
+  <td>Two <code>fetch</code> calls<span class="note">zero deps, nothing to flash</span></td>
+  <td class="price">$27.99<small>+ $149.95 sign</small></td>
+  <td>In stock</td>
+  <td class="score s-mid">8</td>
+  <td class="links">
+    <a href="https://us.shelly.com/products/shelly-1-gen4-ul-certified" target="_blank" rel="noopener">Shelly</a>
+    <a class="az" href="https://www.amazon.com/s?k=Shelly+1+Gen4" target="_blank" rel="noopener">Amazon</a>
+    <a class="az" href="https://www.amazon.com/s?k=American+Recorder+ON+AIR+LED+sign" target="_blank" rel="noopener">Sign</a>
+  </td>
+</tr>
+
+<tr class="top" data-tier="prosumer maker" data-battery="1" data-pollable="1">
+  <td class="rank">4</td>
+  <td><span class="name">Athom WLED Slim</span><span class="note">+ WS2812B strip + USB power bank</span></td>
+  <td><span class="pill t-prosumer">Prosumer</span></td>
+  <td><span class="p">Power bank</span><span class="note">USB-C 5 V; 10,000 mAh = days</span></td>
+  <td><span class="y">Yes</span><span class="note">whole Athom WLED line shares <code>/json/state</code></span></td>
+  <td><span class="y">Yes</span><span class="note"><code>GET /json/state</code> → <code>"on"</code></span></td>
+  <td><span class="y">Yes</span></td>
+  <td>Zero-dep <code>fetch</code><span class="note">use no library - all wrappers stale</span></td>
+  <td class="price">$11.85<small>+ ~$15 strip</small></td>
+  <td>Listed<span class="note">no stock field exposed</span></td>
+  <td class="score s-mid">8</td>
+  <td class="links">
+    <a href="https://www.athom.tech/blank-1/wled-slim-led-strip-controller" target="_blank" rel="noopener">Direct</a>
+    <a href="https://kno.wled.ge/interfaces/json-api/" target="_blank" rel="noopener">API docs</a>
+  </td>
+</tr>
+
+<tr class="top" data-tier="consumer prosumer" data-battery="1" data-pollable="1">
+  <td class="rank">5</td>
+  <td><span class="name">Philips Hue Go + Bridge</span><span class="note">portable accent light, Zigbee</span></td>
+  <td><span class="pill t-consumer">Consumer</span></td>
+  <td><span class="p">Yes</span><span class="note">integrated battery<br><strong>runtime unpublished</strong></span></td>
+  <td><span class="y">Best in slate</span><span class="note">every Hue product rides the same Bridge API</span></td>
+  <td><span class="y">Yes</span><span class="note"><code>getLightState(id)</code> → <code>{"on":bool,"reachable":bool}</code> - <code>reachable</code> maps exactly onto <code>confirmed: unknown</code></span></td>
+  <td><span class="y">Yes</span></td>
+  <td><code>node-hue-api</code><span class="note">one production dep</span></td>
+  <td class="price">$98.99<small>+ $69.99 Bridge</small></td>
+  <td>"Only a few left"</td>
+  <td class="score s-hi">9</td>
+  <td class="links">
+    <a href="https://www.philips-hue.com/en-us/p/hue-white-and-color-ambiance-go-portable-accent-light/7602031U7" target="_blank" rel="noopener">Direct</a>
+    <a class="az" href="https://www.amazon.com/s?k=Philips+Hue+Go+portable+light" target="_blank" rel="noopener">Amazon</a>
+  </td>
+</tr>
+
+<tr class="top" data-tier="maker prosumer" data-battery="1" data-pollable="1">
+  <td class="rank">6</td>
+  <td><span class="name">My Bike's Got LED (LiPo)</span><span class="note">MCQN &middot; battery-native WLED board</span></td>
+  <td><span class="pill t-maker">Maker</span></td>
+  <td><span class="y">Best real battery</span><span class="note">8800 mAh pack in the kit<br>days, not hours</span></td>
+  <td><span class="y">Yes</span><span class="note">mains sibling board + all of WLED</span></td>
+  <td><span class="y">Yes</span><span class="note">same <code>GET /json/state</code></span></td>
+  <td><span class="y">Yes</span></td>
+  <td>Zero-dep <code>fetch</code></td>
+  <td class="price">$50.00</td>
+  <td><span class="p">Thin</span><span class="note">4 boards / 8 kits in stock</span></td>
+  <td class="score s-hi">10</td>
+  <td class="links">
+    <a href="https://www.tindie.com/products/mcqn_ltd/my-bikes-got-led/" target="_blank" rel="noopener">Tindie</a>
+    <a href="https://mcqn.com/ibal234/" target="_blank" rel="noopener">Maker</a>
+  </td>
+</tr>
+
+<tr data-tier="production" data-battery="0" data-pollable="1">
+  <td class="rank">7</td>
+  <td><span class="name">LaMetric TIME</span><span class="note">smart pixel display</span></td>
+  <td><span class="pill t-production">Production</span></td>
+  <td><span class="n">No</span><span class="note">5 V DC 2 A adapter</span></td>
+  <td><span class="n">No</span></td>
+  <td><span class="y">Vendor-documented</span><span class="note"><code>GET /api/v2/device/notifications</code> returns the queue</span></td>
+  <td><span class="y">Yes</span></td>
+  <td>Zero-dep <code>fetch</code><span class="note">+ Basic auth</span></td>
+  <td class="price">$199</td>
+  <td>In stock</td>
+  <td class="score s-mid">7</td>
+  <td class="links">
+    <a href="https://lametric.com/en-US/time" target="_blank" rel="noopener">Direct</a>
+    <a class="az" href="https://www.amazon.com/s?k=LaMetric+Time+smart+clock" target="_blank" rel="noopener">Amazon</a>
+  </td>
+</tr>
+
+<tr data-tier="consumer" data-battery="1" data-pollable="1">
+  <td class="rank">8</td>
+  <td><span class="name">WiZ Mobile Portable Light</span><span class="note">Wi-Fi, no hub</span></td>
+  <td><span class="pill t-consumer">Consumer</span></td>
+  <td><span class="p">Yes</span><span class="note">rechargeable<br>runtime not stated</span></td>
+  <td><span class="y">Yes</span><span class="note">whole WiZ range, same UDP</span></td>
+  <td><span class="p">Unofficial</span><span class="note"><code>getPilot</code> over UDP:38899. WiZ's official docs are cloud GraphQL only</span></td>
+  <td><span class="p">Reverse-eng.</span></td>
+  <td><code>node:dgram</code> zero-dep<span class="note">or <code>wikari</code></span></td>
+  <td class="price">$98.99</td>
+  <td>"Low stock"</td>
+  <td class="score s-mid">8</td>
+  <td class="links">
+    <a href="https://www.wizconnected.com/en-us/p/table-lamps-mobile-portable-light/046677604356" target="_blank" rel="noopener">Direct</a>
+    <a class="az" href="https://www.amazon.com/s?k=WiZ+Mobile+Portable+Light" target="_blank" rel="noopener">Amazon</a>
+  </td>
+</tr>
+
+<tr data-tier="prosumer" data-battery="1" data-pollable="0">
+  <td class="rank">9</td>
+  <td><span class="name">Luxafor Bluetooth Pro</span><span class="note">BLE light + USB dongle</span></td>
+  <td><span class="pill t-prosumer">Prosumer</span></td>
+  <td><span class="y">Best runtime</span><span class="note">2600 mAh<br>"80 h - 12 months"</span></td>
+  <td><span class="y">Yes</span><span class="note">Flag / Orb are USB</span></td>
+  <td><span class="n">No - write-only</span><span class="note">confirmed from Luxafor's own API docs: three write actions, no read endpoint of any kind</span></td>
+  <td><span class="y">Yes</span><span class="note">USB HID path</span></td>
+  <td><code>node-hid</code> + hand-written byte protocol<span class="note">official JS wrapper dead since 2016</span></td>
+  <td class="price">$125.73</td>
+  <td>In stock</td>
+  <td class="score s-mid">8</td>
+  <td class="links">
+    <a href="https://luxafor.com/product/bluetooth-pro/" target="_blank" rel="noopener">Direct</a>
+    <a class="az" href="https://www.amazon.com/s?k=Luxafor+Bluetooth+Pro" target="_blank" rel="noopener">Amazon</a>
+  </td>
+</tr>
+
+<tr data-tier="prosumer" data-battery="1" data-pollable="1">
+  <td class="rank">10</td>
+  <td><span class="name">TRMNL OG (self-hosted)</span><span class="note">7.5" e-ink, BYOS</span></td>
+  <td><span class="pill t-prosumer">Prosumer</span></td>
+  <td><span class="y">Best on paper</span><span class="note">~3 months per charge<br><strong>at vendor default refresh</strong></span></td>
+  <td><span class="p">In spirit</span><span class="note">BYOD spec</span></td>
+  <td><span class="p">Proof-of-delivery</span><span class="note">device polls us carrying <code>Battery-Voltage</code> / <code>RSSI</code> headers</span></td>
+  <td><span class="y">Yes</span><span class="note">explicit self-host design</span></td>
+  <td><strong>Zero driver</strong><span class="note">add ~3 routes to the existing service</span></td>
+  <td class="price">$139</td>
+  <td>In stock</td>
+  <td class="score s-lo">10 &darr;</td>
+  <td class="links">
+    <a href="https://shop.trmnl.com/" target="_blank" rel="noopener">Direct</a>
+    <a href="https://docs.trmnl.com/go/diy/byos" target="_blank" rel="noopener">BYOS docs</a>
+  </td>
+</tr>
+
+<tr data-tier="consumer" data-battery="1" data-pollable="1">
+  <td class="rank">11</td>
+  <td><span class="name">Umbra &times; Nanoleaf Cono</span><span class="note">+ Umbra Cup wired sibling</span></td>
+  <td><span class="pill t-consumer">Consumer</span></td>
+  <td><span class="p">Yes</span><span class="note">5 h</span></td>
+  <td><span class="y">Explicitly</span><span class="note">Umbra Cup is the mains sibling</span></td>
+  <td><span class="p">In principle</span><span class="note">Matter OnOff attribute - not verified against this SKU's cert record</span></td>
+  <td><span class="y">Yes</span><span class="note">Matter/Thread</span></td>
+  <td><code>matter.js</code><span class="note"><strong>+ a Thread border router in the house</strong></span></td>
+  <td class="price">$95.00</td>
+  <td>In stock</td>
+  <td class="score s-mid">8</td>
+  <td class="links">
+    <a href="https://us-shop.nanoleaf.me/products/umbra-cono-portable-smart-lamp-sierra" target="_blank" rel="noopener">Nanoleaf</a>
+    <a class="az" href="https://www.amazon.com/s?k=Umbra+Cono+Nanoleaf+smart+lamp" target="_blank" rel="noopener">Amazon</a>
+  </td>
+</tr>
+
+<tr data-tier="maker" data-battery="1" data-pollable="1">
+  <td class="rank">12</td>
+  <td><span class="name">M5StickS3 + Smart-Tally route</span><span class="note">ESP32-S3 stick with screen</span></td>
+  <td><span class="pill t-maker">Maker</span></td>
+  <td><span class="p">Token</span><span class="note">250 mAh ≈ 2.6 h at Wi-Fi RX</span></td>
+  <td><span class="y">Yes</span><span class="note">AtomS3 Lite $7.50 is the USB sibling</span></td>
+  <td><span class="p">Presence only</span><span class="note">light polls <code>GET /tally/N/status</code>, we answer <code>onair</code>/<code>unselected</code></span></td>
+  <td><span class="y">Yes</span></td>
+  <td><strong>Zero deps, zero driver</strong><span class="note">one route</span></td>
+  <td class="price">$21.50</td>
+  <td>In stock<span class="note">StickC PLUS2 is EOL</span></td>
+  <td class="score s-mid">7</td>
+  <td class="links">
+    <a href="https://shop.m5stack.com/products/m5sticks3-esp32s3-mini-iot-dev-kit" target="_blank" rel="noopener">M5Stack</a>
+    <a class="az" href="https://www.amazon.com/s?k=M5Stack+M5StickS3" target="_blank" rel="noopener">Amazon</a>
+    <a href="https://github.com/Xylopyrographer/STAC" target="_blank" rel="noopener">STAC fw</a>
+  </td>
+</tr>
+
+<tr data-tier="prosumer" data-battery="0" data-pollable="1">
+  <td class="rank">13</td>
+  <td><span class="name">Shelly Plus RGBW PM</span><span class="note">+ LED strip</span></td>
+  <td><span class="pill t-prosumer">Prosumer</span></td>
+  <td><span class="n">No</span><span class="note">12/24 VDC</span></td>
+  <td><span class="y">Yes</span><span class="note">Shelly Gen2 line, identical RPC</span></td>
+  <td><span class="y">Best fidelity</span><span class="note"><code>GET /rpc/Light.GetStatus?id=&lt;id&gt;</code>; PM meters current, so <code>confirmed: on</code> means power physically flows</span></td>
+  <td><span class="y">Yes</span></td>
+  <td>Two <code>fetch</code> calls<span class="note">zero deps</span></td>
+  <td class="price">$39.99</td>
+  <td>In stock</td>
+  <td class="score s-mid">8</td>
+  <td class="links">
+    <a href="https://us.shelly.com/products/shelly-plus-rgbw-pm" target="_blank" rel="noopener">Direct</a>
+    <a class="az" href="https://www.amazon.com/s?k=Shelly+Plus+RGBW+PM" target="_blank" rel="noopener">Amazon</a>
+  </td>
+</tr>
+
+<tr data-tier="consumer" data-battery="0" data-pollable="1">
+  <td class="rank">14</td>
+  <td><span class="name">Athom WLED / Tasmota bulb</span><span class="note">12 W color, E27 screw-in</span></td>
+  <td><span class="pill t-consumer">Consumer</span></td>
+  <td><span class="n">No</span><span class="note">E27 mains</span></td>
+  <td><span class="y">It is the wired variant</span><span class="note">of #4's family</span></td>
+  <td><span class="y">Yes</span><span class="note">WLED <code>/json/state</code>, or Tasmota <code>GET /cm?cmnd=Power</code> → <code>{"POWER":"OFF"}</code></span></td>
+  <td><span class="y">Yes</span></td>
+  <td>Zero-dep <code>fetch</code></td>
+  <td class="price">$14.63</td>
+  <td>Listed</td>
+  <td class="score s-mid">7</td>
+  <td class="links">
+    <a href="https://www.athom.tech/blank-1/wled-12w-color-bulb" target="_blank" rel="noopener">Direct</a>
+  </td>
+</tr>
+
+<tr data-tier="consumer" data-battery="0" data-pollable="1">
+  <td class="rank">15</td>
+  <td><span class="name">Athom Tasmota plug + dumb lamp</span><span class="note">ESP32-C3 US Plug V3, pre-flashed</span></td>
+  <td><span class="pill t-consumer">Consumer</span></td>
+  <td><span class="n">No</span><span class="note">mains plug</span></td>
+  <td><span class="y">It is the wired variant</span></td>
+  <td><span class="y">Yes</span><span class="note"><code>GET /cm?cmnd=Power</code> with no payload returns relay state</span></td>
+  <td><span class="y">Yes</span><span class="note">"total local control"</span></td>
+  <td>Zero-dep <code>fetch</code></td>
+  <td class="price">$14.35<small>list $18.40</small></td>
+  <td>In stock</td>
+  <td class="score s-lo">6</td>
+  <td class="links">
+    <a href="https://www.athom.tech/blank-1/tasmota-esp32-c3-us-plug-v3" target="_blank" rel="noopener">Direct</a>
+  </td>
+</tr>
+
+<tr data-tier="production" data-battery="0" data-pollable="1">
+  <td class="rank">16</td>
+  <td><span class="name">ControlByWeb X-WR-441-E</span><span class="note">industrial web relay + sign</span></td>
+  <td><span class="pill t-production">Production</span></td>
+  <td><span class="n">No</span></td>
+  <td><span class="y">Cleanly</span><span class="note">Ethernet / PoE / Wi-Fi / cellular SKUs in one family</span></td>
+  <td><span class="y">Yes</span><span class="note"><code>GET /state.json</code> → <code>relay1</code> 0/1</span></td>
+  <td><span class="y">Yes</span><span class="note">cloud optional</span></td>
+  <td><code>fetch</code> + <code>JSON.parse</code><span class="note">zero deps</span></td>
+  <td class="price">$199.99</td>
+  <td>In production</td>
+  <td class="score s-mid">7</td>
+  <td class="links">
+    <a href="https://controlbyweb.com/webrelay/" target="_blank" rel="noopener">Direct</a>
+  </td>
+</tr>
+
+<tr data-tier="production" data-battery="1" data-pollable="0">
+  <td class="rank">17</td>
+  <td><span class="name">Cuebi Light (set of 2)</span><span class="note">broadcast tally, TSL UMD</span></td>
+  <td><span class="pill t-production">Production</span></td>
+  <td><span class="y">Yes</span><span class="note">5 V micro-USB 0.4 W<br>4-6 h on 2&times;AA, or any power bank</span></td>
+  <td><span class="y">Yes</span><span class="note">same unit</span></td>
+  <td><span class="n">No</span><span class="note">no status, heartbeat or query documented anywhere</span></td>
+  <td><span class="y">Yes</span><span class="note">LAN</span></td>
+  <td>~40 lines <code>node:dgram</code><span class="note"><strong>listen port is undocumented</strong></span></td>
+  <td class="price">EUR 349<small>set of 2</small></td>
+  <td>In stock</td>
+  <td class="score s-lo">6</td>
+  <td class="links">
+    <a href="https://shop.cuebi.com/products/cuebi-lights" target="_blank" rel="noopener">Direct</a>
+  </td>
+</tr>
+
+<tr data-tier="baseline" data-battery="0" data-pollable="1">
+  <td class="rank">&mdash;</td>
+  <td><span class="name">Baseline: <code>/display</code> kiosk</span><span class="note">Pi or spare tablet, D-9 - already shipped</span></td>
+  <td><span class="pill t-baseline">Baseline</span></td>
+  <td><span class="n">No</span><span class="note">tablet: hours</span></td>
+  <td><span class="y">It is the wired variant</span></td>
+  <td><span class="p">Partial</span><span class="note">count of open SSE subscribers on <code>GET /events</code> is a genuine "a display is connected and receiving" read</span></td>
+  <td><span class="y">Yes</span></td>
+  <td><strong>Already shipped</strong><span class="note">sub-second via SSE</span></td>
+  <td class="price">$0<small>screen $40-80</small></td>
+  <td>n/a</td>
+  <td class="score s-mid">~7</td>
+  <td class="links">
+    <a href="https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/" target="_blank" rel="noopener">Pi Zero 2 W</a>
+  </td>
+</tr>
+
+</tbody>
+</table>
+</div>
+
+<h2>The picks</h2>
+<div class="picks">
+  <div class="pick first">
+    <span class="label">Top pick</span>
+    <div class="who">BUSY Bar</div>
+    <div class="amt">$199</div>
+    <p>The only device that satisfies wireless + battery + wired sibling + genuine read-back
+    + local-only + zero-dep driver <em>all at once</em>. Verified from its own OpenAPI 3.1
+    spec. Also a display, so it subsumes <code>/display</code> rather than sitting beside it.</p>
+  </div>
+  <div class="pick">
+    <span class="label">Runner-up</span>
+    <div class="who">Ulanzi TC001 + AWTRIX 3</div>
+    <div class="amt">$45.99</div>
+    <p>77% of the read-back for 23% of the price. You pay in a one-time ESP32 flash and a
+    ~5 h battery that is really a backup.</p>
+  </div>
+  <div class="pick">
+    <span class="label">Cheapest viable</span>
+    <div class="who">Athom WLED Slim</div>
+    <div class="amt">$11.85 &middot; ~$30 all-in</div>
+    <p>+ a short WS2812B strip and a USB power bank. The whole Athom family shares the API,
+    so form factor stays a $15 reversible decision. Or the $14.35 Tasmota plug for the
+    dumbest possible contract.</p>
+  </div>
+  <div class="pick">
+    <span class="label">Spend more, get more</span>
+    <div class="who">Shelly 1 Gen4 + ON AIR sign</div>
+    <div class="amt">$27.99 + $149.95</div>
+    <p>The only build where <code>confirmed</code> is a physical current measurement. Catches a
+    burnt-out sign or an unplugged wall-wart - nothing else on the slate can see that.
+    Fails battery completely.</p>
+  </div>
+</div>
+
+<h2>Structural tensions</h2>
+<p class="sub">Forced choices, not hedges. The hardware pick settles all three.</p>
+
+<div class="tension">
+  <h3>1. Battery <span style="color:var(--on)">XOR</span> genuine <code>confirmed</code></h3>
+  <p>Held independently across all five research segments. Every device with a
+  vendor-documented on/off read-back is <strong>mains</strong> - Shelly, LaMetric,
+  ControlByWeb, Vestaboard, Athom bulbs, Tasmota plugs. Every purpose-built
+  <strong>battery</strong> busylight is <strong>write-only by design</strong> - confirmed
+  from Luxafor's own webhook docs: three write actions, no read endpoint of any kind.
+  Broadcast tally is the same for an architectural reason - TSL UMD, Art-Net and sACN are
+  all unidirectional. <strong>Exactly two products break it:</strong> BUSY Bar ($199) and
+  My Bike's Got LED ($50, single-digit stock).</p>
+</div>
+
+<div class="tension">
+  <h3>2. Battery <span style="color:var(--on)">XOR</span> latency (push vs pull)</h3>
+  <p>Long ESP32-class battery life requires deep sleep at ~10 µA, and <strong>a sleeping
+  device cannot be pushed to</strong> - it must poll, so state-change lag equals the poll
+  interval. TRMNL's headline "three months per charge" is quoted at the vendor's default
+  refresh (docs example: 1800 s). Drive it at 30 s and the battery claim collapses to a
+  number nobody publishes. Minutes of lag violates the false-OFF invariant.
+  Upside worth naming: client-pull is the only way to get an honest signal out of a
+  write-only device class, and it costs <em>less</em> code than any driver - one route.</p>
+</div>
+
+<div class="tension">
+  <h3>3. Battery-save modes silently break automation</h3>
+  <p>Govee's own product page: <em>"When the adapter is unplugged, Battery save mode turns
+  on automatically - disabling Alexa, Google Assistant, Matter and Wi-Fi. To re-enable
+  them, manually turn off Battery save mode in the app."</em> A light you wake by hand
+  cannot be driven by an automated on-air signal. <strong>No other vendor answers this
+  question at all</strong> - not Philips, not WiZ, not Nanoleaf.</p>
+</div>
+
+<div class="callout">
+  <strong>Ask before buying any battery smart lamp:</strong> "Does it answer the network
+  while running on battery, off the charger, with no app open?" Not answerable from any
+  spec sheet, and decisive. Govee documents the wrong answer; everyone else is silent.
+</div>
+
+<h2>Suggested buy-and-test sequence</h2>
+<ol class="seq">
+  <li><strong>Now, $0.</strong> Keep <code>/display</code> running (D-9). Sub-second via SSE,
+  and its open-SSE-subscriber count is already a real liveness read. It stays the fallback.</li>
+  <li><strong>Now, $14.35-$27.99.</strong> One Athom Tasmota plug or Shelly 1 Gen4 + a dumb
+  lamp. Build the real <code>LightDriver</code> against it - this retires D-12's
+  "<code>confirmed</code> stays unknown" for fifteen dollars, on a device that will never go
+  EOL. <em>Success criterion:</em> <code>GET /status</code> returns
+  <code>confirmed: "on"</code> from a device read, and <code>"unknown"</code> within one poll
+  interval when the lamp is unplugged.</li>
+  <li><strong>Week 1, $45.99.</strong> Ulanzi TC001, flashed with AWTRIX 3. Measure the two
+  things nobody publishes: does it answer HTTP on battery with no cord, and real runtime at
+  low brightness on a static ON AIR frame. If the first fails, you learn the Tension-3
+  lesson for $46 instead of $199.</li>
+  <li><strong>Week 2-4, $199 - only if step 3's form factor is right.</strong> Order the
+  BUSY Bar (14-21 business days). Enable the Wi-Fi HTTP API over USB first; design the 409
+  priority handling in from day one.</li>
+  <li><strong>Finish, $149.95 - optional.</strong> Put the ON AIR sign on the Shelly from
+  step 2 as the permanent household fixture, with the battery device as the portable desk
+  indicator. Two lights, one driver interface, one <code>intended</code> state.</li>
+</ol>
+
+<details>
+  <summary>Eliminated - 26 candidates and why</summary>
+  <div class="body">
+  <div class="scroll" style="border:none">
+  <table>
+    <thead><tr><th>Device</th><th>Reason cut</th></tr></thead>
+    <tbody>
+      <tr><td>Govee Cordless Table Lamp H1741</td><td>Confirmed from Govee's own page: unplugging auto-enables Battery Save Mode, disabling Wi-Fi and Matter until manually re-enabled in the app. Unautomatable by construction.</td></tr>
+      <tr><td>Elgato Key Light Mini</td><td>Confirmed discontinued on Elgato's own page. Would have ranked ~3rd (4000 mAh, 4 h, $59.99).</td></tr>
+      <tr><td>Kuando Busylight UC Omega / Alpha</td><td>USB-tethered - the light must sit next to the receiver. Fails R1.</td></tr>
+      <tr><td>Kuando Busylight IoT Omega (LoRaWAN)</td><td>Needs a LoRaWAN gateway + network server; no direct Node-to-device path.</td></tr>
+      <tr><td>MuteMe / MuteMe Mini</td><td>USB HID only, no BT variant. Its 4-byte return is <em>touch</em> state, not light state - wrong direction.</td></tr>
+      <tr><td>Luxafor Busy Tag</td><td>Has genuine read-back (<code>AT+SC?</code>) but over USB serial, and "requires an external power source at all times". Fails R1 and R2.</td></tr>
+      <tr><td>Luxafor Signal</td><td>Wi-Fi native but mains, cloud-controlled, no read endpoint.</td></tr>
+      <tr><td>Luxafor Switch Pro 2</td><td>Marketed "app-free" - you twist a physical cube. No documented local protocol.</td></tr>
+      <tr><td>Embrava Blynclight Wireless</td><td>embrava.com returns 403 / Cloudflare to every method tried, including <code>/products.json</code>. Zero primary-sourced facts. Unrankable without a human with a browser.</td></tr>
+      <tr><td>Hollyland Wireless Tally</td><td>Publishes <strong>no third-party protocol at all</strong>. The oft-repeated "VideoHub API on TCP 9990" traces to a GitHub discussion, not the manufacturer.</td></tr>
+      <tr><td>Astera Titan/Helios + Art-Net</td><td>The open protocol never reaches the battery: Art-Net enters via a mains-powered DataLink that must sit next to the lights. Four figures, price unpublished.</td></tr>
+      <tr><td>Sonifex SignalLED LD-40</td><td>GPI-only, no network protocol - needs a Shelly in front of it anyway. Both Sonifex domains failed (404 / expired TLS cert).</td></tr>
+      <tr><td>Blackmagic ATEM / Datavideo / Neewer / Desview tally</td><td>All switcher-side distribution: each assumes a video switcher is the source of truth, so driving one means emulating a switcher. Ours is an HTTP service.</td></tr>
+      <tr><td>Vestaboard / Vestaboard Note</td><td>Textbook local API at $999-$3,499 for a boolean. Two orders of magnitude off.</td></tr>
+      <tr><td>Tidbyt Gen 2</td><td>Not manufactured ("taking a break from manufacturing"), cloud-gated push, <code>pixlet</code> last touched 2024-09-30.</td></tr>
+      <tr><td>Divoom Pixoo-64</td><td>Divoom's own guide disclaims the local HTTP API as "community reverse-engineered, not officially documented or supported". No read-back.</td></tr>
+      <tr><td>Inkplate 6</td><td>Out of stock ~6 weeks; converts a Node/TS project into a firmware project; still carries the e-ink latency tax.</td></tr>
+      <tr><td>M5PaperS3</td><td>Store listing prefixed <code>[EOL]</code>; price unverified.</td></tr>
+      <tr><td>Adafruit MagTag</td><td>Inverts the push model (Tension 2), ~$55.85 all-in across three SKUs, firmware you write. Best battery silicon, worst latency fit.</td></tr>
+      <tr><td>Pimoroni Badger 2040 W</td><td>"We no longer stock this product."</td></tr>
+      <tr><td>Pixelblaze V3</td><td>Sold out, requires soldering, undocumented WebSocket protocol, no status read.</td></tr>
+      <tr><td>LIFX color bulb</td><td>Real documented LAN/UDP reads, but mains-only and strictly dominated by the Athom bulb at ~1/4 the price with the same story. Demoted from the prior pass's runner-up.</td></tr>
+      <tr><td>TP-Link Kasa / Tapo</td><td><code>tplink-smarthome-api</code> last pushed 2023-11-15; no battery product; worse than Shelly or Tasmota for the identical job.</td></tr>
+      <tr><td>Generic BLE LED controllers (ELK-BLEDOM etc.)</td><td>No read characteristic, no canonical manufacturer, unmaintained Python hobby repos, Node path depends on <code>@abandonware/noble</code> (pushed 2025-02-09).</td></tr>
+      <tr><td>IKEA VAPPEBY</td><td>A rechargeable Bluetooth <em>speaker</em> lamp, not a smart light. No control protocol.</td></tr>
+      <tr><td>Hue Go over Bluetooth without a Bridge</td><td>Technically possible but puts the driver on <code>@abandonware/noble</code>. The Bridge path dominates.</td></tr>
+      <tr><td>Visionect</td><td>Enterprise signage licensing, no public pricing. Wrong tier.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  </div>
+</details>
+
+<details>
+  <summary>Open questions that gate specific purchases</summary>
+  <div class="body">
+  <ul style="color:var(--dim);padding-left:20px">
+    <li><strong>Hue Go</strong> - battery runtime, and whether the Zigbee radio stays alive on
+    battery. Philips's support page renders the FAQ questions but not the answers; one unread
+    question is "What is the difference between standby and sleep mode?" <em>Gates #5.</em></li>
+    <li><strong>WiZ Mobile</strong> - radio-on-battery behaviour, and WiZ's own statement on
+    local communication (help-centre page 403s). The UDP:38899 protocol has no official spec.
+    <em>Gates #8.</em></li>
+    <li><strong>Cuebi</strong> - what UDP port and address/index does it listen on in TSL mode,
+    and can Roland Smart Tally mode be pointed at an arbitrary IP? A yes to the second makes
+    Cuebi a top-5 candidate with zero driver code; a no to both makes it unbuyable.
+    <em>Gates #17.</em></li>
+    <li><strong>BUSY Bar</strong> - runtime at our duty cycle (dim, mostly-static ON AIR
+    frame), and how to claim a display priority high enough that
+    <code>POST /display/draw</code> never 409s.</li>
+    <li><strong>Shelly 1 Gen4</strong> - does the plain Gen4 report <code>apower</code>, or is
+    a 1PM needed? Documented "shown if applicable".</li>
+    <li><strong>Umbra Cono</strong> - whether a Thread border router exists in the house at all.
+    <code>matter.js</code> is a controller, not a border router.</li>
+    <li><strong>Ulanzi</strong> - whether flashing AWTRIX voids warranty, and real runtime at
+    low brightness.</li>
+    <li><strong>Embrava</strong> - everything. Needs a human with a browser.</li>
+  </ul>
+  </div>
+</details>
+
+<footer>
+  Researched 2026-08-10 by five parallel segment agents (consumer smart lighting &middot;
+  purpose-built busylights &middot; broadcast tally and studio signage &middot; maker
+  ESP32-class &middot; displays), judged and re-verified against primary sources.
+  Prices and availability were accurate on 2026-08-10 and will drift.
+  Full sourcing, verification log and uncertainty list:
+  <code>docs/research/2026-08-10-onair-light-hardware-slate.md</code> &middot; GitHub issue #1.
+  <br><br>
+  Amazon links on this page are <strong>search queries, not verified product listings</strong> -
+  Amazon blocks automated fetching, so no ASIN was confirmed. Every "Direct" link was fetched
+  and verified.
+</footer>
+
+</div>
+
+<script>
+  const rows = [...document.querySelectorAll('#slate tbody tr')];
+  const btns = [...document.querySelectorAll('.controls button')];
+  btns.forEach(b => b.addEventListener('click', () => {
+    btns.forEach(x => x.setAttribute('aria-pressed', x === b));
+    const f = b.dataset.f;
+    rows.forEach(r => {
+      let show;
+      if (f === 'all') show = true;
+      else if (f === 'battery') show = r.dataset.battery === '1';
+      else if (f === 'pollable') show = r.dataset.pollable === '1';
+      else show = r.dataset.tier.split(' ').includes(f);
+      r.style.display = show ? '' : 'none';
+    });
+  }));
+</script>
+</body>
+</html>
