@@ -51,9 +51,14 @@ else (state, light control, API) lives on the receiver.
 - **Receiver** - the role of the device/computer that receives the state change and
   drives the light. Mac Mini first (development), Raspberry Pi as the long-term host
   (D-4). Never the work Mac.
-- **On-air light** - the physical light (or display). Hardware TBD; research ticket open.
-  Wi-Fi or Bluetooth, preferably battery operated and pollable for real status.
-- **Call state** - boolean, ON_AIR / OFF_AIR. The single fact the system communicates.
+- **On-air light** - the physical light or display. Since D-16: a DIY ESP32 running
+  ESPHome, driving an SH1106 OLED today and a colour lamp later (D-20). Firmware:
+  `jwnichols3/rocket-esp32`.
+- **Call state** - since D-18, one of three rungs on a ladder:
+  `available < interruptible < dnd`. Stored as `level`. The old boolean survives as
+  `intended`, a derived read-only projection (`available` -> `off`, anything else -> `on`).
+- **Hold** - a persisted **floor** on `level`, set by a manual write (D-19). The detector
+  may raise above it but never lower below it. Released explicitly, never on a timer.
 - **On-air API** - the REST service on the receiver: set state, query state. The
   system's source of truth, callable by the detector or any other client. Contract:
   `docs/api-contract.md`.
@@ -74,35 +79,29 @@ else (state, light control, API) lives on the receiver.
 - [ ] Sensing mechanism: mic/camera-in-use (macOS APIs / log stream), process + window
       detection, CGDisplayStream, or Zoom/Meet-specific signals? (vcrec repo has prior
       art on macOS meeting detection - check its detection registry.)
-- [ ] Light hardware: which Wi-Fi/BT tally, busylight or display? Research is done - 17
-      ranked options across consumer/prosumer/production tiers, priced and sourced, in
-      `docs/research/2026-08-10-onair-light-hardware-slate.md` (supersedes the 2026-08-05
-      pass). The pick is Rocket's call; issue #1 carries the summary. Two structural
-      tradeoffs have to be settled by that choice: **battery XOR genuine `confirmed`**
-      (only two products on the whole slate give both), and **battery XOR latency** (a
-      deep-sleeping device cannot be pushed to, so lag equals its poll interval).
-      **Update 2026-08-20:** Rocket bought an ELEGOO ESP-32 Super Starter Kit, which
-      reopens the question with a build option. Judged research:
-      `docs/research/2026-08-20-esp32-diy-light.md` (verdict: build, ESPHome firmware,
-      server-push + device-read protocol); plan:
-      `docs/superpowers/plans/2026-08-20-esp32-onair-light.md`. A USB-powered board whose
-      firmware we write dissolves both tensions above. Proposed D-16..D-19 and the
-      D-6/D-12 amendments are drafted in the research doc, pending Rocket's call.
+- [x] Light hardware: **resolved 2026-08-23, see D-16.** DIY ESP32 (Elegoo EL-KIT-032)
+      running ESPHome, firmware in `jwnichols3/rocket-esp32`. The road there:
+      `docs/research/2026-08-10-onair-light-hardware-slate.md` (17 ranked buy options),
+      `docs/research/2026-08-20-esp32-diy-light.md` (build-vs-buy, verdict build), and
+      `docs/research/2026-08-22-wall-indicator.md` (what is readable at 20 ft). The two
+      structural tensions the slate found - battery XOR genuine `confirmed`, and battery
+      XOR latency - are dissolved rather than resolved: a USB-powered board whose firmware
+      we write is always-awake, sub-second and honestly readable.
 - [x] REST API shape: endpoints, auth, port, state model - resolved, see
       `docs/api-contract.md` and D-5..D-7.
-- [ ] Light behavior: binary on/off only, or colors/states (in call vs camera on)?
+- [x] Light behavior: **resolved 2026-08-23, see D-18.** Three rungs -
+      `available < interruptible < dnd` - named semantically, not by colour, so the mono
+      OLED and a future colour lamp are two renderers of one state. Colour mapping and the
+      accessibility problem with red/green are in `docs/research/2026-08-22-wall-indicator.md`.
 - [x] Pi packaging: npx one-command install + systemd unit - resolved, see D-10 and
       `docs/pi-setup.md`.
-- [ ] How does the API confirm the light actually changed (ack/status from the light)
-      vs just recording intent? Partly answered by the 2026-08-10 research: a real read
-      is available on several candidates (Shelly `Switch.GetStatus` -> `output` + measured
-      `apower`, WLED `/json/state` -> `on`, BUSY Bar `/busybar/smart_home/switch`, Hue
-      `reachable`), but every purpose-built battery busylight is write-only by design.
-      Answered in full for the DIY path by the 2026-08-20 research: poll the device's own
-      read every 10s, re-assert on mismatch, decay `confirmed` to `unknown` after 30s.
-      Note the live gap it closes - `setConfirmed` is called only from `src/app.ts:31,34`
-      and `src/server.ts:168`, so today no code path can return `confirmed` to `unknown`
-      without another write, which `docs/api-contract.md:14` already requires.
+- [x] How does the API confirm the light actually changed vs just recording intent?
+      **resolved 2026-08-23, see D-17/D-18.** `confirmed` becomes a real `GET` of the
+      device's own state, plus a frame counter so it describes pixels rather than a
+      variable. Two traps drove the design: the device's write returns `200` *before*
+      applying the value and silently drops invalid options, so read-back is mandatory; and
+      it decays to `unknown` on stale evidence, closing a live gap where no code path could
+      return `confirmed` to `unknown` without another write.
 
 ## Decisions
 
@@ -195,3 +194,72 @@ else (state, light control, API) lives on the receiver.
   npx-based install rejected: the npx cache is not a stable home for a plist to
   point at, and it double-builds; amends D-10 - `npx github:` remains only a
   throwaway demo, never an install or boot path.
+- **D-16 (2026-08-23)** Light hardware: **DIY ESP32** - the Elegoo EL-KIT-032 DevKit board
+  running **ESPHome** on `framework: esp-idf`, with an SH1106 128x64 mono OLED. Lifts the
+  D-12 hold; #1 and #6 unpark. Firmware lives in its own **private** repo,
+  `jwnichols3/rocket-esp32` (`~/code/esp32`), not in this one - it already existed as a
+  working lab with its own uv/Makefile toolchain, so D-19's "`firmware/` in this repo"
+  proposal from `docs/research/2026-08-20-esp32-diy-light.md` is **rejected in favour of the
+  split that already happened**. The wire contract stays here in `docs/api-contract.md`,
+  which is what survives the split in both directions. Chosen over the 2026-08-10 slate's
+  Athom WLED Slim ($11.85) because it is the only option that is always-awake, sub-second and
+  honestly readable at once, and because Rocket wants agent-built firmware. ESPHome is pinned
+  to `2026.8.0` in `pyproject.toml`: the REST URL scheme **changed in that release** (the
+  entity *name* replaced `domain-object_id`), so an unreviewed bump silently breaks every
+  driver URL. Re-run the wire transcript after any bump.
+- **D-17 (2026-08-23)** Device transport: **plain HTTP on port 80** via ESPHome's
+  `web_server` (`version: 2`, no `local:`), served by ESP-IDF's `esp_http_server` - no
+  framework switch, +26 KB flash, measured 51.2% total. `POST /select/Presence/set?option=X`
+  to write, `GET /select/Presence` to read. The native API (6053) stays enabled for
+  `make logs` / `make flash` only. Rejected: the native API as the driver transport - it
+  would cost ~600 lines of hand-rolled Noise crypto against ~110 lines of `fetch`, and D-11
+  authorises hand-rolling *small* things, which this is not. **Basic auth is mandatory**
+  (`type: basic` written out explicitly - the default flips to digest in ESPHome 2027.1.0):
+  the write is a CORS *simple request*, so without auth any web page Rocket visits can force
+  `available` on the device, and `confirmed` would faithfully vouch for it. This credential
+  is separate from D-7's `ONAIR_TOKEN` - that guards clients->API, this guards API->device.
+  Two facts the driver must respect: the write's `200` is sent *before* the value is applied
+  and invalid options are silently dropped, so **read-back is mandatory**; and an unmatched
+  URL closes the socket with no HTTP response, surfacing as `ECONNRESET`, which looks exactly
+  like a dead device.
+- **D-18 (2026-08-23)** State model: **three rungs on a ladder** -
+  `available(0) < interruptible(1) < dnd(2)` - stored as one field `level`. Names are
+  semantic, not colours: the mono OLED and a future colour lamp are two renderers of the same
+  state. `intended` survives as a **derived, read-only projection** (`level === 'available'
+  ? 'off' : 'on'`) kept on the wire *and* on disk, so Bitfocus Companion (D-11), week-old
+  kiosk tabs (D-9/D-10) and a D-14 rollback all keep working; removing it is a separate,
+  later, boring ticket. **Amends D-6**, and the amendment is written on the ladder rather
+  than as "no auto-GREEN", because on three rungs a `dnd -> interruptible` decay is a new
+  failure D-6's words do not cover but its rationale plainly forbids:
+  > **The server never lowers `level`, and never asserts a lower rung to the device, without
+  > fresh evidence (`ageSeconds <= 90`). Raising or matching is always allowed. Absence of
+  > information never renders below `dnd`.**
+  Auto-*raising* on staleness is also rejected: it manufactures a state nobody asserted, is
+  sticky, and staleness already has a home in this system - presentation (the STALE badge),
+  not state. **Amends D-12**: its "`confirmed` stays `unknown`" consequence is retired -
+  `confirmed` becomes a real device read plus a frame counter, so it describes pixels rather
+  than a variable.
+- **D-19 (2026-08-23)** **Manual hold**, built in v1 rather than deferred (Rocket's call,
+  2026-08-23, against the recommendation to defer until the detector exists). A manual write
+  may set a **hold**, which is a **floor on `level`**, persisted, and visible in
+  `GET /status` and on the device. Rules: writes with `source: "detector"` may **raise** the
+  level above the floor but may **never lower it below** the floor; manual and direct API
+  writes always apply and may move or clear the floor. The floor deliberately does not block
+  escalation - blocking a detector's `dnd` would leave the light saying "come in" while
+  Rocket is on camera, which is the invariant violation in a new costume. The floor
+  **persists through** an escalation, so when a call ends and the detector writes
+  `available`, the hold blocks that lowering and the light settles back to the held rung -
+  "I am interruptible today" survives a meeting. **Release is explicit only, never a TTL**,
+  consistent with D-6. The hold is intent, like `intended`, so it never decays like
+  `confirmed` does. This gives `source` (`docs/api-contract.md`) real precedence semantics
+  for the first time; the contract's "no precedence semantics in v1 (last write wins)" line
+  must be updated.
+- **D-20 (2026-08-23)** Renderers: the colour lamp, when it lands, is a **second renderer on
+  the same ESP32**, not a second device - the OLED sits on I2C and a WS2812 strip on the RMT
+  peripheral with no conflict, GPIO4 is free, and it costs extra YAML with **zero new
+  TypeScript**. The state model is renderer-agnostic by construction (D-18), so this is a
+  firmware-only change. Deferred until the HTTP integration works end to end: a renderer
+  cannot be debugged before there is state to render. Research:
+  `docs/research/2026-08-22-wall-indicator.md` - which also establishes that **no OLED at any
+  price reaches 20 ft** (the market ceiling is a 5.5" 256x64 at ~11.9 ft), so the wall
+  indicator for the stairs is a colour glow and the OLED is the close-range readout.
