@@ -53,6 +53,11 @@ export async function createApp(opts: AppOptions): Promise<App> {
     const fresh = store.ageSeconds() <= 90;
     if (cur !== 'unknown' && RANK[want] < RANK[cur] && !fresh) {
       log(`[onair] boot: device says ${cur}, our stale ${want} is lower - adopting the device`);
+      // Adopt into `level`, not only `confirmed`. `level` is what every other renderer
+      // draws, so adopting halfway leaves the browser page green beside a red panel -
+      // the same lie in a different window. Raising is always ladder-legal, and a live
+      // device read is fresh evidence of the higher rung.
+      store.write(cur, 'device', new Date());
       store.setConfirmed(cur);
     } else {
       store.setConfirmed(await driver.set(want));

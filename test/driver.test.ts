@@ -24,13 +24,15 @@ interface FakeDevice {
   option: string;
   /** When set, the POST is accepted with 200 but the value is NOT applied. */
   swallowWrites: boolean;
+  /** The device answers the POST BEFORE applying the value. This models that gap. */
+  applyDelayMs: number;
   status: number | null;
   frames: number;
   close: () => Promise<void>;
 }
 
 async function fakeDevice(): Promise<FakeDevice> {
-  const d: Partial<FakeDevice> = { posts: [], gets: [], auth: [], option: 'dnd', swallowWrites: false, status: null, frames: 0 };
+  const d: Partial<FakeDevice> = { posts: [], gets: [], auth: [], option: 'dnd', swallowWrites: false, applyDelayMs: 0, status: null, frames: 0 };
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     d.auth!.push(req.headers.authorization ?? '');
@@ -43,7 +45,11 @@ async function fakeDevice(): Promise<FakeDevice> {
       // The device answers BEFORE applying, and silently drops an invalid option.
       res.writeHead(200, { 'content-length': '0' }).end();
       const opt = url.searchParams.get('option');
-      if (!d.swallowWrites && opt && ['dnd', 'interruptible', 'available'].includes(opt)) d.option = opt;
+      const apply = (): void => {
+        if (!d.swallowWrites && opt && ['dnd', 'interruptible', 'available'].includes(opt)) d.option = opt;
+      };
+      if (d.applyDelayMs! > 0) setTimeout(apply, d.applyDelayMs!).unref();
+      else apply();
       return;
     }
     if (req.method === 'GET' && url.pathname === '/select/Presence') {
@@ -160,5 +166,21 @@ test('a transient failure is retried once', async () => {
   const before = d.auth.length;
   assert.equal(await driver.read(), 'unknown');
   assert.equal(d.auth.length - before, 2, 'one attempt plus one retry');
+  await d.close();
+});
+
+test('set waits out the apply gap: the device answers the POST before the value lands', async () => {
+  const d = await fakeDevice();
+  d.applyDelayMs = 120; // the 200 arrives first; an immediate read-back sees the OLD value
+  const driver = driverFor(d);
+  assert.equal(await driver.set('interruptible'), 'interruptible', 'must not report the pre-write value');
+  await d.close();
+});
+
+test('set still reports the truth when the write genuinely never applies', async () => {
+  const d = await fakeDevice();
+  d.swallowWrites = true;
+  const driver = driverFor(d);
+  assert.equal(await driver.set('available'), 'dnd', 'a dropped option must not be papered over by retries');
   await d.close();
 });

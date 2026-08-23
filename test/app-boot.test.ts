@@ -61,6 +61,13 @@ test('boot does NOT push a stale lower level onto a device showing a higher one'
   const app = await boot(t, { stateFile, driver: light });
   assert.deepEqual(light.sets, [], 'a 1-hour-old available must not turn a live dnd green');
   assert.equal(app.store.get().confirmed, 'dnd', 'adopt what the device says instead');
+  // Adopting into `confirmed` alone is not enough: `level` is what every OTHER renderer
+  // draws, so leaving it stale shows a green browser page beside a red panel. Raising is
+  // always ladder-legal, and the device read is fresh evidence of the higher rung.
+  assert.equal(app.store.get().level, 'dnd', 'the whole store adopts the device, not just confirmed');
+  const body = (await (await fetch(`http://127.0.0.1:${app.port}/status`)).json()) as Record<string, unknown>;
+  assert.equal(body.level, 'dnd');
+  assert.equal(body.intended, 'on', 'no renderer may still be told OFF AIR');
 });
 
 test('boot DOES apply a stale HIGHER level: raising never needs fresh evidence', async (t) => {
