@@ -94,7 +94,8 @@ magnitude cheaper.
 | 0.96" OLED (owned) | $0 | 12 x 6 arcmin | **NO** - ~5x too small |
 | 1.3" SH1106 (owned) | $0 | 17 x 8 arcmin | **NO** - 3.6x too small |
 | 2.42" OLED 128x64 | $39.95 | ~30 x 15 arcmin | **NO** |
-| 3.12" OLED 256x64 (largest found) | $38.17 | 43 x 11 arcmin | **NO**, and dimmest of the field (60-80 cd/m²) |
+| 3.12" OLED 256x64 | $30.60-$38.17 | 43 x 11 arcmin | **NO**, and dim (60-80 cd/m²) |
+| **5.5" OLED 256x64** (the true market ceiling - see §9) | $69.98 | 76 x 19 arcmin | **NO** for a glance (11.9 ft), marginal at threshold (23.9 ft) |
 | **NeoPixel Stick 8 + diffuser** | **$11.90** | up to **147 x 74 arcmin** (diffuser-sized) | **YES - recommended** |
 | NeoPixel Ring 24 (bare, 65.5 mm) | $16.95 | 37 arcmin | YES, just over the 30 arcmin minimum |
 | HUB75 P3 64x32 (191x96 mm) | $44.95 | 108 x 54 arcmin | colour YES, text marginal (27 arcmin/char) |
@@ -437,3 +438,117 @@ content appears anywhere in this research.
 
 **This repo** - `CONTEXT.md` (glossary, invariants, `:67`) -
 `docs/research/2026-08-20-esp32-diy-light.md` - `/Users/john/code/esp32/configs/elegoo-esp32.yaml`
+
+---
+
+## 9. OLED purchase options (added 2026-08-22, second pass)
+
+Rocket read the verdict above and asked anyway: *"I would like to purchase a new OLED - one
+that is wide and mountable. I can find a way to power it with USB-C."* Fair - so this section
+answers that question directly. Two researchers: the market, and driver support against his
+actual config.
+
+### A correction to §1 and §2 above
+
+**The OLED ceiling recorded above was too low by 2x.** The first pass capped the field at
+3.12" / ~11.8 ft because it did not find the 5.5" part. It exists:
+
+**[FACT] Newhaven NHD-5.5-25664UCG3** - 5.5", 256x64, SSD1322 controller, **$69.98**, low
+stock at Newhaven. Active area **135.65 x 33.89 mm**. Outer PCB 147 x 64 mm, **four M3 corner
+holes and a metal bezel**. Five Newhaven mechanical drawings were read directly (the PDF pages
+were rendered, because the dimensions are vector annotations that `pdftotext` cannot reach).
+
+**The "largest is dimmest" claim in §2 applies only to the 3.12".** The 5.5" runs
+**100/150 cd/m² at 10,000:1** - as bright as the SH1106 Rocket already owns.
+
+**[COMPUTED]** 5.5" viewing distance: **11.9 ft** for a comfortable glance at a short word,
+**23.9 ft** at MIL-STD threshold ("resolvable if you stop and look at it").
+
+### The market ceiling, established three ways
+
+**[FACT] The 5.5" 256x64 SSD1322 is the biggest OLED a hobbyist can buy**, corroborated
+independently: Winstar's range tops out at 5.5" (`WEX025664D` / `WEN025664D`), Newhaven's
+tops out there too, and Crystalfontz's entire 256x64 line stops at 3.12". PMOLED physics caps
+it - anything larger is AMOLED with a MIPI-DSI interface, which is not an ESP32 part.
+
+**So no OLED reaches 20 ft on the glance criterion. The whole market tops out around 12 ft.**
+
+### Buy table
+
+| Module | Size | Active area | Controller | Interface | Price | Stock | Glance / threshold | Mountable |
+|---|---|---|---|---|---|---|---|---|
+| **Newhaven NHD-5.5-25664UCG3** | 5.5" 256x64 | 135.65 x 33.89 mm | SSD1322 | SPI | **$69.98** | low | **11.9 / 23.9 ft** | **4x M3 + metal bezel** |
+| Crystalfontz CFAL25664B-Y-B1 | 3.12" 256x64 | - | SSD1322 | SPI | $30.60 | yes | 6.8 / 13.5 ft | check drawing |
+| Newhaven NHD-3.12-25664UCY2 | 3.12" 256x64 | - | SSD1322 | SPI | $38.17 | yes | 6.8 / 13.5 ft | yes |
+| Adafruit 2719 | 2.42" 128x64 | - | **see risk** | I2C/SPI | $39.95 | **in stock** | 5.2 / 10.3 ft | yes |
+
+**[FACT] Two traps verified against ESPHome source at tag 2026.8.0:** there is **no
+`ssd1309`, `ssd1325`, `ssd1362` or `ssd1363` component**. That kills the tempting
+**Crystalfontz $16 256x64** (it is SSD1362, and also wants a 0.3 mm ZIF flex and a 12 V rail),
+and it puts a real risk flag on the Adafruit 2.42", which **moved to SSD1309 in 2023**.
+Do not buy the 2.42" without confirming its current controller.
+
+**[FACT] Character OLEDs are disqualified outright.** Newhaven's 20x4 has **4.75 mm** glyphs
+fixed in silicon - **3.6 ft**, worse than what is already on the bench, despite the module
+being 98 mm wide.
+
+### It works on his exact setup - verified by compiling, not by inference
+
+**[FACT] `display: platform: ssd1322_spi`, model `"SSD1322 256x64"`** - that is the only model
+string the platform accepts. SPI only; there is no `ssd1322_i2c` or parallel platform, so
+avoid parallel-only modules. 256x64 is also **the largest and widest OLED in all of ESPHome
+2026.8.0**; the runners-up are 128x128.
+
+**[FACT] Every OLED component works under esp-idf.** All 14 ssd13xx source files were grepped
+for `only_with_framework` / `only_on` / `USE_ESP_IDF` / `USE_ARDUINO`: **zero framework guards
+exist.** SPI maps `spi_esp_idf.cpp` onto `ESP32_IDF`, with the source comment "ESP32 uses
+ESP-IDF SPI driver for both Arduino and IDF frameworks."
+
+**[FACT] Two displays coexist** - the researcher installed ESPHome 2026.8.0 locally and
+compiled Rocket's real config plus the delta: `INFO Successfully compiled program.`, exit 0.
+RAM 25.3% -> 26.0% (**+1,140 B static**; the 8 KB greyscale buffer is runtime heap, not
+static), flash +44.6 KB (mostly the size-44 font), 133,820 B static DRAM free. **RAM is not a
+constraint.**
+
+### Three things that will bite
+
+1. **[FACT] Power is the real cost, not GPIO or RAM.** The SSD1322 has **no VCC charge pump**,
+   unlike the SH1106 - a full-text search of the datasheet finds no "charge pump" / "boost" /
+   "DC-DC". Newhaven's 3.12" module draws **310 mA typ / 340 mA max** at 3.3 V, roughly **7x
+   the SH1106**. That plus a transmitting ESP32 is 580 mA through the DevKit's AMS1117 =
+   0.99 W, junction ~114 C, out of spec above ~36 C ambient.
+   **Fix: set the module's jumper Option #1 and feed its boost input from the 5V pin, not
+   3V3.** The 3V3 load then drops to 200 uA and the total is ~410 mA, inside USB's guaranteed
+   500 mA. Without USB-PD negotiation, 500 mA is the only number you are guaranteed.
+2. **[FACT] A silent rendering footgun.** `color_to_grayscale4` reads `color.white`, and the
+   three-argument `Color(r,g,b)` constructor sets `w = 0`. So `Color(255,255,255)` - **and the
+   CVD-safe green `Color(0,255,120)` recommended in §4 above** - render **BLACK** on
+   SSD1322/25/27, while working fine on the SH1106. Use `COLOR_ON`, or `Color(0,0,0,N)` to
+   dim.
+3. **[FACT] A YAML trap.** Appending a second `display:` or `font:` block fails with
+   `Duplicate key`. They must be merged as list items under the existing key, and the SH1106
+   needs an `id:` added ("Required if there are multiple displays").
+
+**Pin map** (avoids GPIO5 - which is both the default VSPI CS **and** a strapping pin, per
+ESPHome's own `_ESP32_STRAPPING_PINS = {0, 2, 5, 12, 15}`, independently confirming the
+correction in §3): **CLK 18, MOSI 23, CS 14, DC 27, RESET 26.** This deliberately spends ADC2
+pins, which are useless while Wi-Fi is up, and preserves GPIO32/33 on ADC1 for a future light
+sensor plus GPIO4 for the LED strip. The only strapping warning in the build is his
+pre-existing GPIO2 LED.
+
+### The honest comparison
+
+**[FACT] Adafruit 2278, HUB75 P4 matrix** - **$39.95, in stock**, 255 x 127 mm, M3-mountable,
+full colour. **[COMPUTED] 24.0 ft** for a four-letter word at a comfortable glance. That is
+**$30 cheaper than the 5.5" OLED and double the range**, and it satisfies "wide and
+mountable" too. It costs 13-14 GPIOs and its own power supply (see §3).
+
+**Supported is not the same as readable.** The 5.5" OLED is a genuine upgrade, a properly
+mountable object, and the right part if the goal is a rich text readout at conversational
+distance. It is still not the 20 ft stairs answer.
+
+### Sourcing caveats
+
+Waveshare, Winstar and BuyDisplay all return **HTTP 403** to automated fetch - everything from
+those vendors is flagged UNCONFIRMED in the source file rather than reconstructed from search
+snippets. The full reports carry 11 UNCONFIRMED flags between them.
