@@ -364,8 +364,11 @@ test('GET /ui serves the control panel + API console page', async () => {
   for (const marker of [
     '/status',
     '/state',
-    '/on',
-    '/off',
+    '/dnd',
+    '/interruptible',
+    '/available',
+    'btn-hold',
+    'btn-release',
     '/message',
     'DELETE',
     'btn-restart',

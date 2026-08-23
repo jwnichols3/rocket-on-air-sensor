@@ -59,8 +59,16 @@ export const UI_HTML = `<!doctype html>
     background: #1b1e22; color: var(--muted);
     transition: background 0.2s, box-shadow 0.2s, color 0.2s, border-color 0.2s;
   }
-  .pill.on { background: rgba(224,49,49,0.15); color: var(--accent); border-color: var(--accent); box-shadow: 0 0 12px rgba(224,49,49,0.45); }
-  .pill.off { background: #1b1e22; color: var(--muted); }
+  .pill.dnd { background: rgba(224,49,49,0.15); color: var(--accent); border-color: var(--accent); box-shadow: 0 0 12px rgba(224,49,49,0.45); }
+  .pill.interruptible { background: rgba(224,169,49,0.15); color: #e0a931; border-color: #e0a931; box-shadow: 0 0 12px rgba(224,169,49,0.4); }
+  .pill.available { background: #1b1e22; color: var(--muted); }
+  .pill.unknown { background: #2a1414; color: #e0a931; border-color: #5a2a2a; }
+  #hold-pill {
+    display: none; margin-left: 8px; padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+    background: rgba(224,169,49,0.15); color: #e0a931; border: 1px solid #e0a931;
+  }
+  #hold-pill.shown { display: inline-block; }
 
   .led {
     width: 9px; height: 9px; border-radius: 50%;
@@ -127,8 +135,10 @@ export const UI_HTML = `<!doctype html>
 
   .controls-row { display: flex; gap: 12px; }
   .btn-big { flex: 1; padding: 20px; font-size: 15px; font-weight: 700; letter-spacing: 0.05em; }
-  .btn-on.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 20px rgba(224,49,49,0.5), inset 0 1px 0 rgba(255,255,255,0.15); }
-  .btn-off.active { background: #20232a; border-color: #3a3d42; color: var(--text); }
+  .btn-dnd.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 20px rgba(224,49,49,0.5), inset 0 1px 0 rgba(255,255,255,0.15); }
+  .btn-interruptible.active { background: #b38600; border-color: #e0a931; color: #fff; box-shadow: 0 0 20px rgba(224,169,49,0.45), inset 0 1px 0 rgba(255,255,255,0.15); }
+  .btn-available.active { background: #20232a; border-color: #3a3d42; color: var(--text); }
+  .btn-hold.active { background: #e0a931; border-color: #e0a931; color: #1b1e22; }
 
   .err-strip {
     margin-top: 8px;
@@ -176,8 +186,9 @@ export const UI_HTML = `<!doctype html>
   #log li:last-child { border-bottom: none; }
   @keyframes slide-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
   .ev-time { color: var(--muted); }
-  .ev-intended.on { color: var(--accent); font-weight: 700; }
-  .ev-intended.off { color: var(--muted); }
+  .ev-level.dnd { color: var(--accent); font-weight: 700; }
+  .ev-level.interruptible { color: #e0a931; font-weight: 700; }
+  .ev-level.available { color: var(--muted); }
   .ev-source { color: var(--text); }
   .ev-message { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #log-empty { color: var(--muted); font-size: 13px; }
@@ -217,7 +228,7 @@ export const UI_HTML = `<!doctype html>
 <body>
   <header>
     <span id="wordmark">on-air</span>
-    <span id="pill" class="pill off">OFF AIR</span>
+    <span id="pill" class="pill unknown">NO DATA</span><span id="hold-pill">HELD</span>
     <span id="led" class="led"></span>
     <span id="age">age &mdash;</span>
     <input id="token" type="password" placeholder="token" autocomplete="off" spellcheck="false">
@@ -228,8 +239,13 @@ export const UI_HTML = `<!doctype html>
     <section class="card">
       <h2>Transport</h2>
       <div class="controls-row">
-        <button id="btn-on" class="btn btn-big btn-on">ON</button>
-        <button id="btn-off" class="btn btn-big btn-off">OFF</button>
+        <button id="btn-dnd" class="btn btn-big btn-dnd">ON AIR</button>
+        <button id="btn-interruptible" class="btn btn-big btn-interruptible">INTERRUPTIBLE</button>
+        <button id="btn-available" class="btn btn-big btn-available">AVAILABLE</button>
+      </div>
+      <div class="controls-row">
+        <button id="btn-hold" class="btn btn-sm btn-hold">Hold this level</button>
+        <button id="btn-release" class="btn btn-sm">Release hold</button>
       </div>
       <div id="controls-err" class="err-strip"></div>
     </section>
@@ -280,19 +296,26 @@ export const UI_HTML = `<!doctype html>
         <div class="row"><span class="row-label">PUT /state</span>
           <div class="row-actions"><button class="btn btn-sm send-btn">Send</button><button class="btn btn-sm copy-btn">&#x29c9; curl</button></div>
         </div>
-        <textarea class="row-body" rows="2">{"onAir": true, "source": "webui"}</textarea>
+        <textarea class="row-body" rows="2">{"level": "dnd", "source": "webui"}</textarea>
         <div class="well"></div>
       </div>
 
-      <div class="console-row" id="row-on">
-        <div class="row"><span class="row-label">POST /on</span>
+      <div class="console-row" id="row-dnd">
+        <div class="row"><span class="row-label">POST /dnd</span>
           <div class="row-actions"><button class="btn btn-sm send-btn">Send</button><button class="btn btn-sm copy-btn">&#x29c9; curl</button></div>
         </div>
         <div class="well"></div>
       </div>
 
-      <div class="console-row" id="row-off">
-        <div class="row"><span class="row-label">POST /off</span>
+      <div class="console-row" id="row-interruptible">
+        <div class="row"><span class="row-label">POST /interruptible</span>
+          <div class="row-actions"><button class="btn btn-sm send-btn">Send</button><button class="btn btn-sm copy-btn">&#x29c9; curl</button></div>
+        </div>
+        <div class="well"></div>
+      </div>
+
+      <div class="console-row" id="row-available">
+        <div class="row"><span class="row-label">POST /available</span>
           <div class="row-actions"><button class="btn btn-sm send-btn">Send</button><button class="btn btn-sm copy-btn">&#x29c9; curl</button></div>
         </div>
         <div class="well"></div>
@@ -339,8 +362,17 @@ export const UI_HTML = `<!doctype html>
     var pill = document.getElementById('pill');
     var led = document.getElementById('led');
     var ageEl = document.getElementById('age');
-    var btnOn = document.getElementById('btn-on');
-    var btnOff = document.getElementById('btn-off');
+    var LEVELS = ['available', 'interruptible', 'dnd'];
+    var WORDS = { available: 'OFF AIR', interruptible: 'INTERRUPTIBLE', dnd: 'ON AIR', unknown: 'NO DATA' };
+    var holdPill = document.getElementById('hold-pill');
+    var btnHold = document.getElementById('btn-hold');
+    var btnRelease = document.getElementById('btn-release');
+    var levelButtons = {
+      available: document.getElementById('btn-available'),
+      interruptible: document.getElementById('btn-interruptible'),
+      dnd: document.getElementById('btn-dnd')
+    };
+    var currentLevel = 'unknown';
     var msgInput = document.getElementById('msg-input');
     var msgCounter = document.getElementById('msg-counter');
     var msgCurrent = document.getElementById('msg-current');
@@ -529,7 +561,7 @@ export const UI_HTML = `<!doctype html>
     var lastLoggedKey = null;
 
     function logKey(s) {
-      return s.intended + '|' + s.source + '|' + (s.message === null || s.message === undefined ? '' : s.message);
+      return s.level + '|' + (s.hold || '') + '|' + s.source + '|' + (s.message === null || s.message === undefined ? '' : s.message);
     }
 
     function addLogRow(s) {
@@ -549,10 +581,11 @@ export const UI_HTML = `<!doctype html>
       timeSpan.textContent = time;
       li.appendChild(timeSpan);
 
-      var intendedSpan = document.createElement('span');
-      intendedSpan.className = 'ev-intended ' + s.intended;
-      intendedSpan.textContent = s.intended === 'on' ? 'ON AIR' : 'OFF AIR';
-      li.appendChild(intendedSpan);
+      var levelSpan = document.createElement('span');
+      var lv = LEVELS.indexOf(s.level) === -1 ? (s.intended === 'on' ? 'dnd' : 'available') : s.level;
+      levelSpan.className = 'ev-level ' + lv;
+      levelSpan.textContent = WORDS[lv] + ((s.hold === 'interruptible' || s.hold === 'dnd') ? ' (held)' : '');
+      li.appendChild(levelSpan);
 
       var sourceSpan = document.createElement('span');
       sourceSpan.className = 'ev-source';
@@ -576,21 +609,42 @@ export const UI_HTML = `<!doctype html>
       // A fresh status event means we're back in sync - clear any stale write errors.
       clearErr(controlsErr);
       clearErr(msgErr);
-      var on = s.intended === 'on';
-      pill.textContent = on ? 'ON AIR' : 'OFF AIR';
-      pill.className = 'pill ' + (on ? 'on' : 'off');
-      btnOn.classList.toggle('active', on);
-      btnOff.classList.toggle('active', !on);
+      var level = s.level;
+      if (LEVELS.indexOf(level) === -1) level = s.intended === 'on' ? 'dnd' : 'available';
+      currentLevel = level;
+      pill.textContent = WORDS[level];
+      pill.className = 'pill ' + level;
+      for (var i = 0; i < LEVELS.length; i++) {
+        levelButtons[LEVELS[i]].classList.toggle('active', LEVELS[i] === level);
+      }
+      var held = s.hold === 'interruptible' || s.hold === 'dnd';
+      holdPill.classList.toggle('shown', held);
+      holdPill.textContent = held ? 'HELD AT ' + WORDS[s.hold] : 'HELD';
+      btnHold.classList.toggle('active', held);
       msgCurrent.innerHTML = 'Current: <b></b>';
       msgCurrent.querySelector('b').textContent = (s.message !== null && s.message !== undefined) ? s.message : '(none)';
       addLogRow(s);
     }
 
-    function doAction(path) {
-      reportWrite(fetch(path + '?source=webui', { method: 'POST', headers: authHeaders() }), 'POST ' + path, controlsErr);
+    function doAction(path, hold) {
+      var q = '?source=webui' + (hold === undefined ? '' : '&hold=' + (hold ? '1' : '0'));
+      reportWrite(fetch(path + q, { method: 'POST', headers: authHeaders() }), 'POST ' + path, controlsErr);
     }
-    btnOn.addEventListener('click', function () { doAction('/on'); });
-    btnOff.addEventListener('click', function () { doAction('/off'); });
+    for (var li = 0; li < LEVELS.length; li++) {
+      (function (lv) {
+        levelButtons[lv].addEventListener('click', function () { doAction('/' + lv); });
+      })(LEVELS[li]);
+    }
+    // Pinning green is meaningless - a floor at the bottom rung is not a hold - so the
+    // button pins whatever rung is showing, and refuses at 'available'.
+    btnHold.addEventListener('click', function () {
+      if (currentLevel === 'available' || currentLevel === 'unknown') {
+        setErr(controlsErr, 'a hold needs a level above available');
+        return;
+      }
+      doAction('/' + currentLevel, true);
+    });
+    btnRelease.addEventListener('click', function () { doAction('/' + (currentLevel === 'unknown' ? 'dnd' : currentLevel), false); });
 
     msgInput.addEventListener('input', function () {
       msgCounter.textContent = msgInput.value.length + '/200';
@@ -647,8 +701,9 @@ export const UI_HTML = `<!doctype html>
     var consoleRows = [
       { id: 'row-status', method: 'GET', path: '/status' },
       { id: 'row-state', method: 'PUT', path: '/state' },
-      { id: 'row-on', method: 'POST', path: '/on' },
-      { id: 'row-off', method: 'POST', path: '/off' },
+      { id: 'row-dnd', method: 'POST', path: '/dnd' },
+      { id: 'row-interruptible', method: 'POST', path: '/interruptible' },
+      { id: 'row-available', method: 'POST', path: '/available' },
       { id: 'row-message-set', method: 'PUT', path: '/message' },
       { id: 'row-message-clear', method: 'DELETE', path: '/message' }
     ];
