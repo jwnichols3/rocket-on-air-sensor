@@ -149,13 +149,32 @@ test('verifyOptions returns null for an unreachable device: do not crash on a de
   assert.equal(await driver.verifyOptions(), null);
 });
 
-test('repainted compares the frame counter across calls', async () => {
+test('repainted reports true as soon as the frame counter advances', async () => {
   const d = await fakeDevice();
   const driver = driverFor(d);
   assert.equal(await driver.repainted(), null, 'the first call has nothing to compare to');
-  assert.equal(await driver.repainted(), false, 'a frozen counter means the panel did not repaint');
   d.frames = 7;
   assert.equal(await driver.repainted(), true);
+  await d.close();
+});
+
+test('repainted says "cannot tell", not "frozen", while the sensor has yet to republish', async () => {
+  const d = await fakeDevice();
+  // The device publishes Frames on its own interval. Polling faster than that sees the
+  // same value twice, which is not evidence the panel stopped - and calling it frozen
+  // drops `confirmed` to unknown on a perfectly healthy panel.
+  const driver = driverFor(d, { frozenAfterMs: 10_000 });
+  await driver.repainted();
+  assert.equal(await driver.repainted(), null, 'an unchanged counter alone proves nothing');
+  await d.close();
+});
+
+test('repainted does report frozen once the counter has been static long enough', async () => {
+  const d = await fakeDevice();
+  const driver = driverFor(d, { frozenAfterMs: 30 });
+  await driver.repainted();
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(await driver.repainted(), false, 'a genuinely stuck panel must still be caught');
   await d.close();
 });
 

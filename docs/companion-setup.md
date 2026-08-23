@@ -21,9 +21,11 @@ service, add a Header field to each action: `{"Authorization": "Bearer <ONAIR_TO
 
 ## Status feedback: `generic-websocket`
 
-- **Target URL**: `ws://<host>:8484/events/ws` (or `?token=<ONAIR_TOKEN>` appended if a
-  token is set - the WS upgrade can't carry a header the way the HTTP actions can, so it
-  uses the same `?token=` query-param convention as `GET /events`)
+- **Target URL**: `ws://<host>:8484/events/ws?token=<ONAIR_TOKEN>` - the token is
+  **required** as of D-23; the bare form now gets a 401. The WS upgrade can't carry a
+  header the way the HTTP actions can, so it uses the same `?token=` query-param
+  convention as `GET /events`. Read the value with
+  `grep '^ONAIR_TOKEN=' ~/.onair/config.env`.
 - **Reconnect**: on
 - **Feedback JSON Path**: `intended`
 

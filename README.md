@@ -25,8 +25,9 @@ curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/mai
 - The **Receiver** runs the **On-air API**. The On-air API is the source of truth for
   the call state. The Receiver is a Mac Mini now. A Raspberry Pi can be the Receiver
   later (D-4).
-- The **on-air light** is the `/display` browser page (D-12). Light hardware is on
-  hold.
+- The **on-air light** is a DIY ESP32 driving an OLED panel (D-16, live since
+  2026-08-23). The `/display` browser page is a second renderer of the same state, not
+  the light itself.
 
 `CONTEXT.md` holds the glossary, the invariants, and all decisions (D-1..D-15).
 

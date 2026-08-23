@@ -317,4 +317,23 @@ else (state, light control, API) lives on the receiver.
      overwritten. The driver re-reads across that gap. Observed live, not theorised.
   Operational note: `onair restart` needs sudo with a TTY. An agent can cycle the daemon
   by killing the process and letting `KeepAlive` respawn it against a rebuilt `dist/`.
+- **D-23 (2026-08-23)** **`ONAIR_TOKEN` is now set on this host, and the API is no longer
+  unauthenticated.** D-7 left the token optional with "LAN-only exposure is the baseline
+  security model", which was defensible while the light was a browser page. It stopped
+  being defensible the moment the API drove real hardware: `POST /available` carries no
+  body and no `Content-Type`, so it is a **CORS simple request** - any page Rocket visits
+  could fire it and force the light green while he was on camera. Verified before the
+  change: `POST /available` with `Origin: https://evil.example` returned `200`. This is
+  the same "remote false-green primitive" argument that D-17 used to justify basic auth on
+  the *device*, and closing it there while leaving it open on the server achieved nothing,
+  because the server holds the device credentials and relays faithfully. The token lives in
+  `~/.onair/config.env` (0600), not in the plist. Consequences: the Companion websocket URL
+  and the `/display` kiosk URL both need `?token=`; both docs updated.
+  Also fixed alongside: **`repainted()` must distinguish "cannot tell" from "frozen".** The
+  device republishes `Frames` on its own 5s interval and the supervisor polls at 5s, so two
+  consecutive reads routinely see the same value. Reporting that as a stuck panel dropped
+  `confirmed` to `unknown` on a healthy display - observed 3 times in a 61-minute soak. An
+  unchanged counter now returns `null` until it has been static longer than any plausible
+  publish interval; a counter that goes *backwards* reads as a reboot, which is a repaint,
+  not 20 seconds of frozen panel.
 

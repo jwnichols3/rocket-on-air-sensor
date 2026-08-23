@@ -103,7 +103,10 @@ mkdir -p ~/.config/labwc   # or ~/.config/wayfire.ini's directory, per your OS v
 `~/.config/labwc/autostart` (or the equivalent wayfire autostart file):
 
 ```sh
-chromium-browser --kiosk --noerrdialogs --disable-restore-session-state http://<api-host>:8484/display &
+chromium-browser --kiosk --noerrdialogs --disable-restore-session-state 'http://<api-host>:8484/display?token=<ONAIR_TOKEN>' &
+
+# The ?token= is required as of D-23. /display is token-gated like every other GET, and
+# the page forwards the same token to its /events stream, so one query param covers both.
 ```
 
 Replace `<api-host>` with the Mac Mini's hostname/IP (or `localhost` if the API

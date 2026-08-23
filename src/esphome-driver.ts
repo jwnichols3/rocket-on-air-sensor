@@ -15,6 +15,8 @@ export interface EsphomeDriverOptions {
   /** How many times to re-read while waiting for a write to actually land. */
   confirmTries?: number;
   confirmGapMs?: number;
+  /** How long the frame counter must sit still before the panel counts as frozen. */
+  frozenAfterMs?: number;
   log?: (line: string) => void;
 }
 
@@ -41,8 +43,10 @@ export class EsphomeSelectDriver implements LightDriver {
   private readonly retryGapMs: number;
   private readonly confirmTries: number;
   private readonly confirmGapMs: number;
+  private readonly frozenAfterMs: number;
   private readonly log: (line: string) => void;
   private lastFrames: number | null = null;
+  private lastFrameChangeAt = 0;
 
   constructor(opts: EsphomeDriverOptions) {
     this.base = `http://${opts.host}`;
@@ -52,6 +56,7 @@ export class EsphomeSelectDriver implements LightDriver {
     this.retryGapMs = opts.retryGapMs ?? 400;
     this.confirmTries = opts.confirmTries ?? 3;
     this.confirmGapMs = opts.confirmGapMs ?? 80;
+    this.frozenAfterMs = opts.frozenAfterMs ?? 20_000;
     this.log = opts.log ?? console.log;
     this.headers = opts.username
       ? { authorization: `Basic ${Buffer.from(`${opts.username}:${opts.password ?? ''}`).toString('base64')}` }
@@ -123,14 +128,35 @@ export class EsphomeSelectDriver implements LightDriver {
     return isLevel(state) ? state : 'unknown';
   }
 
-  /** true if the device's frame counter advanced since the previous call. */
+  /**
+   * Has the panel repainted? `true` advanced, `false` demonstrably stuck, `null` cannot
+   * tell yet.
+   *
+   * An unchanged counter is NOT evidence the panel stopped. The device republishes
+   * `Frames` on its own interval, so polling at a comparable rate sees the same value
+   * twice as a matter of course - and reporting that as frozen drops `confirmed` to
+   * `unknown` on a perfectly healthy panel. Only a counter that has sat still longer
+   * than any plausible publish interval is real evidence.
+   */
   async repainted(): Promise<boolean | null> {
     const body = await this.getJson(`${this.base}/sensor/Frames`);
     const n = Number((body as { value?: unknown } | null)?.value);
     if (!Number.isFinite(n)) return null;
     const prev = this.lastFrames;
-    this.lastFrames = n;
-    return prev === null ? null : n > prev;
+    const now = Date.now();
+    if (prev === null || n > prev) {
+      this.lastFrames = n;
+      this.lastFrameChangeAt = now;
+      return prev === null ? null : true;
+    }
+    // A counter that went BACKWARDS means the device rebooted - which is a repaint, and
+    // re-baselines the comparison rather than reading as 20 seconds of frozen panel.
+    if (n < prev) {
+      this.lastFrames = n;
+      this.lastFrameChangeAt = now;
+      return true;
+    }
+    return now - this.lastFrameChangeAt > this.frozenAfterMs ? false : null;
   }
 
   private async getJson(url: string): Promise<unknown> {
