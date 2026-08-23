@@ -94,7 +94,7 @@ magnitude cheaper.
 | 0.96" OLED (owned) | $0 | 12 x 6 arcmin | **NO** - ~5x too small |
 | 1.3" SH1106 (owned) | $0 | 17 x 8 arcmin | **NO** - 3.6x too small |
 | 2.42" OLED 128x64 | $39.95 | ~30 x 15 arcmin | **NO** |
-| 3.12" OLED 256x64 | $30.60-$38.17 | 43 x 11 arcmin | **NO**, and dim (60-80 cd/m²) |
+| 3.12" OLED 256x64 | $38.17-$42.60 | 43 x 11 arcmin | **NO**, and dim (60-80 cd/m²) |
 | **5.5" OLED 256x64** (the true market ceiling - see §9) | $69.98 | 76 x 19 arcmin | **NO** for a glance (11.9 ft), marginal at threshold (23.9 ft) |
 | **NeoPixel Stick 8 + diffuser** | **$11.90** | up to **147 x 74 arcmin** (diffuser-sized) | **YES - recommended** |
 | NeoPixel Ring 24 (bare, 65.5 mm) | $16.95 | 37 arcmin | YES, just over the 30 arcmin minimum |
