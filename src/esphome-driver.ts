@@ -12,6 +12,9 @@ export interface EsphomeDriverOptions {
   retries?: number;
   /** Correlated burst loss on this link makes a zero-gap retry worthless. */
   retryGapMs?: number;
+  /** How many times to re-read while waiting for a write to actually land. */
+  confirmTries?: number;
+  confirmGapMs?: number;
   log?: (line: string) => void;
 }
 
@@ -36,6 +39,8 @@ export class EsphomeSelectDriver implements LightDriver {
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly retryGapMs: number;
+  private readonly confirmTries: number;
+  private readonly confirmGapMs: number;
   private readonly log: (line: string) => void;
   private lastFrames: number | null = null;
 
@@ -45,6 +50,8 @@ export class EsphomeSelectDriver implements LightDriver {
     this.timeoutMs = opts.timeoutMs ?? 2000;
     this.retries = opts.retries ?? 1;
     this.retryGapMs = opts.retryGapMs ?? 400;
+    this.confirmTries = opts.confirmTries ?? 3;
+    this.confirmGapMs = opts.confirmGapMs ?? 80;
     this.log = opts.log ?? console.log;
     this.headers = opts.username
       ? { authorization: `Basic ${Buffer.from(`${opts.username}:${opts.password ?? ''}`).toString('base64')}` }
@@ -95,7 +102,19 @@ export class EsphomeSelectDriver implements LightDriver {
     if (!ok) return 'unknown';
     // The 200 proves nothing: it is sent before the value is applied, and an invalid
     // option is dropped in silence. Only the read-back is evidence.
-    return this.read();
+    //
+    // "Before the value is applied" is literal - web_server.cpp defers the action and
+    // answers first - so a read-back issued immediately can still see the PREVIOUS
+    // value. Re-read across that gap rather than reporting a state we just overwrote.
+    // A write that genuinely never lands still reports the truth; it just costs a
+    // couple of extra reads first.
+    let got: Confirmed = 'unknown';
+    for (let i = 0; i < this.confirmTries; i++) {
+      got = await this.read();
+      if (got === level) return got;
+      if (i < this.confirmTries - 1) await new Promise((r) => setTimeout(r, this.confirmGapMs));
+    }
+    return got;
   }
 
   async read(): Promise<Confirmed> {
