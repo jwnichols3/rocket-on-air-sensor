@@ -26,7 +26,7 @@ from a [FACT], shown. **[JUDGEMENT]** = a call. **[UNRESOLVED]** = not settled.
 | Question | Answer |
 |---|---|
 | Can the OLED he owns do this job? | **No, and not close.** ~5.7 ft for a readable word; ~10.4 ft absolute ceiling with one giant glyph. Short by 3.6x to 6.6x. |
-| Is a bigger OLED the fix? | **No.** The largest genuine mono OLED found (3.12", $38.17) reaches ~11.8 ft, and is the dimmest of the field. |
+| Is a bigger OLED the fix? | **No.** The market ceiling is a 5.5" 256x64 at $69.98, and it reaches ~11.9 ft for a glance. See §9 - this row's first pass said 3.12"/11.8 ft and was 2x too low. |
 | What actually works? | **Colour, not text.** A WS2812B stick behind a diffuser, **$11.90**. |
 | Why? | The spec is three colours, not a message. A colour patch needs ~53-80 mm of apparent size at 20 ft; a *character* needs 53-67 mm **each**. ~20x less area for the same job. |
 | Does it work under `framework: esp-idf`? | **Yes** - `esp32_rmt_led_strip`. `neopixelbus` and `fastled_clockless` are Arduino-only and are the only two casualties. |
