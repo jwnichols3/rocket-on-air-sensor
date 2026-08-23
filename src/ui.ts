@@ -342,7 +342,12 @@ export const UI_HTML = `<!doctype html>
     var WATCHDOG_SILENT_MS = 45000;
     var MAX_LOG_ROWS = 100;
 
-    var token = localStorage.getItem('onair-token') || '';
+    // The page itself is token-gated, so if you could load it at all you already
+    // supplied a token in the URL. Adopt it rather than making you paste it a second
+    // time into the box, and remember it so later visits need no query string.
+    var urlToken = new URLSearchParams(location.search).get('token');
+    var token = urlToken || localStorage.getItem('onair-token') || '';
+    if (urlToken) localStorage.setItem('onair-token', urlToken);
     var tokenInput = document.getElementById('token');
     tokenInput.value = token;
     function onTokenChange() {
