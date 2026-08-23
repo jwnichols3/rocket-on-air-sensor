@@ -475,12 +475,14 @@ it - anything larger is AMOLED with a MIPI-DSI interface, which is not an ESP32 
 
 ### Buy table
 
-| Module | Size | Active area | Controller | Interface | Price | Stock | Glance / threshold | Mountable |
+| Module | Size | Active area | Controller | ESPHome | Price (qty 1) | Stock | Glance / threshold | Mountable |
 |---|---|---|---|---|---|---|---|---|
-| **Newhaven NHD-5.5-25664UCG3** | 5.5" 256x64 | 135.65 x 33.89 mm | SSD1322 | SPI | **$69.98** | low | **11.9 / 23.9 ft** | **4x M3 + metal bezel** |
-| Crystalfontz CFAL25664B-Y-B1 | 3.12" 256x64 | - | SSD1322 | SPI | $30.60 | yes | 6.8 / 13.5 ft | check drawing |
-| Newhaven NHD-3.12-25664UCY2 | 3.12" 256x64 | - | SSD1322 | SPI | $38.17 | yes | 6.8 / 13.5 ft | yes |
-| Adafruit 2719 | 2.42" 128x64 | - | **see risk** | I2C/SPI | $39.95 | **in stock** | 5.2 / 10.3 ft | yes |
+| **Newhaven NHD-5.5-25664UCG3** | 5.5" 256x64 | 135.65 x 33.89 mm | SSD1322 | **supported** | **$69.98** | low | **11.9 / 23.9 ft** | **4x M3 + metal bezel** |
+| Newhaven NHD-3.12-25664UCY2 | 3.12" 256x64 | 76.78 x 19.18 mm | SSD1322 | **supported** | $38.17 | yes | 6.8 / 13.5 ft | yes (module) |
+| Crystalfontz CFAL25664B-Y-B1 | 3.12" 256x64 | 76.78 x 19.18 mm | SSD1322 | **supported** | **$42.60** | yes | 6.8 / 13.5 ft | **NO - bare glass** |
+| **Waveshare 2.42"** | 2.42" 128x64 | 55.01 x 27.49 mm | SSD1309 | **no model** | **$12.99** | unconfirmed | 5.2 / 10.3 ft | yes, 4 corner holes |
+| Adafruit 2719 | 2.42" 128x64 | 55.01 x 27.49 mm | SSD1309 | **no model** | $39.95 | in stock | 5.2 / 10.3 ft | yes, 4 |
+| DFRobot FIT0328 | 2.7" 128x64 | unconfirmed | unconfirmed | unknown | $42.00 | only 3 left | - | not stated |
 
 **[FACT] Two traps verified against ESPHome source at tag 2026.8.0:** there is **no
 `ssd1309`, `ssd1325`, `ssd1362` or `ssd1363` component**. That kills the tempting
@@ -552,3 +554,72 @@ distance. It is still not the 20 ft stairs answer.
 Waveshare, Winstar and BuyDisplay all return **HTTP 403** to automated fetch - everything from
 those vendors is flagged UNCONFIRMED in the source file rather than reconstructed from search
 snippets. The full reports carry 11 UNCONFIRMED flags between them.
+
+### Corrections from a second sourcing pass (same day)
+
+Parallel researchers covering the US maker vendors and Waveshare/AliExpress returned
+corrections to the buy table above. All accessed 2026-08-22.
+
+1. **[FACT] A price error, corrected.** Crystalfontz CFAL25664B-Y-B1 at **"$30.60" is the
+   1000-unit price**. Single unit is **$42.60**. The ladder is 1/$42.60, 10/$39.19,
+   20/$38.04, 50/$36.66, 100/$34.67, 1000/$30.60. It is therefore *more* expensive than the
+   Newhaven 3.12", not cheaper.
+2. **[FACT] That Crystalfontz part is not mountable.** It is **bare glass with no carrier
+   PCB and no mounting holes** - the earlier "check drawing" should read **NO**. Its
+   controller is confirmed as Solomon Systech SSD1322 outright (not "or compatible"), active
+   area 76.78 x 19.18 mm, logic 3.0 V typ, **panel rail 14.5 V**, 23-32 mA.
+3. **[FACT] The bare-glass power trap, which applies to the whole 256x64 class.** Every
+   bare-glass 256x64 panel needs a **12-14.5 V panel rail**. Cheap modules hide this behind
+   an onboard boost converter; raw panels do not. That is real BOM and board cost on any
+   bare-glass path. Newhaven's *modules* carry the boost (hence the jumper Option #1 noted
+   above) - **[UNRESOLVED]** confirm the 5.5" part's own arrangement from its datasheet
+   before ordering, since the 310 mA figure quoted above was measured on the 3.12".
+4. **[FACT] A much cheaper 2.42" exists.** **Waveshare 2.42", $12.99** - active
+   55.01 x 27.49 mm, SSD1309, 4-wire SPI default with I2C via solder jumpers, 3.3 V/5 V with
+   an onboard level translator, carrier PCB with **4 corner mounting holes**. That is the
+   **identical glass** as the Adafruit 2719 at $39.95. **[UNRESOLVED]** stock: the page has
+   an Add-to-Cart button and no out-of-stock banner, but it is the only Waveshare OLED page
+   lacking a schema.org offer block, and it is absent from their own OLED category listing
+   (28 items, no 2.42") - findable only by site search. Treat as a supply risk.
+5. **[FACT] But both 2.42" options carry a driver risk, now verified.** ESPHome's `ssd1306`
+   platform `MODELS` enum at tag 2026.8.0 contains exactly: SSD1306 (128x32, 128x64, 96x16,
+   64x48, 64x32, 72x40), SH1106 (128x32, 128x64, 96x16, 64x48), SH1107 (128x64, 128x128),
+   SSD1305 (128x32, 128x64). **There is no SSD1309 entry.** Adafruit's 2719 moved to SSD1309
+   on 2023-09-14 and Waveshare's is SSD1309 too. The community workaround is to declare an
+   SSD1306 or SSD1305 model and rely on command compatibility - **[UNRESOLVED] and untested
+   on this hardware.** The SSD1322 parts have an explicit model string and do not carry this
+   risk.
+6. **[FACT] A buying trap worth more than any single price.** **Diagonal labels on 256x64
+   panels are unreliable** - the identical panel ships as "2.7in", "2.8in", "3.12in",
+   "3.2in" and "3.55in" across listings. **Anchor on active area in mm, never on the
+   diagonal.**
+7. **[FACT] The 5.5" ceiling is now confirmed from the cheap end too.** AliExpress carries 10
+   distinct SSD1322 5.5" listings from $43.38 to $145.34, and a search for "4 inch OLED
+   display module" returns **zero** OLEDs above 1" - the top hits are iPad glass and a 4.0"
+   ILI9488 TFT **LCD**. Newhaven's 135.65 x 33.89 mm also matches the active area derived
+   geometrically for 256x64 at 5.5", so two independent methods agree.
+8. **[FACT] Vendor ceilings.** Adafruit's largest OLED is the 2.42" - no SSD1322, SSD1362 or
+   256x64 part anywhere in their catalogue. SparkFun's largest currently sold is 1.3";
+   everything bigger (1.5" Zio, 1.51" transparent, HUD) is **retired or discontinued**.
+   Pololu's only OLED is a 1.3" and it is **on backorder**. Seeed tops out at 1.12",
+   Pimoroni at 1.3" own-brand.
+9. **[FACT] Transparent OLEDs.** SparkFun's two transparent parts are both **retired**.
+   Waveshare's 1.51" transparent is $19.99 and in stock, but it is bare glass on a ~40 mm
+   flex to a **physically separate driver board**, has **no mounting holes**, and its
+   transparency percentage is **not published by the vendor** - do not quote a figure.
+10. **[FACT] Amazon yielded nothing.** Both `curl` with full browser headers and WebFetch
+    return HTTP 503 with an explicit anti-automation notice. No ASINs, prices or stock from
+    that channel; nothing was reconstructed from search snippets. buydisplay.com (Cloudflare
+    403) and winstar.com.tw (403) are likewise unreadable by automation.
+11. **[FACT] Identifying a genuine OLED from a listing:** the controller is the tell.
+    SSD13xx / SH110x / SSD1322 / SSD1362 = OLED. ILI9xxx / ST77xx / GC9A01 = LCD. Titles
+    reading "OLED LCD Display" on SSD1322 parts are sloppy copy, not mislabels - SSD1322 is
+    OLED-only silicon. And the 4.2" 400x300 part is confirmed **e-paper** (84.8 x 63.6 mm
+    display, 5 s full refresh, sub-uA standby), which is reflective and unlit and therefore
+    useless here regardless.
+
+**Net effect on the recommendation: unchanged, and slightly strengthened.** The Newhaven 5.5"
+is a *module* rather than bare glass, it is genuinely mountable, and its SSD1322 has an
+explicit ESPHome model string. The two cheaper 2.42" options are attractive on price - the
+Waveshare especially at $12.99 - but both carry an unverified driver question that the
+SSD1322 parts do not.
