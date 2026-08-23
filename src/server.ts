@@ -6,14 +6,28 @@ import type { Duplex } from 'node:stream';
 import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
 import { createSseHub, type SseHub } from './sse.js';
-import type { Confirmed, OnAirState, StateStore } from './state.js';
+import {
+  isLevel,
+  levelToOnOff,
+  onAirToLevel,
+  LEVELS,
+  type Confirmed,
+  type Level,
+  type OnAirState,
+  type OnOff,
+  type PersistedState,
+  type StateStore,
+} from './state.js';
 import { UI_HTML } from './ui.js';
 import { createWsBridge, type WsBridge } from './ws.js';
 
 export interface ServerDeps {
   store: StateStore;
   driver: LightDriver;
-  persist: (state: OnAirState) => Promise<void>;
+  persist: (state: PersistedState) => Promise<void>;
+  /** Shared write queue. When absent the server makes its own; app.ts passes the same
+   *  one to the supervisor so supervisor writes serialise with HTTP writes. */
+  enqueueWrite?: EnqueueWrite;
   token?: string;
   hub?: SseHub;
   ws?: WsBridge;
@@ -29,6 +43,9 @@ const ROUTES: Record<string, string[]> = {
   '/state': ['PUT'],
   '/on': ['POST'],
   '/off': ['POST'],
+  '/available': ['POST'],
+  '/interruptible': ['POST'],
+  '/dnd': ['POST'],
   '/message': ['PUT', 'DELETE'],
   '/events': ['GET'],
   '/display': ['GET'],
@@ -50,11 +67,13 @@ export function createApiServer(deps: ServerDeps): Server {
   const log = deps.log ?? console.log;
 
   let writeChain: Promise<void> = Promise.resolve();
-  function enqueueWrite(run: () => Promise<void>): Promise<void> {
-    const next = writeChain.then(run);
-    writeChain = next.catch(() => {});
-    return next;
-  }
+  const enqueueWrite: EnqueueWrite =
+    deps.enqueueWrite ??
+    ((run) => {
+      const next = writeChain.then(run);
+      writeChain = next.catch(() => {});
+      return next;
+    });
 
   // Declared before assignment so the request handler below can close over the
   // eventual Server instance (needed for /admin/health's bound-port lookup);
@@ -123,13 +142,19 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(`${JSON.stringify(body)}\n`);
 }
 
-function statusBody(deps: ServerDeps): OnAirState & { ageSeconds: number } {
-  return { ...deps.store.get(), ageSeconds: deps.store.ageSeconds() };
+function statusBody(deps: ServerDeps): OnAirState & { intended: OnOff; ageSeconds: number } {
+  const s = deps.store.get();
+  // `intended` is computed at serialisation, so it can never drift from `level`.
+  return { ...s, intended: levelToOnOff(s.level), ageSeconds: deps.store.ageSeconds() };
 }
 
 function persistCurrent(deps: ServerDeps): Promise<void> {
+  const s = deps.store.get();
+  // Typed, never cast: `intended` is rollback insurance, and a cast here would let a
+  // future refactor delete it with no type error and no failing test.
   // Invariant: persisted confirmed is always "unknown" - the live value is memory-only.
-  return deps.persist({ ...deps.store.get(), confirmed: 'unknown' });
+  const out: PersistedState = { ...s, intended: levelToOnOff(s.level), confirmed: 'unknown' };
+  return deps.persist(out);
 }
 
 function broadcastAndSend(res: ServerResponse, deps: ServerDeps, hub: SseHub, ws: WsBridge): void {
@@ -152,20 +177,39 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 async function doWrite(
   deps: ServerDeps,
-  onAir: boolean,
+  level: Level,
   source: string,
   log: (line: string) => void,
+  hold?: boolean,
 ): Promise<void> {
-  deps.store.write(onAir, source);
+  // write() may clamp a detector request UP to the hold floor, so the level we drive
+  // onto the light is the one the store settled on, never the one that was requested.
+  const applied = deps.store.write(level, source, new Date(), hold).level;
   await persistCurrent(deps);
   let confirmed: Confirmed;
   try {
-    confirmed = await deps.driver.set(onAir);
+    confirmed = await deps.driver.set(applied);
   } catch (err) {
-    log(`[onair] driver.set(${onAir}) failed: ${errorMessage(err)}`);
+    log(`[onair] driver.set(${applied}) failed: ${errorMessage(err)}`);
     confirmed = 'unknown';
   }
   deps.store.setConfirmed(confirmed);
+}
+
+const PATH_LEVEL: Record<string, Level> = {
+  '/on': 'dnd',
+  '/off': 'available',
+  '/dnd': 'dnd',
+  '/interruptible': 'interruptible',
+  '/available': 'available',
+};
+
+/** `?hold=1|true` pins the floor, `?hold=0|false` releases it, absent leaves it alone. */
+function holdFromQuery(raw: string | null): boolean | undefined {
+  if (raw === null) return undefined;
+  if (raw === '1' || raw === 'true') return true;
+  if (raw === '0' || raw === 'false') return false;
+  return undefined;
 }
 
 type EnqueueWrite = (run: () => Promise<void>) => Promise<void>;
@@ -323,29 +367,79 @@ async function handle(
   }
 
   if (path === '/state') {
+    let level: unknown;
     let onAir: unknown;
     let source: unknown;
+    let hold: unknown;
     try {
       const body: unknown = JSON.parse(await readBody(req));
-      ({ onAir, source } = body as { onAir?: unknown; source?: unknown });
+      ({ level, onAir, source, hold } = body as {
+        level?: unknown;
+        onAir?: unknown;
+        source?: unknown;
+        hold?: unknown;
+      });
     } catch (err) {
       sendJson(res, 400, { error: `malformed JSON body: ${errorMessage(err)}` });
-      return;
-    }
-    if (typeof onAir !== 'boolean') {
-      sendJson(res, 400, { error: 'onAir must be a boolean' });
       return;
     }
     if (source !== undefined && typeof source !== 'string') {
       sendJson(res, 400, { error: 'source must be a string' });
       return;
     }
-    await enqueueWrite(() => doWrite(deps, onAir, source ?? 'manual', log));
+    if (hold !== undefined && typeof hold !== 'boolean') {
+      sendJson(res, 400, { error: 'hold must be a boolean' });
+      return;
+    }
+
+    let target: Level;
+    if (level !== undefined) {
+      if (!isLevel(level)) {
+        sendJson(res, 400, { error: `level must be one of ${LEVELS.join(', ')}` });
+        return;
+      }
+      if (onAir !== undefined) {
+        if (typeof onAir !== 'boolean') {
+          sendJson(res, 400, { error: 'onAir must be a boolean' });
+          return;
+        }
+        // Never silently pick one. A client sending both and meaning different things
+        // has a bug, and guessing which half to believe is how a false green ships.
+        if (levelToOnOff(level) !== (onAir ? 'on' : 'off')) {
+          sendJson(res, 400, { error: 'level and onAir disagree' });
+          return;
+        }
+      }
+      target = level;
+    } else if (typeof onAir === 'boolean') {
+      target = onAirToLevel(onAir);
+    } else {
+      sendJson(res, 400, { error: 'body must contain level or onAir' });
+      return;
+    }
+
+    if (!checkHold(res, target, hold as boolean | undefined)) return;
+    await enqueueWrite(() => doWrite(deps, target, source ?? 'manual', log, hold as boolean | undefined));
     broadcastAndSend(res, deps, hub, ws);
     return;
   }
 
-  // POST /on | /off
-  await enqueueWrite(() => doWrite(deps, path === '/on', url.searchParams.get('source') ?? 'manual', log));
+  // POST /on | /off | /available | /interruptible | /dnd
+  const target = PATH_LEVEL[path]!;
+  const hold = holdFromQuery(url.searchParams.get('hold'));
+  if (!checkHold(res, target, hold)) return;
+  await enqueueWrite(() => doWrite(deps, target, url.searchParams.get('source') ?? 'manual', log, hold));
   broadcastAndSend(res, deps, hub, ws);
+}
+
+/**
+ * A floor at the bottom rung is either a no-op or, read the other way, a lever for
+ * forcing green against the detector. Reject it rather than quietly ignoring it.
+ */
+function checkHold(res: ServerResponse, level: Level, hold: boolean | undefined): boolean {
+  if (hold === true && level === 'available') {
+    sendJson(res, 400, { error: 'hold cannot be set at available: a floor at the bottom rung is not a hold' });
+    return false;
+  }
+  return true;
 }

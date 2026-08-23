@@ -10,16 +10,52 @@ One state object, persisted to disk atomically, restored on restart:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `intended` | `"on" \| "off"` | What the API was last told. Survives restart; on boot the service re-applies it to the light. |
-| `confirmed` | `"on" \| "off" \| "unknown"` | What the light acknowledged via the LightDriver. `unknown` when the driver has no feedback or the light is unreachable - never guessed. |
-| `source` | string | Who wrote the state. Conventions: `"detector"`, `"manual"`. Free-form; no precedence semantics in v1 (last write wins). |
-| `updatedAt` | ISO 8601 string | Time of last on-air write. Refreshed by every `/state`, `/on`, `/off` write, including idempotent repeats. |
-| `message` | `string \| null` | Optional display message (see `PUT /message`). Independent of on-air writes - heartbeats never touch it. Absent in pre-message state files, which load as `null`. |
+| `level` | `"available" \| "interruptible" \| "dnd"` | The rung. This is the stored field. Survives restart; on boot the service re-applies it to the light, subject to the ladder rule. |
+| `intended` | `"on" \| "off"` | **Derived, read-only, retained for compatibility.** Computed at serialisation as `level === "available" ? "off" : "on"`, so it can never drift. Kept on the wire and on disk for Companion and for a D-14 rollback. Writing it has no effect. |
+| `confirmed` | `Level \| "unknown"` | What the light acknowledged, read back from the device itself. `unknown` when the light is unreachable or the panel is not repainting - never guessed. |
+| `hold` | `"interruptible" \| "dnd" \| null` | A floor on `level`, set by a human. See "The hold" below. |
+| `source` | string | Who wrote the state. `"detector"` is **load-bearing**: it is the one value the hold clamps. Everything else, including an absent `source`, is treated as manual. |
+| `updatedAt` | ISO 8601 string | Time of last level write. Refreshed by every `/state`, `/on`, `/off`, `/available`, `/interruptible`, `/dnd` write, including idempotent repeats. |
+| `message` | `string \| null` | Optional display message (see `PUT /message`). Independent of level writes - heartbeats never touch it. Absent in pre-message state files, which load as `null`. |
+
+### The ladder
+
+`available(0) < interruptible(1) < dnd(2)`.
+
+> **THE LADDER RULE - the server never lowers `level`, and never asserts a lower rung to
+> the device, without fresh evidence (`ageSeconds <= 90`). Raising or matching is always
+> allowed. Absence of information never renders below `dnd`.**
 
 Staleness is visible, never acted on: the detector re-sends its state every ~60s as a
 heartbeat (client-side convention, not enforced), so a stale `updatedAt` means a dead
-detector. The server never auto-changes state (no TTL) - only an explicit write turns
-the light off (invariant: false OFF is worse than false ON).
+detector. The server never auto-changes state on a timer (no TTL) - only an explicit
+write lowers the level (invariant: false OFF is worse than false ON). What a stale store
+*does* change is whether the server keeps asserting: rather than heartbeat a stale
+`available` forever, it withholds the assertion and lets the device's own watchdog trip
+into NO DATA. That is withdrawal of a liveness claim, not a state change.
+
+### The hold
+
+A **hold** is a floor on `level`, set by a human, that the detector cannot cross downward.
+
+- A write with `source: "detector"` is clamped up: `effective = max(level, hold)`. A
+  detector write can never set or clear the floor.
+- Any other source applies its `level` as given and may set (`hold: true`) or clear
+  (`hold: false`) the floor. Omitting `hold` leaves it untouched.
+- **The floor never blocks escalation.** A detector writing `dnd` against an
+  `interruptible` floor gives `dnd`, and the floor survives the escalation - when the
+  call ends the level falls back to `interruptible`, not to `available`.
+- A manual write to a rung *below* the floor releases the floor. An explicit human
+  instruction always wins, and leaving a floor that contradicts the level would let the
+  next detector write silently undo it.
+- **`hold` may never be `available`** - a floor at the bottom rung is either a no-op or a
+  lever for forcing green against the detector. `400`.
+- Release is explicit only. Never a TTL, never a decay: the hold is *intent*, like
+  `level`, not *evidence*, like `confirmed`.
+
+The hold is why `source` now carries real precedence. In v1 it did not (last write wins),
+and with a boolean that was harmless; with three rungs a 60s detector heartbeat would
+silently destroy a manual `interruptible` within a minute.
 
 ## Endpoints
 
@@ -31,10 +67,13 @@ Returns the state object plus computed staleness:
 
 ```json
 {
+  "level": "dnd",
   "intended": "on",
-  "confirmed": "unknown",
+  "confirmed": "dnd",
+  "hold": null,
   "source": "detector",
   "updatedAt": "2026-08-05T21:04:00Z",
+  "message": null,
   "ageSeconds": 12
 }
 ```
@@ -43,17 +82,35 @@ Returns the state object plus computed staleness:
 
 Canonical write. Idempotent - repeating the same body just refreshes `updatedAt`.
 
-Request: `{"onAir": true, "source": "detector"}` - `onAir` required boolean, `source`
-optional string (default `"manual"`).
+Preferred request: `{"level": "interruptible", "source": "webui"}`.
+
+| Field | Required | Notes |
+|---|---|---|
+| `level` | one of `level`/`onAir` | One of `available`, `interruptible`, `dnd`. |
+| `onAir` | one of `level`/`onAir` | Legacy boolean. `true` maps to **`dnd`**, not `interruptible`: a client that can only say yes/no is telling you it does not know how bad it is, and the ladder says round up. |
+| `source` | no | Default `"manual"`. |
+| `hold` | no | `true` pins the floor at this request's level; `false` clears it. |
+
+Errors:
+
+- both `level` and `onAir` present and contradictory -> `400 {"error":"level and onAir disagree"}`.
+  Never a silent pick.
+- neither -> `400 {"error":"body must contain level or onAir"}`.
+- `{"level":"available","hold":true}` -> `400`. A floor at the bottom rung is not a hold.
 
 Response: `200` with the same body as `GET /status`, after the write and a LightDriver
-attempt.
+attempt. Note the returned `level` may be *higher* than the one requested, if a hold
+clamped it.
+
+### `POST /available` / `POST /interruptible` / `POST /dnd`
+
+No-body conveniences for curl and phone shortcuts. Each sets its own rung with `source`
+`"manual"`; override with `?source=<name>`. Add `?hold=1` to pin the floor there, or
+`?hold=0` to release it. Response identical to `PUT /state`.
 
 ### `POST /on` / `POST /off`
 
-No-body conveniences for curl and phone shortcuts. Equivalent to `PUT /state` with
-`onAir` true/false and `source` `"manual"`; override with `?source=<name>`.
-Response identical to `PUT /state`.
+Retained unchanged for existing shortcuts. `/on` is `dnd`, `/off` is `available`.
 
 ### `PUT /message` / `DELETE /message`
 

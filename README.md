@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/mai
 
 | Part | What it does |
 |---|---|
-| `GET /status`, `PUT /state`, `POST /on`, `POST /off` | Read and write the call state |
+| `GET /status`, `PUT /state`, `POST /available`, `POST /interruptible`, `POST /dnd` | Read and write the call state (three rungs; `POST /on` and `/off` still work and map to `dnd`/`available`) |
 | `PUT /message`, `DELETE /message` | Set or clear the display message |
 | `GET /events` (SSE), `GET /events/ws` (WebSocket) | Push status to clients |
 | `GET /display` | The on-air light: a fullscreen tally page |

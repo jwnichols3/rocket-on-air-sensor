@@ -27,11 +27,24 @@ service, add a Header field to each action: `{"Authorization": "Bearer <ONAIR_TO
 - **Reconnect**: on
 - **Feedback JSON Path**: `intended`
 
-Use `intended`, not `confirmed`, for now. `confirmed` reflects whether the LightDriver
-acknowledged the change, and until the LightDriver is a real integration (tracked in
-issue #6 - it's currently a no-op stub), `confirmed` never means anything the button
-should trust. `intended` reflects what was actually requested and is meaningful today.
-Revisit this once #6 lands a real driver.
+Use `intended`, not `confirmed`. `intended` reflects what was actually requested;
+`confirmed` reflects what the light itself reported back, which is genuine as of D-21 but
+goes to `unknown` whenever the device is unreachable - not what you want a button colour
+keyed to.
+
+**Since D-18 the state has three rungs** (`available`, `interruptible`, `dnd`), but
+**this config keeps working untouched**: `intended` is now derived, and both
+`interruptible` and `dnd` read as `"on"`, so the button goes red for either. That is the
+cheap direction of error - a yellow call showing red says "maybe don't" rather than
+"come in".
+
+To distinguish the middle rung, add a second feedback on the `level` JSON path:
+
+```
+$(genericwebsocket:level) == "interruptible"
+```
+
+and wire it to an amber background, ordered *above* the `intended` feedback so it wins.
 
 ## Button feedback
 

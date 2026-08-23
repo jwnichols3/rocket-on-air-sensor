@@ -126,6 +126,12 @@ else (state, light control, API) lives on the receiver.
   but never acted on. Only an explicit write turns the light off. Rationale: false
   OFF is worse than false ON; "no stuck-on light" is met by manual OFF + visible
   staleness.
+  **Amended by D-18** and restated on the ladder: *the server never lowers `level`, and
+  never asserts a lower rung to the light, without fresh evidence (`ageSeconds <= 90`).
+  Raising or matching is always allowed. Staleness remains visible and never acted on.*
+  The original wording forbade only downgrades that end at the bottom, so on a three-rung
+  ladder `dnd -> interruptible` on a timer was a brand-new failure its words did not cover
+  but its rationale plainly forbids.
 - **D-7 (2026-08-05)** Auth: optional shared bearer token (`ONAIR_TOKEN` env var),
   off by default; LAN-only exposure is the baseline security model. Port 8484.
 - **D-8 (2026-08-05)** Runtime: Node.js + TypeScript. Confirmed via a judged LLM
@@ -141,6 +147,10 @@ else (state, light control, API) lives on the receiver.
   updates. Safety rule: the display's background color always reflects on-air state;
   a message can never hide ON AIR. Spec:
   `docs/superpowers/specs/2026-08-05-onair-display-design.md`.
+  **Amended by D-18/D-21:** the page now has **four** appearances (`available`,
+  `interruptible`, `dnd`, `unknown`), and the message rule extends to all of them - a
+  message renders as a subordinate line and may never replace the state word. The page also
+  now ships as `unknown`/NO DATA rather than asserting OFF AIR before any data arrives.
 - **D-10 (2026-08-05)** Distribution: `npx --yes github:jwnichols3/rocket-on-air-sensor`
   (npm `bin` + `prepare` build; no npm publish), systemd unit template in `deploy/`,
   setup + kiosk doc in `docs/pi-setup.md`. Tradeoffs accepted for a home project:
@@ -163,6 +173,9 @@ else (state, light control, API) lives on the receiver.
   that consequence - a genuine `confirmed` is now buyable for ~$15 (Athom Tasmota plug,
   `GET /cm?cmnd=Power`) or ~$28 (Shelly 1 Gen4, `Switch.GetStatus` -> `output`). The hold
   stands until Rocket picks hardware; #1 and #6 stay parked.
+  **Superseded by D-16/D-18/D-21 (2026-08-23):** hardware is chosen and built (DIY ESP32),
+  `confirmed` is a genuine device read, and status feedback keys off `level`, with
+  `intended` retained as a derived field for compatibility.
 - **D-13 (2026-08-06)** Mac Mini service management: a system-domain **LaunchDaemon**
   (`com.rocket.onair`, `UserName=john`, `KeepAlive`) supervising `node dist/index.js`
   from a local checkout - chosen over pm2/brew-services/LaunchAgent via a judged
@@ -263,3 +276,21 @@ else (state, light control, API) lives on the receiver.
   `docs/research/2026-08-22-wall-indicator.md` - which also establishes that **no OLED at any
   price reaches 20 ft** (the market ceiling is a 5.5" 256x64 at ~11.9 ft), so the wall
   indicator for the stairs is a colour glow and the OLED is the close-range readout.
+- **D-21 (2026-08-23)** **Step 1 of the ESP32 integration is implemented** on branch
+  `three-state-esp32` (spec: `docs/superpowers/specs/2026-08-22-esp32-integration-design.md`,
+  repo delta a-j; handoff: `docs/superpowers/plans/2026-08-23-esp32-integration-handoff.md`).
+  `npm test` 145/145, `npx tsc --noEmit` clean, `/display` and `/ui` verified in a real
+  browser. Two corrections to the written design were required and are the decision here:
+  1. **Reconciliation merges only on contradiction.** The spec resolved a loaded state file
+     as `higher(level, intended)` unconditionally. Because `levelToOnOff('interruptible')`
+     is `'on'`, that promoted **every `interruptible` file to `dnd` on restart** - the
+     middle rung could never survive a restart, which would have silently gutted D-19 the
+     first time the service was restarted. The rule is now: when `level` and `intended`
+     agree the file is self-consistent and `level` is authoritative; take the higher rung
+     **only when they contradict each other**, which is exactly the rolled-back-binary case
+     the merge existed for.
+  2. **A manual write below the floor releases the floor.** D-19 said other sources apply
+     their level "as given", which left `level: available, hold: interruptible` reachable -
+     a floor above the level, contradicting itself in `GET /status`, and armed to yank the
+     light back to yellow on the next detector write. An explicit human instruction wins:
+     asking for a lower rung by hand clears the hold.

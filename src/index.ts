@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
+import { EsphomeSelectDriver } from './esphome-driver.js';
 
 loadConfig();
 
@@ -23,7 +24,18 @@ if (token !== undefined && token.trim() === '') {
   process.exit(1);
 }
 
-const app = await createApp({ port, stateFile, token });
+// No ONAIR_LIGHT_HOST means the NoopDriver, i.e. unchanged behaviour.
+const lightHost = process.env.ONAIR_LIGHT_HOST;
+const driver = lightHost
+  ? new EsphomeSelectDriver({
+      host: lightHost,
+      entity: process.env.ONAIR_LIGHT_ENTITY ?? 'Presence',
+      username: process.env.ONAIR_LIGHT_USER,
+      password: process.env.ONAIR_LIGHT_PASS,
+    })
+  : undefined;
+
+const app = await createApp({ port, stateFile, token, driver });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {

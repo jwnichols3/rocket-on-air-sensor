@@ -5,13 +5,16 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { createApp } from '../src/app.js';
 import type { LightDriver } from '../src/driver.js';
-import type { Confirmed } from '../src/state.js';
+import type { Confirmed, Level } from '../src/state.js';
 
 class StubDriver implements LightDriver {
-  calls: boolean[] = [];
-  async set(onAir: boolean): Promise<Confirmed> {
-    this.calls.push(onAir);
-    return onAir ? 'on' : 'off';
+  calls: Level[] = [];
+  async set(level: Level): Promise<Confirmed> {
+    this.calls.push(level);
+    return level;
+  }
+  async read(): Promise<Confirmed> {
+    return this.calls.at(-1) ?? 'unknown';
   }
 }
 
@@ -20,7 +23,7 @@ test('state survives a restart and boot re-applies intended to the driver', asyn
 
   const driver1 = new StubDriver();
   const app1 = await createApp({ stateFile, port: 0, driver: driver1, log: () => {} });
-  assert.deepEqual(driver1.calls, [false]); // boot re-applies default OFF
+  assert.deepEqual(driver1.calls, ['dnd']); // boot re-applies the default, which is dnd
   const res = await fetch(`http://127.0.0.1:${app1.port}/state`, {
     method: 'PUT',
     body: JSON.stringify({ onAir: true, source: 'detector' }),
@@ -30,16 +33,19 @@ test('state survives a restart and boot re-applies intended to the driver', asyn
 
   const driver2 = new StubDriver();
   const app2 = await createApp({ stateFile, port: 0, driver: driver2, log: () => {} });
-  assert.deepEqual(driver2.calls, [true]); // boot re-applies persisted ON
+  assert.deepEqual(driver2.calls, ['dnd']); // boot re-applies the persisted level
   const body = await (await fetch(`http://127.0.0.1:${app2.port}/status`)).json();
   assert.equal(body.intended, 'on');
-  assert.equal(body.confirmed, 'on');
+  assert.equal(body.confirmed, 'dnd');
   assert.equal(body.source, 'detector');
   await app2.close();
 });
 
 class FailingDriver implements LightDriver {
   async set(): Promise<Confirmed> {
+    throw new Error('light unreachable');
+  }
+  async read(): Promise<Confirmed> {
     throw new Error('light unreachable');
   }
 }
