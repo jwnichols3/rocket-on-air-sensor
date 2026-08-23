@@ -5,6 +5,7 @@ export const UI_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>on-air console</title>
 <style>
   :root {
@@ -347,6 +348,14 @@ export const UI_HTML = `<!doctype html>
     // time into the box, and remember it so later visits need no query string.
     var urlToken = new URLSearchParams(location.search).get('token');
     var token = urlToken || localStorage.getItem('onair-token') || '';
+    // NOT scrubbed from the address bar with history.replaceState, deliberately. The
+    // document request for /ui is itself token-gated and a top-level navigation cannot
+    // carry an Authorization header, so a bare /ui reload returns 401 - localStorage
+    // authenticates the page's own calls, never the fetch of the page. Scrubbing would
+    // trade a token in browser history for a refresh button that logs you out.
+    // Removing it properly needs either a session cookie set on a valid query-token GET,
+    // or serving these two static documents unauthenticated (they interpolate no state)
+    // and keeping every DATA route gated. Both are real changes; see D-23.
     if (urlToken) localStorage.setItem('onair-token', urlToken);
     var tokenInput = document.getElementById('token');
     tokenInput.value = token;

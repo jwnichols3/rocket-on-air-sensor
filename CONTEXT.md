@@ -336,4 +336,19 @@ else (state, light control, API) lives on the receiver.
   unchanged counter now returns `null` until it has been static longer than any plausible
   publish interval; a counter that goes *backwards* reads as a reboot, which is a repaint,
   not 20 seconds of frozen panel.
+  **Known limitation, accepted (2026-08-23):** the token travels in a **URL query string**
+  for `GET /events`, `GET /display`, `GET /ui` and the WebSocket upgrade. This is not a
+  choice - `EventSource` and `WebSocket` cannot set an `Authorization` header, and neither
+  can a top-level document navigation. An automated review flagged it and proposed
+  scrubbing the token with `history.replaceState` after load; that was tried and
+  **reverted**, because the document request for `/ui` is itself gated, so a scrubbed URL
+  turns the browser refresh button into a logout. Mitigation taken instead:
+  `<meta name="referrer" content="no-referrer">` on both pages, so the token never leaks
+  via `document.referrer`. The residual exposure is browser history and the address bar
+  during a screen share. Removing it properly needs one of: (a) a session cookie set on a
+  valid query-token GET, which brings CSRF back into scope on a server whose write routes
+  are deliberately CORS-simple, or (b) serving `/ui` and `/display` unauthenticated - they
+  interpolate no state and are identical for every caller - while keeping every DATA route
+  gated. **(b) is the cheaper and probably correct answer; it is a policy change and has
+  not been made unilaterally.**
 
