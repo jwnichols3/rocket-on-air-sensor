@@ -87,8 +87,16 @@ test('supervisor: a stale, lower-ranked level is NOT asserted down onto a higher
   r.light.device = 'dnd';
   await sleep(60);
   r.stop();
-  assert.deepEqual(r.light.sets, [], 'a 1-hour-old available must never push a live dnd down');
+  // The point is never "make no calls" - it is never to LOWER. Once the store adopts
+  // the device's rung, heartbeating that same rung back is healthy.
+  assert.equal(r.light.sets.includes('available'), false, 'a 1-hour-old available must never push a live dnd down');
   assert.equal(r.light.device, 'dnd');
+  // Deferring must not mean "disagree forever". Leaving `level` stale strands every
+  // other renderer on the old value - the browser page reads OFF AIR while the panel
+  // reads ON AIR - and the supervisor re-logs the same deferral every tick with nothing
+  // ever converging. Adopt the device's rung: raising is always ladder-legal.
+  assert.equal(r.store.get().level, 'dnd', 'the store adopts the device it just deferred to');
+  assert.equal(r.store.get().confirmed, 'dnd', 'and can then confirm it');
 });
 
 test('supervisor: a fresh lower-ranked level IS asserted down - fresh evidence permits lowering', async () => {

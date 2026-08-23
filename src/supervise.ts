@@ -60,18 +60,28 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
         got = await o.driver.set(want);
         if (got === want) lastAssertAt = Date.now();
       } else {
-        log(`[supervisor] device says ${got}, our stale ${want} is lower - deferring to device`);
+        // Deferring is not the same as disagreeing forever. `level` is what every other
+        // renderer draws, so leaving it stale strands them on the old value and re-logs
+        // this same line every tick with nothing converging. Adopt the device's rung -
+        // raising is always ladder-legal, and a live read is the freshest evidence there
+        // is. `want` is recomputed below so the rest of the tick sees the new level.
+        log(`[supervisor] device says ${got}, our stale ${want} is lower - adopting the device`);
+        o.store.write(got, 'device');
+        o.onChange(o.store.get());
       }
     }
 
+    // Re-read: the deferral branch above may have adopted the device's rung.
+    const settled = o.store.get().level;
+
     // confirmed must describe PIXELS, not a variable.
     let painting: boolean | null = null;
-    if (got === want && o.driver.repainted) painting = await o.driver.repainted();
+    if (got === settled && o.driver.repainted) painting = await o.driver.repainted();
 
     let next: Confirmed;
-    if (got === want && painting !== false) {
+    if (got === settled && painting !== false) {
       lastGoodAt = Date.now();
-      next = want;
+      next = settled;
     } else if (painting === false) {
       log('[supervisor] device state agrees but the panel is not repainting');
       next = 'unknown';
