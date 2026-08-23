@@ -1,5 +1,12 @@
 # ESP32 Integration - Handoff Brief
 
+> **STATUS: COMPLETE (2026-08-23).** All ten steps executed and accepted; transcript on
+> issue #6, which is closed. Outcome and the three decisions it forced are recorded as
+> **D-22** in `CONTEXT.md`. This document is kept as the record of what was handed over,
+> not as outstanding work. Note that section "The manual hold" below was amended in
+> practice: a manual write to a rung *below* the floor releases the floor (D-21), because
+> "applies its level as given" left `level` and `hold` able to contradict each other.
+
 2026-08-23. Written to hand this work to a fresh context window. Read this first, then the
 spec.
 

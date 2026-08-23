@@ -294,3 +294,27 @@ else (state, light control, API) lives on the receiver.
      a floor above the level, contradicting itself in `GET /status`, and armed to yank the
      light back to yellow on the next detector write. An explicit human instruction wins:
      asking for a lower rung by hand clears the hold.
+- **D-22 (2026-08-23)** **The ESP32 integration is live and accepted.** All ten steps of
+  the spec are done; the acceptance transcript is on issue #6, which is closed. The
+  service on 8484 (D-13 LaunchDaemon) now drives the real light; `confirmed` is a genuine
+  device read. Soak over 61 minutes: 240/240 polls, 240/240 API-device agreement, zero
+  frame-counter resets (so zero reboots across four missed 15-minute windows - the proof
+  that `api: reboot_timeout: 0s` works), median set->confirm 120 ms, zero unprovoked
+  supervisor deferrals. Three decisions fall out of doing it:
+  1. **The device publishes what it drew.** A `Render` text sensor exposes which branch
+     the display lambda took, so `GET /text_sensor/Render` reports what is on the glass.
+     `confirmed` can now mean "the panel drew this", not "a variable holds this". This was
+     added because the one state that matters most - a stale `available` refusing to
+     render calm - is on screen only between the device going stale and the next
+     heartbeat, so an observer glancing at the panel reliably sees the wrong thing and
+     concludes the branch is broken. That happened, and cost a round trip to disprove.
+  2. **Deferring to the device must adopt the device.** Refusing to push a stale lower
+     rung DOWN is right (D-6/D-18), but leaving `level` untouched afterwards strands every
+     other renderer on the old value forever. Both the boot path and the supervisor now
+     adopt the rung they defer to; raising is always ladder-legal.
+  3. **A write is not confirmed by the next read.** `web_server` answers the POST before
+     applying the value, so a read-back issued immediately can return the value just
+     overwritten. The driver re-reads across that gap. Observed live, not theorised.
+  Operational note: `onair restart` needs sudo with a TTY. An agent can cycle the daemon
+  by killing the process and letting `KeepAlive` respawn it against a rebuilt `dist/`.
+
