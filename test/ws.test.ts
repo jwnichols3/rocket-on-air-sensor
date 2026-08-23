@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,11 +7,14 @@ import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createApp, type App } from '../src/app.js';
 import type { LightDriver } from '../src/driver.js';
-import type { Confirmed } from '../src/state.js';
+import { defaultState, type Confirmed, type Level } from '../src/state.js';
 
 class StubDriver implements LightDriver {
-  async set(onAir: boolean): Promise<Confirmed> {
-    return onAir ? 'on' : 'off';
+  async set(level: Level): Promise<Confirmed> {
+    return level;
+  }
+  async read(): Promise<Confirmed> {
+    return 'unknown';
   }
 }
 
@@ -170,7 +173,15 @@ async function connectWs(port: number, path = '/events/ws', pipelinedBytes?: Buf
 }
 
 async function bootApp(opts: { token?: string } = {}): Promise<App> {
-  const stateFile = join(await mkdtemp(join(tmpdir(), 'onair-ws-')), 'state.json');
+  const dir = await mkdtemp(join(tmpdir(), 'onair-ws-'));
+  const stateFile = join(dir, 'state.json');
+  // Seed at `available` so these tests exercise transport and transitions, not the boot
+  // default (which is `dnd`, and has its own test in app-boot.test.ts).
+  await writeFile(
+    stateFile,
+    JSON.stringify({ ...defaultState(), level: 'available', intended: 'off' }),
+    'utf8',
+  );
   return createApp({ stateFile, port: 0, token: opts.token, driver: new StubDriver(), log: () => {} });
 }
 
@@ -183,7 +194,8 @@ test('handshake + snapshot: 101, correct accept, first frame is status JSON', as
 
   const snapshot = await client.nextJson();
   assert.equal(snapshot.intended, 'off');
-  assert.equal(snapshot.confirmed, 'off');
+  assert.equal(snapshot.level, 'available');
+  assert.equal(snapshot.confirmed, 'available');
   assert.equal(snapshot.message, null);
   assert.equal(typeof snapshot.ageSeconds, 'number');
 

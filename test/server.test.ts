@@ -8,29 +8,33 @@ import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { LightDriver } from '../src/driver.js';
 import { createApiServer, type ServerDeps } from '../src/server.js';
-import { defaultState, StateStore, type Confirmed, type OnAirState } from '../src/state.js';
+import { defaultState, StateStore, type Confirmed, type Level, type PersistedState } from '../src/state.js';
 
 class StubDriver implements LightDriver {
-  calls: boolean[] = [];
+  calls: Level[] = [];
   fail = false;
   /** When set, set() throws this value instead of an Error (tests non-Error throw handling). */
   throwValue: unknown = undefined;
   /** When set, set() waits for this promise to resolve before returning. */
   gate: Promise<void> | null = null;
 
-  async set(onAir: boolean): Promise<Confirmed> {
-    this.calls.push(onAir);
+  async set(level: Level): Promise<Confirmed> {
+    this.calls.push(level);
     if (this.gate) await this.gate;
     if (this.throwValue !== undefined) throw this.throwValue;
     if (this.fail) throw new Error('light unreachable');
-    return onAir ? 'on' : 'off';
+    return level;
+  }
+
+  async read(): Promise<Confirmed> {
+    return this.calls.at(-1) ?? 'unknown';
   }
 }
 
 interface Harness {
   base: string;
   driver: StubDriver;
-  persisted: OnAirState[];
+  persisted: PersistedState[];
   close: () => Promise<void>;
 }
 
@@ -41,9 +45,9 @@ interface BootExtras {
 
 async function boot(token?: string, log?: (line: string) => void, extras?: BootExtras): Promise<Harness> {
   const driver = new StubDriver();
-  const persisted: OnAirState[] = [];
+  const persisted: PersistedState[] = [];
   const deps: ServerDeps = {
-    store: new StateStore(defaultState()),
+    store: new StateStore({ ...defaultState(), level: 'available' }),
     driver,
     persist: async (state) => {
       persisted.push(state);
@@ -85,9 +89,10 @@ test('PUT /state turns on, persists, and reports driver confirmation', async () 
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.intended, 'on');
-  assert.equal(body.confirmed, 'on');
+  assert.equal(body.level, 'dnd');
+  assert.equal(body.confirmed, 'dnd');
   assert.equal(body.source, 'detector');
-  assert.deepEqual(h.driver.calls, [true]);
+  assert.deepEqual(h.driver.calls, ['dnd']);
   assert.equal(h.persisted.length, 1);
   assert.equal(h.persisted[0]!.intended, 'on');
   assert.equal(h.persisted[0]!.confirmed, 'unknown');
@@ -123,8 +128,8 @@ test('driver failure is logged before confirmed is set to unknown', async () => 
   const body = await res.json();
   assert.equal(body.confirmed, 'unknown');
   assert.ok(
-    lines.some((line) => /driver\.set\(true\) failed/.test(line)),
-    `expected a log line matching /driver\\.set\\(true\\) failed/, got: ${JSON.stringify(lines)}`,
+    lines.some((line) => /driver\.set\(dnd\) failed/.test(line)),
+    `expected a log line matching /driver\\.set\\(dnd\\) failed/, got: ${JSON.stringify(lines)}`,
   );
   await h.close();
 });
@@ -137,7 +142,7 @@ test('POST /on and /off are manual conveniences with ?source= override', async (
   body = await (await fetch(`${h.base}/off?source=shortcut`, { method: 'POST' })).json();
   assert.equal(body.intended, 'off');
   assert.equal(body.source, 'shortcut');
-  assert.deepEqual(h.driver.calls, [true, false]);
+  assert.deepEqual(h.driver.calls, ['dnd', 'available']);
   await h.close();
 });
 
@@ -200,7 +205,7 @@ test('auth gate runs before routing: unknown path 401s without a token, not 404'
 
 test('createApiServer rejects an empty token', () => {
   const deps: ServerDeps = {
-    store: new StateStore(defaultState()),
+    store: new StateStore({ ...defaultState(), level: 'available' }),
     driver: new StubDriver(),
     persist: async () => {},
     token: '',
@@ -225,7 +230,7 @@ test('PUT /state with no onAir field returns 400 and never calls the driver', as
   const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({}) });
   assert.equal(res.status, 400);
   const body = await res.json();
-  assert.equal(body.error, 'onAir must be a boolean');
+  assert.equal(body.error, 'body must contain level or onAir');
   assert.deepEqual(h.driver.calls, []);
   await h.close();
 });
@@ -259,7 +264,7 @@ test('concurrent writes serialize: last write wins, driver calls and persists ha
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(
     h.driver.calls,
-    [true],
+    ['dnd'],
     'fast write must stay queued behind the slow write, not race through the driver',
   );
 
@@ -272,9 +277,9 @@ test('concurrent writes serialize: last write wins, driver calls and persists ha
 
   const status = await (await fetch(`${h.base}/status`)).json();
   assert.equal(status.intended, 'off');
-  assert.equal(status.confirmed, 'off');
+  assert.equal(status.confirmed, 'available');
 
-  assert.deepEqual(h.driver.calls, [true, false]);
+  assert.deepEqual(h.driver.calls, ['dnd', 'available']);
   assert.equal(h.persisted.length, 2);
   assert.equal(h.persisted[0]!.intended, 'on');
   assert.equal(h.persisted[1]!.intended, 'off');
