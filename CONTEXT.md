@@ -351,4 +351,45 @@ else (state, light control, API) lives on the receiver.
   interpolate no state and are identical for every caller - while keeping every DATA route
   gated. **(b) is the cheaper and probably correct answer; it is a policy change and has
   not been made unilaterally.**
+- **D-24 (2026-08-23)** **Loopback alone does not authenticate. `Origin` does.** The owner
+  proposed waiving auth for localhost, on the reasoning that "it is localhost, so that is
+  not a security hole". **Measured, and the premise is false:** a page served from a
+  different address performed `POST /available` (no body, no `Content-Type`, so a CORS
+  simple request needing no preflight) against a loopback port, and the server saw
+  `remote: 127.0.0.1` with `origin: http://10.42.14.189:9099`. A `remoteAddress` check
+  passes that attack. Repeating it from a different **port on the same host** returned
+  `Sec-Fetch-Site: same-site`, so rejecting only `cross-site` also fails - a port is not
+  part of a "site". `Origin` was present and wrong in both cases. **Ruling: the token is
+  waived only when the connection is from loopback AND `Host` names a loopback name on our
+  port AND `Origin` is either absent or exactly one of ours; and never when `Sec-Fetch-Site`
+  is present and is anything other than `same-origin` or `none`.** Explicitly NOT protected:
+  malware already running as this user (it can read `~/.onair/config.env` and take the token,
+  so demanding one buys nothing), and a second human account on this Mac (accepted; single-user
+  machine - **revisit if that changes**). The two attacks become regression tests.
+- **D-25 (2026-08-23)** **`/ui` and `/display` are served unauthenticated; every data route
+  stays gated.** Both are single template strings with **zero `${}` interpolations**, so they
+  are byte-identical for every caller and disclose nothing. Gating them bought no
+  confidentiality and cost three real things: the token in the address bar and browser
+  history, a `401` on refresh (a top-level navigation cannot carry an `Authorization`
+  header), and a raw-JSON error page that is a dead end for a human. This supersedes the
+  recommendation recorded in D-23, which flagged it and left it for Rocket to decide.
+- **D-26 (2026-08-23)** **Menu bar control is a SwiftBar plugin, not a native app.** The
+  privileged half already exists and is merely uninstalled: `onair install --sudoers` writes
+  a narrowly scoped `/etc/sudoers.d/onair` (seven `launchctl` subcommands, this label and
+  plist only, `visudo -cf` validated). With it present, a menu bar tool needs no privilege
+  machinery - it shells out to `onair`. A native Swift `MenuBarExtra` was rejected: Xcode or
+  a hand-rolled build, an app bundle and a login-item registration, to arrive at something
+  that shells out to `onair` anyway. Accepted cost: SwiftBar is a third-party app to install
+  once (`brew install --cask swiftbar`, MIT, actively maintained, macOS 26 compatible).
+- **D-27 (2026-08-23)** **One token, not a read/write split - for now.** The owner asked
+  whether network access should be read-only. Establishing the fact he was unsure about:
+  **the ESP32 is not a client of this API** - the service is an HTTP client of the *device*
+  (`src/esphome-driver.ts`), so nothing needs a token to reach the light. Inbound clients are
+  the two pages, SSE, the WebSocket, Companion and phone Shortcuts. Since control is what
+  happens locally (and D-24 covers it), and the network consumers that would take a read-only
+  credential live on the same LAN already trusted, a split adds config surface and revocation
+  complexity for little gain. **Revisit if** the kiosk moves somewhere physically untrusted,
+  or anything is exposed beyond the LAN. `?token=` stays available for `EventSource`, the
+  WebSocket and the remote kiosk, none of which can send a header - after D-24/D-25 it is
+  needed only off-machine.
 
