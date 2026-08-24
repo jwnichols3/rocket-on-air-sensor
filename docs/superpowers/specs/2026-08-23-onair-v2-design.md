@@ -1,7 +1,7 @@
 # On-Air v2 design
 
 **Status:** decided. Every question on map [#19](https://github.com/jwnichols3/rocket-on-air-sensor/issues/19) is answered; nothing here is waiting on a conversation.
-**Decisions:** D-28..D-41 in `CONTEXT.md`. **Wire contract:** `docs/api-contract.md` (v2).
+**Decisions:** D-28..D-44 in `CONTEXT.md`. **Wire contract:** `docs/api-contract.md` (v2).
 **Source memo:** `docs/2026-08-23-onair-v2-wayfinder-brief.md`.
 
 This document is what the SDD pipeline writes per-part implementation specs from. It fixes
@@ -385,6 +385,10 @@ source, not `dev`:
 | **Respond-before-apply**, identical to `select` | `DEFER_ACTION(call, call.perform())` before `request->send(200)` - **so D-22.3's re-read across the gap carries over unchanged** |
 | `max_length` default 255 | `text/__init__.py` |
 | `mode: password` masks state to `********` | `web_server.cpp` `text_json_` |
+| **`mode` is a *required* option on template `text`** | measured - config fails without it (D-44) |
+| **Arbitrary runtime keys are accepted** | **measured on the board** - `focus-block` stored and served (D-44) |
+| **A POST with no `Content-Length` gets `411`** | **measured** - true of `select` too; `fetch` sends it, `curl` does not (D-44) |
+| **An invalid value returns `200` and is silently dropped** | **measured** - over-length and empty both. Read-back stays mandatory (D-44) |
 | template `text` supports `restore_value: true` | `template/text/__init__.py` |
 
 Cost: `select` gave free rejection of unknown options at the device; `text` does not.

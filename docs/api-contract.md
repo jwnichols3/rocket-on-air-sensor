@@ -8,7 +8,7 @@ source.** VCREC - the external detector (D-30) - is exactly that reader: this re
 imports it, never names it in code, and never depends on its shape. Anything a client
 needs to know has to be here.
 
-Decisions: D-31..D-41 in `CONTEXT.md`. Design: `docs/superpowers/specs/2026-08-23-onair-v2-design.md`.
+Decisions: D-31..D-44 in `CONTEXT.md`. Design: `docs/superpowers/specs/2026-08-23-onair-v2-design.md`.
 
 > **What changed from v1.** `level` and the three-rung ladder are gone, replaced by a
 > user-editable **state table**. `hold` is a pin, not a floor. `onAir`, `POST /on`,
@@ -278,6 +278,21 @@ which feels broken when you just made it in the admin UI. So the server also wri
 seeing a version it does not hold re-pulls at once. This is a *trigger* for a pull, not a push
 of the table - the server still sends no configuration on the state path, and still keeps no
 device registry beyond the one host it already writes to.
+
+### Driving the ESP32 (measured, 2026-08-24)
+
+Not part of this API - this is the *server's* client relationship with the device - but
+recorded here because it is the one place a reader will look.
+
+- `POST http://<device>/text/PresenceKey/set?value=<id>` writes; `GET .../text/PresenceKey`
+  reads back.
+- **A POST with no `Content-Length` gets `411`.** `esp_http_server` requires the header even
+  for an empty body. Node's `fetch` sends `Content-Length: 0` automatically; `curl -X POST`
+  does not, so use `curl -d ''`. This is not new and not specific to `text` - the older
+  `select` endpoint behaves identically. It looks like a broken endpoint and is not one.
+- **An invalid value returns `200` and is silently dropped**, leaving the previous state in
+  place. Measured for both over-length and empty writes. **Read-back after a write is
+  mandatory**; the write's status code tells you nothing.
 
 ### `GET /public/status` and `GET /public/events`
 

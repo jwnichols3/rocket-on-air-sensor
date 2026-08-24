@@ -1121,3 +1121,43 @@ else (state, light control, API) lives on the receiver.
   **One mitigation, consistent with a choice Rocket already made rather than fighting this
   one:** the admin UI shows a change-me nag for the passphrase exactly as it does for the admin
   password (D-35), and does not force a change. Same treatment, same reasoning, no new argument.
+- **D-44 (2026-08-24)** **The `text` transport is proven on real hardware, and the board taught
+  us three things the source did not.** Confirms D-38's central bet before anything depends on
+  it. Method: a `PresenceKey` template `text` added **alongside** the existing `Presence`
+  select and flashed OTA to the live device, so the light kept working throughout - expand
+  before contract. Firmware 51.2% -> 51.6% flash; the entity costs ~0.4%.
+  **The premise holds.** `POST /text/PresenceKey/set?value=focus-block` -> `200`, and a
+  read-back returns `focus-block`. A key no firmware ever compiled is stored and served. That
+  is the whole of D-38's argument, and it is now measured rather than inferred.
+  **Three findings that change what gets written down:**
+  1. **A bare `curl -X POST` gets `411 Client must specify Content-Length`** - and **this is
+     not new and not `text`-specific**: the shipped `select` endpoint does exactly the same.
+     `esp_http_server` demands a `Content-Length` on POST; Node's `fetch` sends
+     `Content-Length: 0` automatically, which is the only reason the production driver has
+     ever worked. Nobody had hit it because nobody had driven this endpoint from `curl`. It
+     goes in the docs as a gotcha - `curl -d ''` is the fix - because the failure looks like a
+     broken endpoint rather than a missing header.
+  2. **A length violation returns `200` and is silently dropped.** An 80-character write
+     against `max_length: 64` returned `200` and left the previous value in place. This is
+     D-17's "invalid options are silently dropped, still 200" trap reproduced on the new
+     transport for a *different* cause. **So read-back remains mandatory under `text`**, and
+     the reason is now length rather than enum membership. D-22.3 survives the transport change
+     on its own merits.
+  3. **An empty write was accepted**, storing `""`. That is worse than it looks: `""` is not a
+     state, and a panel rendering nothing reads exactly like a panel rendering calm - the
+     invariant violation this system exists to prevent, arriving through a typo. Fixed by
+     `min_length: 1`, re-flashed and re-verified: an empty write now returns `200` and is
+     silently dropped, leaving the previous value. Loud rejection is not on offer, which is
+     the third independent argument for mandatory read-back.
+  **Two smaller notes.** `mode` is a **required** option on template `text` (config fails
+  without it); `mode: password` would mask the value in the JSON and is therefore wrong here,
+  since the driver must read it back. And the state entity keeps `on_value` wired to
+  `last_write_ms`, so the staleness machinery works identically on the new transport.
+  **One thing deliberately not claimed.** The respond-before-apply gap (D-22.3) **was not
+  observed** - 0 of 12 write-then-immediately-read pairs caught it, and a `text` entity with
+  `optimistic: true` may well apply synchronously where `select` did not. That is a
+  non-observation of a race, not a disproof, and it is far too cheap to keep the driver's
+  re-read to justify removing it on this evidence. `restore_value` across a reboot was also
+  **not** exercised in this run.
+  Firmware change committed locally in `~/code/esp32` and **not pushed**; it moves into
+  `firmware/` with D-37.
