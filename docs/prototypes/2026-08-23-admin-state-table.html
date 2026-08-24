@@ -1,0 +1,896 @@
+<title>Rocket On Air - admin prototype</title>
+
+<style>
+:root {
+  color-scheme: light dark;
+
+  --bg:#eceff1; --panel:#ffffff; --panel-2:#f5f7f8; --panel-3:#eaeef0;
+  --line:#d3d9dd; --line-strong:#b3bcc3;
+  --ink:#10161a; --ink-2:#59646c; --ink-3:#889299;
+  --accent:#0e6577; --accent-2:#0b515f; --accent-ink:#ffffff; --accent-soft:#dceef2;
+  --stage-ink:#7a5200; --stage-bg:#ffeec4; --stage-line:#e0b95c;
+  --danger-ink:#8c1d1d; --danger-bg:#fbe4e4; --danger-line:#e0a3a3;
+  --ok-ink:#14603a; --ok-bg:#dcf0e5;
+  --shadow:0 1px 2px rgba(16,24,32,.07), 0 10px 30px rgba(16,24,32,.07);
+  --radius:6px;
+
+  --sans:ui-sans-serif,-apple-system,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#0c0f12; --panel:#141a1f; --panel-2:#1a2127; --panel-3:#212a31;
+    --line:#242d34; --line-strong:#36424b;
+    --ink:#e2e8ec; --ink-2:#939ea7; --ink-3:#69747c;
+    --accent:#4fb8ce; --accent-2:#7fd2e3; --accent-ink:#05202a; --accent-soft:#10333c;
+    --stage-ink:#ffd487; --stage-bg:#3b2d09; --stage-line:#6b5312;
+    --danger-ink:#ff9d9d; --danger-bg:#3a1515; --danger-line:#6d2a2a;
+    --ok-ink:#8ee0b2; --ok-bg:#123326;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#0c0f12; --panel:#141a1f; --panel-2:#1a2127; --panel-3:#212a31;
+  --line:#242d34; --line-strong:#36424b;
+  --ink:#e2e8ec; --ink-2:#939ea7; --ink-3:#69747c;
+  --accent:#4fb8ce; --accent-2:#7fd2e3; --accent-ink:#05202a; --accent-soft:#10333c;
+  --stage-ink:#ffd487; --stage-bg:#3b2d09; --stage-line:#6b5312;
+  --danger-ink:#ff9d9d; --danger-bg:#3a1515; --danger-line:#6d2a2a;
+  --ok-ink:#8ee0b2; --ok-bg:#123326;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+}
+
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:var(--sans); font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+button, input, select, textarea { font:inherit; color:inherit; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:3px; }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important; } }
+
+.mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.eyebrow {
+  font-size:10.5px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--ink-3); font-weight:600;
+}
+
+/* ---------- proto banner ---------- */
+.proto {
+  background:var(--accent); color:var(--accent-ink);
+  padding:7px 20px; font-size:12px; display:flex; gap:14px;
+  align-items:center; flex-wrap:wrap;
+}
+.proto strong { letter-spacing:.06em; text-transform:uppercase; font-size:10.5px; }
+.proto span { opacity:.85; }
+.proto .spacer { margin-left:auto; }
+.proto button {
+  background:transparent; border:1px solid currentColor; color:inherit;
+  padding:2px 9px; border-radius:99px; font-size:11.5px; cursor:pointer;
+}
+.proto button[aria-pressed="true"] { background:var(--accent-ink); color:var(--accent); border-color:var(--accent-ink); }
+
+/* ---------- landing ---------- */
+.landing { max-width:520px; margin:0 auto; padding:64px 24px 80px; }
+.landing .brandline { display:flex; align-items:baseline; gap:10px; margin-bottom:28px; }
+.landing h1 { font-size:19px; margin:0; letter-spacing:-.01em; }
+.tally {
+  border-radius:var(--radius); padding:34px 26px; text-align:center;
+  border:1px solid var(--line); box-shadow:var(--shadow);
+}
+.tally .word { font-size:34px; font-weight:700; letter-spacing:.06em; margin:0; }
+.tally .sub { font-size:12px; opacity:.8; margin:8px 0 0; }
+.facts { list-style:none; margin:22px 0 0; padding:0; display:grid; gap:1px; background:var(--line);
+  border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
+.facts li { background:var(--panel); display:flex; justify-content:space-between; gap:16px; padding:9px 14px; font-size:13px; }
+.facts .k { color:var(--ink-2); }
+.landing .note { color:var(--ink-3); font-size:12px; margin-top:18px; }
+
+/* ---------- shell ---------- */
+.shell { min-height:100vh; display:flex; flex-direction:column; }
+.topbar {
+  position:sticky; top:0; z-index:20; background:var(--panel);
+  border-bottom:1px solid var(--line); display:flex; align-items:center;
+  gap:16px; padding:0 18px; height:56px; flex-wrap:wrap;
+}
+.topbar .brand { font-weight:650; letter-spacing:-.01em; white-space:nowrap; }
+.topbar .brand em { font-style:normal; color:var(--ink-3); font-weight:500; }
+.livepill {
+  display:inline-flex; align-items:center; gap:8px; border-radius:99px;
+  padding:4px 13px 4px 9px; font-size:12px; font-weight:650; letter-spacing:.05em;
+  border:1px solid rgba(128,128,128,.28);
+}
+.livepill .dot { width:8px; height:8px; border-radius:99px; background:currentColor; }
+.topbar .spacer { margin-left:auto; }
+
+.commit { display:flex; align-items:center; gap:10px; }
+.stagedcount {
+  font-size:12px; color:var(--stage-ink); background:var(--stage-bg);
+  border:1px solid var(--stage-line); border-radius:99px; padding:2px 10px; font-weight:600;
+}
+.stagedcount.clean { color:var(--ink-3); background:transparent; border-color:var(--line); font-weight:500; }
+
+.btn {
+  border:1px solid var(--line-strong); background:var(--panel-2); color:var(--ink);
+  padding:6px 13px; border-radius:var(--radius); cursor:pointer; font-size:13px;
+}
+.btn:hover { background:var(--panel-3); }
+.btn:disabled { opacity:.45; cursor:not-allowed; }
+.btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600; }
+.btn.primary:hover { background:var(--accent-2); }
+.btn.ghost { background:transparent; border-color:transparent; color:var(--ink-2); }
+.btn.ghost:hover { background:var(--panel-3); color:var(--ink); }
+.btn.danger { color:var(--danger-ink); border-color:var(--danger-line); background:transparent; }
+.btn.danger:hover { background:var(--danger-bg); }
+.btn.sm { padding:3px 9px; font-size:12px; }
+
+.body { display:flex; align-items:flex-start; flex:1; }
+.rail {
+  width:196px; flex:none; padding:20px 12px; position:sticky; top:56px;
+  align-self:flex-start; display:flex; flex-direction:column; gap:2px;
+}
+.rail a {
+  display:block; padding:7px 11px; border-radius:var(--radius); text-decoration:none;
+  color:var(--ink-2); font-size:13px; cursor:pointer; border-left:2px solid transparent;
+}
+.rail a:hover { background:var(--panel-2); color:var(--ink); }
+.rail a[aria-current="true"] { background:var(--panel); color:var(--ink); font-weight:600; border-left-color:var(--accent); box-shadow:var(--shadow); }
+.rail .railhead { padding:0 11px 8px; }
+
+main { flex:1; min-width:0; padding:22px 24px 90px; max-width:1180px; }
+.card {
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:var(--shadow); margin-bottom:20px; overflow:hidden;
+}
+.card > header { padding:15px 18px; border-bottom:1px solid var(--line); }
+.card > header h2 { margin:0; font-size:15px; letter-spacing:-.01em; }
+.card > header p { margin:5px 0 0; color:var(--ink-2); font-size:12.5px; max-width:68ch; }
+.card .pad { padding:18px; }
+
+/* ---------- state table ---------- */
+.rowwrap { border-bottom:1px solid var(--line); }
+.rowwrap:last-child { border-bottom:0; }
+.rowwrap.staged { background:linear-gradient(90deg,var(--stage-bg) 0 3px, transparent 3px); }
+.rowwrap.removed .row { opacity:.5; }
+.rowwrap.removed .swatch .lab { text-decoration:line-through; }
+
+.row { display:grid; grid-template-columns:46px 172px 1fr 172px 108px; gap:14px; align-items:center; padding:11px 18px; }
+.row .ord { color:var(--ink-3); font-size:12px; }
+.idcell { display:flex; align-items:center; gap:7px; min-width:0; }
+.idcell code { font-size:12.5px; color:var(--ink); background:var(--panel-3); padding:2px 6px; border-radius:4px; }
+.lock { color:var(--ink-3); font-size:11px; }
+.metacell { min-width:0; }
+.metacell .lbl { font-weight:600; }
+.metacell .desc { color:var(--ink-2); font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rowacts { display:flex; gap:5px; justify-content:flex-end; }
+
+.swatch {
+  border-radius:4px; padding:8px 11px; display:flex; flex-direction:column; gap:2px;
+  border:1px solid rgba(128,128,128,.3); min-width:0;
+}
+.swatch .lab { font-weight:700; letter-spacing:.06em; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.swatch .ratio { font-size:10.5px; opacity:.85; font-family:var(--mono); }
+
+.tag { font-size:10px; letter-spacing:.1em; text-transform:uppercase; font-weight:700; padding:2px 6px; border-radius:3px; white-space:nowrap; }
+.tag.live { background:var(--ok-bg); color:var(--ok-ink); }
+.tag.held { background:var(--accent-soft); color:var(--accent); }
+.tag.staged { background:var(--stage-bg); color:var(--stage-ink); }
+.tag.new { background:var(--stage-bg); color:var(--stage-ink); }
+.tag.del { background:var(--danger-bg); color:var(--danger-ink); }
+.tag.busy { background:var(--panel-3); color:var(--ink-2); }
+.tags { display:flex; gap:5px; flex-wrap:wrap; margin-top:3px; }
+
+/* editor */
+.editor { padding:4px 18px 18px; background:var(--panel-2); border-top:1px dashed var(--line); }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin-top:14px; }
+.grid.colours { grid-template-columns:repeat(2,minmax(190px,300px)); }
+.field { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.field > label { font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); font-weight:600; }
+.field input[type=text], .field input[type=number], .field select, .field textarea {
+  background:var(--panel); border:1px solid var(--line-strong); border-radius:var(--radius);
+  padding:7px 9px; width:100%;
+}
+.field .hint { font-size:11.5px; color:var(--ink-3); }
+.field.bad input { border-color:var(--danger-line); background:var(--danger-bg); }
+.field .err { font-size:11.5px; color:var(--danger-ink); }
+.colorrow { display:flex; gap:8px; align-items:center; }
+.colorrow input[type=color] { width:38px; height:34px; padding:0; border:1px solid var(--line-strong); border-radius:var(--radius); background:var(--panel); cursor:pointer; }
+.colorrow input[type=text] { flex:1; font-family:var(--mono); }
+.toggle { display:inline-flex; border:1px solid var(--line-strong); border-radius:var(--radius); overflow:hidden; align-self:flex-start; }
+.toggle button { border:0; background:var(--panel); padding:7px 13px; cursor:pointer; font-size:13px; }
+.toggle button[aria-pressed="true"] { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+.editoracts { display:flex; gap:8px; margin-top:16px; align-items:center; }
+.editoracts .spacer { margin-left:auto; }
+
+.preview { display:flex; gap:14px; align-items:stretch; margin-top:16px; flex-wrap:wrap; }
+.panelmock {
+  width:236px; height:118px; border-radius:8px; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:5px; border:3px solid #2a2a2a;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+}
+.panelmock .big { font-size:23px; font-weight:800; letter-spacing:.07em; text-align:center; padding:0 10px; }
+.panelmock .small { font-size:10.5px; opacity:.8; font-family:var(--mono); }
+.previewnote { flex:1; min-width:200px; font-size:12.5px; color:var(--ink-2); }
+.previewnote b { color:var(--ink); }
+
+/* banners */
+.banner { display:flex; gap:11px; padding:11px 14px; border-radius:var(--radius); font-size:13px; align-items:flex-start; }
+.banner.warn { background:var(--stage-bg); color:var(--stage-ink); border:1px solid var(--stage-line); }
+.banner.err { background:var(--danger-bg); color:var(--danger-ink); border:1px solid var(--danger-line); }
+.banner.info { background:var(--panel-2); color:var(--ink-2); border:1px solid var(--line); }
+.banner.ok { background:var(--ok-bg); color:var(--ok-ink); border:1px solid transparent; }
+.banner .icon { font-weight:800; font-family:var(--mono); }
+
+.tablefoot { padding:13px 18px; border-top:1px solid var(--line); display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.tablefoot .spacer { margin-left:auto; }
+
+dl.kv { display:grid; grid-template-columns:auto 1fr; gap:7px 18px; margin:0; font-size:13px; }
+dl.kv dt { color:var(--ink-2); }
+dl.kv dd { margin:0; font-family:var(--mono); }
+
+.toast {
+  position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+  background:var(--ink); color:var(--bg); padding:9px 16px; border-radius:99px;
+  font-size:13px; box-shadow:var(--shadow); z-index:60;
+}
+
+.modalwrap { position:fixed; inset:0; background:rgba(8,12,16,.55); display:flex; align-items:center; justify-content:center; z-index:50; padding:20px; }
+.modal { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); max-width:520px; width:100%; }
+.modal header { padding:16px 18px 0; }
+.modal h3 { margin:0; font-size:15px; }
+.modal .pad { padding:14px 18px 18px; }
+.modal footer { padding:0 18px 18px; display:flex; gap:8px; justify-content:flex-end; }
+
+@media (max-width:900px) {
+  .body { flex-direction:column; }
+  .rail { position:static; width:100%; flex-direction:row; overflow-x:auto; padding:10px 12px; }
+  .rail .railhead { display:none; }
+  .row { grid-template-columns:1fr; gap:8px; }
+  .rowacts { justify-content:flex-start; }
+}
+</style>
+
+<div class="proto">
+  <strong>Prototype</strong>
+  <span>Throwaway. No server, no persistence - reload resets it. Built to react to, not to keep.</span>
+  <span class="spacer"></span>
+  <button id="viewToggle" type="button">Show landing page</button>
+  <button id="remoteToggle" type="button" aria-pressed="false">Simulate: remote</button>
+</div>
+
+<div id="app"></div>
+<div id="toast"></div>
+<div id="modal"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- seed data
+const SEED = [
+  { id:"available",     label:"AVAILABLE",     busy:false, bgcolor:"#0b6e2e", color:"#ffffff", order:0,  description:"Free to interrupt. Knock and come in." },
+  { id:"on-air",        label:"ON AIR",        busy:true,  bgcolor:"#c1121f", color:"#ffffff", order:1,  description:"Camera is live. Do not enter." },
+  { id:"interruptible", label:"INTERRUPTIBLE", busy:false, bgcolor:"#e8a317", color:"#1a1a1a", order:2,  description:"Working, but you can interrupt. Knock first." },
+  { id:"recording",     label:"RECORDING",     busy:true,  bgcolor:"#6a0dad", color:"#ffffff", order:3,  description:"Audio is being recorded. Do not make noise." },
+  { id:"unknown",       label:"NO DATA",       busy:true,  bgcolor:"#1a1a1a", color:"#ff00ff", order:99, description:"No usable state. Something is wrong - do not assume it is safe to enter.", reserved:true }
+];
+
+const clone = o => JSON.parse(JSON.stringify(o));
+
+const server = {
+  version: 1,
+  states: clone(SEED),
+  admin:   { user:"rocket", password:"ESP32", changed:false },
+  network: { bind:"all", iface:"en0", port:8484 },
+  device:  { host:"elegoo-esp32.local", username:"onair", password:"hunter2" },
+  passphrase: "moth-lantern-9417",
+  shortcuts: { on:"on-air", off:"available" },
+  live:    { state:"on-air", source:"auto:vcrec", hold:null, ageSeconds:12 }
+};
+
+const ui = {
+  view: "admin",          // "admin" | "landing"
+  remote: false,          // simulates being off-machine: D-24 waiver does not apply
+  authed: true,
+  section: "states",
+  draft: clone(server.states),
+  editing: null,          // row id currently open in the editor
+  form: null,             // working copy while editing
+  deleted: new Set(),
+  toastTimer: null,
+  modal: null
+};
+
+// ---------------------------------------------------------------- helpers
+const $ = sel => document.querySelector(sel);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+function slugify(s) {
+  return String(s).toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "state";
+}
+function liveRow(id)  { return server.states.find(r => r.id === id); }
+function draftRow(id) { return ui.draft.find(r => r.id === id); }
+function byOrder(a, b) { return a.order - b.order || a.id.localeCompare(b.id); }
+
+function rowStatus(r) {
+  if (ui.deleted.has(r.id)) return "removed";
+  const l = liveRow(r.id);
+  if (!l) return "new";
+  const keys = ["label","busy","bgcolor","color","order","description"];
+  return keys.some(k => String(l[k]) !== String(r[k])) ? "staged" : "clean";
+}
+function stagedCount() {
+  // A deleted row stays in ui.draft with status "removed", so it is already counted here.
+  return ui.draft.filter(r => rowStatus(r) !== "clean").length;
+}
+
+// WCAG relative luminance + contrast. Legibility is a real constraint here, so the
+// prototype answers "is this readable" instead of leaving it to the eye.
+function lum(hex) {
+  const v = [1,3,5].map(i => parseInt(hex.slice(i, i+2), 16) / 255)
+    .map(c => c <= 0.03928 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4));
+  return 0.2126*v[0] + 0.7152*v[1] + 0.0722*v[2];
+}
+function contrast(a, b) {
+  if (!isHex(a) || !isHex(b)) return 0;
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
+const isHex = s => /^#[0-9a-fA-F]{6}$/.test(String(s || ""));
+function ratioLabel(bg, fg) {
+  const c = contrast(bg, fg);
+  if (!c) return { text:"-", ok:false };
+  const r = c.toFixed(1) + ":1";
+  return { text: c >= 4.5 ? r + " AA" : c >= 3 ? r + " large only" : r + " FAILS", ok: c >= 4.5, weak: c < 3 };
+}
+
+function validate(f, selfId) {
+  const e = {};
+  if (!f.label || !f.label.trim()) e.label = "A label is required - it is what the panel draws.";
+  else if (f.label.trim().length > 64) e.label = "64 characters maximum.";
+  if (!isHex(f.bgcolor)) e.bgcolor = "Must be #rrggbb.";
+  if (!isHex(f.color)) e.color = "Must be #rrggbb.";
+  if ((f.description || "").length > 200) e.description = "200 characters maximum.";
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(f.id)) e.id = "Lowercase letters, digits and dashes; must start with a letter or digit.";
+  else if (ui.draft.some(r => r.id === f.id && r.id !== selfId)) e.id = "Another row already uses this id.";
+  return e;
+}
+
+function toast(msg) {
+  clearTimeout(ui.toastTimer);
+  $("#toast").innerHTML = '<div class="toast">' + esc(msg) + "</div>";
+  ui.toastTimer = setTimeout(() => { $("#toast").innerHTML = ""; }, 2600);
+}
+
+// ---------------------------------------------------------------- actions
+function startEdit(id) {
+  ui.editing = id;
+  ui.form = clone(draftRow(id));
+  render();
+  setTimeout(() => { const el = document.querySelector("#f-label"); if (el) { el.focus(); el.select(); } }, 0);
+}
+function cancelEdit() {
+  // Cancel abandons the current edit session only. It does NOT un-stage a row that
+  // was staged earlier - "Revert to live" is the separate, explicit affordance.
+  ui.editing = null; ui.form = null; render();
+}
+function saveRowToDraft() {
+  const errs = validate(ui.form, ui.editing);
+  if (Object.keys(errs).length) { ui.form._errs = errs; render(); return; }
+  const i = ui.draft.findIndex(r => r.id === ui.editing);
+  const f = clone(ui.form);
+  delete f._errs; delete f._isNew;
+  f.label = f.label.trim();
+  f.bgcolor = f.bgcolor.toLowerCase(); f.color = f.color.toLowerCase();
+  ui.draft[i] = f;
+  ui.editing = null; ui.form = null;
+  render();
+  toast("Row staged. Nothing has reached the service yet.");
+}
+function revertRow(id) {
+  const l = liveRow(id);
+  if (!l) { ui.draft = ui.draft.filter(r => r.id !== id); }
+  else { ui.draft[ui.draft.findIndex(r => r.id === id)] = clone(l); }
+  ui.deleted.delete(id);
+  render();
+}
+function addRow() {
+  const r = { id:"", label:"", busy:true, bgcolor:"#3a3f45", color:"#ffffff",
+              order: Math.max(0, ...ui.draft.map(x => x.order === 99 ? 0 : x.order)) + 1,
+              description:"", _isNew:true };
+  ui.draft.push(r);
+  ui.editing = "";
+  ui.form = clone(r);
+  render();
+  setTimeout(() => { const el = document.querySelector("#f-label"); if (el) el.focus(); }, 0);
+}
+function requestDelete(id) {
+  const r = draftRow(id);
+  if (r.reserved) { toast("The unknown row cannot be deleted - it is where dangling references resolve."); return; }
+  const isLive = server.live.state === id;
+  const isHeld = server.live.hold === id;
+  if (isLive || isHeld) {
+    ui.modal = { kind:"delete", id, isLive, isHeld };
+  } else {
+    doDelete(id);
+  }
+  render();
+}
+function doDelete(id) {
+  if (liveRow(id)) ui.deleted.add(id);
+  else ui.draft = ui.draft.filter(r => r.id !== id);
+  ui.modal = null;
+  if (ui.editing === id) { ui.editing = null; ui.form = null; }
+  render();
+}
+function discardAll() {
+  ui.draft = clone(server.states); ui.deleted.clear();
+  ui.editing = null; ui.form = null;
+  render(); toast("All staged changes discarded.");
+}
+function saveConfig() {
+  const n = stagedCount();
+  if (!n) return;
+  const wasLive = server.live.state;
+  const wasHeld = server.live.hold;
+  server.states = ui.draft.filter(r => !ui.deleted.has(r.id)).map(r => { const c = clone(r); delete c._isNew; return c; });
+  server.version += 1;
+  let note = "";
+  if (ui.deleted.has(wasLive)) { server.live.state = "unknown"; server.live.resolvedFrom = wasLive; note = " Live state resolved to unknown."; }
+  if (wasHeld && ui.deleted.has(wasHeld)) { server.live.hold = null; note += " Hold released."; }
+  ui.deleted.clear();
+  ui.draft = clone(server.states);
+  ui.editing = null; ui.form = null;
+  render();
+  toast("Configuration saved. Table version " + server.version + "." + note);
+}
+
+// ---------------------------------------------------------------- render
+function render() {
+  const app = $("#app");
+  if (ui.view === "landing") { app.innerHTML = renderLanding(); }
+  else if (!ui.authed) { app.innerHTML = renderShell(renderLogin()); }
+  else { app.innerHTML = renderShell(renderSection()); }
+  $("#modal").innerHTML = ui.modal ? renderModal() : "";
+  $("#viewToggle").textContent = ui.view === "landing" ? "Show admin console" : "Show landing page";
+  $("#remoteToggle").setAttribute("aria-pressed", String(ui.remote));
+  $("#remoteToggle").textContent = ui.remote ? "Simulate: remote" : "Simulate: at the Mac";
+  wire();
+}
+
+function currentRow() { return server.states.find(r => r.id === server.live.state) || SEED[4]; }
+
+function renderLanding() {
+  const r = currentRow();
+  const stale = server.live.ageSeconds > 90;
+  return '<div class="landing">' +
+    '<div class="brandline"><h1>Rocket On Air</h1><span class="eyebrow">10.42.14.189:8484</span></div>' +
+    '<div class="tally" style="background:' + r.bgcolor + ';color:' + r.color + '">' +
+      '<p class="word">' + esc(r.label) + "</p>" +
+      '<p class="sub">' + esc(r.description) + "</p>" +
+    "</div>" +
+    '<ul class="facts">' +
+      '<li><span class="k">Service</span><span class="mono">running</span></li>' +
+      '<li><span class="k">Currently sending</span><span class="mono">' + esc(r.id) + "</span></li>" +
+      '<li><span class="k">Written by</span><span class="mono">' + esc(server.live.source) + "</span></li>" +
+      '<li><span class="k">Last write</span><span class="mono">' + server.live.ageSeconds + "s ago" + (stale ? " - STALE" : "") + "</span></li>" +
+      '<li><span class="k">Hold</span><span class="mono">' + (server.live.hold ? esc(server.live.hold) : "auto") + "</span></li>" +
+    "</ul>" +
+    '<div style="margin-top:20px"><button class="btn primary" data-act="goadmin">Log in to admin</button></div>' +
+    '<p class="note">Everything on this page comes from <code class="mono">GET /public/status</code>, which is unauthenticated ' +
+    "and deliberately thin - state, label, colours, busy, age. No passphrase, no config, no hold detail, no device information.</p>" +
+    "</div>";
+}
+
+function renderShell(inner) {
+  const r = currentRow();
+  const n = stagedCount();
+  const sections = [["status","Status"],["states","States"],["admin","Admin settings"],["network","Network"],["device","Light"]];
+  return '<div class="shell">' +
+    '<div class="topbar">' +
+      '<div class="brand">Rocket On Air <em>/ admin</em></div>' +
+      '<span class="livepill" style="background:' + r.bgcolor + ';color:' + r.color + '"><span class="dot"></span>' + esc(r.label) + "</span>" +
+      '<span class="spacer"></span>' +
+      (ui.authed ? '<div class="commit">' +
+        '<span class="stagedcount' + (n ? "" : " clean") + '">' + (n ? n + " staged change" + (n === 1 ? "" : "s") : "no changes") + "</span>" +
+        '<button class="btn" data-act="discard"' + (n ? "" : " disabled") + ">Discard all</button>" +
+        '<button class="btn primary" data-act="save"' + (n ? "" : " disabled") + ">Save configuration</button>" +
+      "</div>" : "") +
+    "</div>" +
+    '<div class="body">' +
+      (ui.authed ? '<nav class="rail"><div class="railhead eyebrow">Configuration</div>' +
+        sections.map(([k, t]) => '<a data-sec="' + k + '" aria-current="' + (ui.section === k) + '">' + t + "</a>").join("") +
+      "</nav>" : "") +
+      "<main>" + inner + "</main>" +
+    "</div></div>";
+}
+
+function renderLogin() {
+  return '<div class="card" style="max-width:440px">' +
+    "<header><h2>Log in</h2><p>This request did not come from the Mac itself, so the " +
+    "D-24 Origin waiver does not apply and the admin password is required.</p></header>" +
+    '<div class="pad">' +
+      '<div class="grid" style="grid-template-columns:1fr">' +
+        '<div class="field"><label for="lu">User</label><input id="lu" type="text" value="rocket"></div>' +
+        '<div class="field"><label for="lp">Password</label><input id="lp" type="text" value="ESP32"></div>' +
+      "</div>" +
+      '<div style="margin-top:16px"><button class="btn primary" data-act="login">Log in</button></div>' +
+      '<div class="banner warn" style="margin-top:16px"><span class="icon">!</span><div>' +
+      "The shipped defaults are <code class=\"mono\">rocket</code> / <code class=\"mono\">ESP32</code>. " +
+      "Change them - anyone on this network who has seen the repo knows them.</div></div>" +
+    "</div></div>";
+}
+
+function renderSection() {
+  if (ui.section === "states")  return renderStates();
+  if (ui.section === "status")  return renderStatus();
+  if (ui.section === "admin")   return renderAdmin();
+  if (ui.section === "network") return renderNetwork();
+  return renderDevice();
+}
+
+function renderStatus() {
+  const r = currentRow();
+  const rat = ratioLabel(r.bgcolor, r.color);
+  return '<div class="card"><header><h2>Right now</h2>' +
+    "<p>What the service is asserting, who asserted it, and how old that assertion is.</p></header>" +
+    '<div class="pad">' +
+      '<div class="preview" style="margin-top:0">' +
+        '<div class="panelmock" style="background:' + r.bgcolor + ';color:' + r.color + '">' +
+          '<div class="big">' + esc(r.label) + "</div>" +
+          '<div class="small">' + esc(r.id) + " &middot; " + rat.text + "</div>" +
+        "</div>" +
+        '<div class="previewnote">' +
+          '<dl class="kv">' +
+            "<dt>state</dt><dd>" + esc(r.id) + "</dd>" +
+            "<dt>intended</dt><dd>" + (r.busy ? "on" : "off") + "</dd>" +
+            "<dt>confirmed</dt><dd>" + esc(r.id) + "</dd>" +
+            "<dt>source</dt><dd>" + esc(server.live.source) + "</dd>" +
+            "<dt>hold</dt><dd>" + (server.live.hold ? esc(server.live.hold) : "null") + "</dd>" +
+            "<dt>ageSeconds</dt><dd>" + server.live.ageSeconds + "</dd>" +
+            "<dt>tableVersion</dt><dd>" + server.version + "</dd>" +
+            (server.live.resolvedFrom ? "<dt>stateResolvedFrom</dt><dd>" + esc(server.live.resolvedFrom) + "</dd>" : "") +
+          "</dl>" +
+        "</div>" +
+      "</div>" +
+      (server.live.resolvedFrom ? '<div class="banner err" style="margin-top:16px"><span class="icon">!</span><div>' +
+        "The live state was <code class=\"mono\">" + esc(server.live.resolvedFrom) + "</code>, and that row was deleted. " +
+        "It resolved to <code class=\"mono\">unknown</code> rather than to a calm state, and it is saying so here rather than only in a log." +
+        "</div></div>" : "") +
+      '<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">' +
+        server.states.slice().sort(byOrder).map(s =>
+          '<button class="btn sm" data-act="setlive" data-id="' + s.id + '">Set ' + esc(s.id) + "</button>").join("") +
+        '<button class="btn sm" data-act="togglehold">' + (server.live.hold ? "Release hold (auto)" : "Pin here") + "</button>" +
+      "</div>" +
+      '<p class="hint" style="color:var(--ink-3);font-size:12px;margin-top:10px">' +
+      "Pinning writes a hold. While pinned, an <code class=\"mono\">auto:</code> source can still escalate from a " +
+      "<code class=\"mono\">busy:false</code> state to a <code class=\"mono\">busy:true</code> one, and nothing else moves it.</p>" +
+    "</div></div>";
+}
+
+function renderStates() {
+  const rows = ui.draft.slice().sort(byOrder);
+  const dupLabels = {};
+  rows.forEach(r => { const k = (r.label || "").trim().toUpperCase(); if (k) dupLabels[k] = (dupLabels[k] || 0) + 1; });
+
+  return '<div class="card">' +
+    "<header><h2>State table</h2><p>Each row is one thing the light can say. The <b>id</b> is fixed at " +
+    "creation and is what every client, button and device names on the wire; the label, colours and " +
+    "description are yours to change at any time without breaking anything.</p></header>" +
+    rows.map(r => renderRow(r, dupLabels)).join("") +
+    '<div class="tablefoot">' +
+      '<button class="btn" data-act="addrow">Add state</button>' +
+      '<span style="color:var(--ink-3);font-size:12px">' + rows.length + " of 64 rows &middot; table version " + server.version + "</span>" +
+      '<span class="spacer"></span>' +
+      '<span style="color:var(--ink-3);font-size:12px">Row edits stage locally. <b>Save configuration</b> is the only thing that reaches the service.</span>' +
+    "</div></div>";
+}
+
+function renderRow(r, dupLabels) {
+  const st = rowStatus(r);
+  const editing = ui.editing === r.id || (ui.editing === "" && r._isNew);
+  const isLive = server.live.state === r.id;
+  const isHeld = server.live.hold === r.id;
+  const rat = ratioLabel(r.bgcolor, r.color);
+  const dup = (dupLabels[(r.label || "").trim().toUpperCase()] || 0) > 1;
+
+  const tags = [];
+  if (isLive) tags.push('<span class="tag live">live</span>');
+  if (isHeld) tags.push('<span class="tag held">pinned</span>');
+  if (st === "staged") tags.push('<span class="tag staged">staged</span>');
+  if (st === "new") tags.push('<span class="tag new">new</span>');
+  if (st === "removed") tags.push('<span class="tag del">will be deleted</span>');
+  tags.push('<span class="tag busy">' + (r.busy ? "busy - light on" : "calm - light off") + "</span>");
+
+  const head = '<div class="row">' +
+    '<div class="ord mono">' + (r.order === 99 ? "--" : r.order) + "</div>" +
+    '<div class="idcell">' + (r.id ? '<code class="mono">' + esc(r.id) + "</code>" : '<span class="lock">id assigned on save</span>') +
+      (r.id ? '<span class="lock" title="Immutable">locked</span>' : "") + "</div>" +
+    '<div class="metacell"><div class="lbl">' + esc(r.label || "(no label yet)") + "</div>" +
+      '<div class="desc">' + esc(r.description || "") + '</div><div class="tags">' + tags.join("") + "</div></div>" +
+    '<div class="swatch" style="background:' + (isHex(r.bgcolor) ? r.bgcolor : "#888") + ";color:" + (isHex(r.color) ? r.color : "#fff") + '">' +
+      '<div class="lab">' + esc(r.label || "-") + '</div><div class="ratio">' + rat.text + "</div></div>" +
+    '<div class="rowacts">' +
+      (st === "removed"
+        ? '<button class="btn sm" data-act="revert" data-id="' + r.id + '">Undo delete</button>'
+        : (editing ? "" :
+            '<button class="btn sm" data-act="edit" data-id="' + r.id + '">Edit</button>' +
+            (st !== "clean" ? '<button class="btn sm ghost" data-act="revert" data-id="' + r.id + '">Revert</button>' : "") +
+            (r.reserved ? "" : '<button class="btn sm danger" data-act="del" data-id="' + r.id + '">Delete</button>'))) +
+    "</div></div>";
+
+  const warn = (!rat.ok && isHex(r.bgcolor) && isHex(r.color))
+    ? '<div style="padding:0 18px 12px"><div class="banner ' + (rat.weak ? "err" : "warn") + '"><span class="icon">' + (rat.weak ? "x" : "!") +
+      '</span><div>Contrast is <b>' + rat.text + "</b>. This row has to be read across a room; anything under 4.5:1 is a gamble." +
+      "</div></div></div>" : "";
+  const dupw = dup ? '<div style="padding:0 18px 12px"><div class="banner warn"><span class="icon">!</span><div>' +
+      "Another row uses the same label. Allowed - ids are what matter - but two rows that read the same on the panel is a trap." +
+      "</div></div></div>" : "";
+
+  return '<div class="rowwrap ' + st + '">' + head + warn + dupw + (editing ? renderEditor(r) : "") + "</div>";
+}
+
+function renderEditor(row) {
+  const f = ui.form || row;
+  const e = f._errs || {};
+  const rat = ratioLabel(f.bgcolor, f.color);
+  const idPreview = f.id || (f.label ? slugify(f.label) : "");
+  return '<div class="editor">' +
+    '<div class="grid">' +
+      fld("label", "Label", '<input id="f-label" type="text" value="' + esc(f.label) + '" maxlength="64">',
+          f._isNew ? "The id below is generated from this and locked when you stage the row." : "Safe to change. Nothing on the wire points at it.", e.label) +
+      fld("id", "Id" + (f._isNew ? "" : " (locked)"),
+          f._isNew
+            ? '<input id="f-id" type="text" class="mono" value="' + esc(idPreview) + '">'
+            : '<input type="text" class="mono" value="' + esc(f.id) + '" disabled>',
+          f._isNew ? "Fixed forever once staged. Changing identity later means delete and re-create." :
+                     "Immutable. Companion buttons and VCREC hold this value.", e.id) +
+      fld("busy", "Meaning",
+          '<div class="toggle"><button type="button" data-act="busy" data-v="1" aria-pressed="' + (f.busy ? "true" : "false") + '">Busy</button>' +
+          '<button type="button" data-act="busy" data-v="0" aria-pressed="' + (!f.busy ? "true" : "false") + '">Calm</button></div>',
+          "Busy means the camera may be live. It drives <code class=\"mono\">intended</code>, the staleness rule and whether an automated writer can break a pin.", null) +
+      fld("order", "Display order", '<input id="f-order" type="number" min="0" max="999" value="' + f.order + '">',
+          "Sorting only. Never sent anywhere, never an address.", null) +
+    "</div>" +
+    // The two colours sit together on purpose - they are only ever judged as a pair.
+    '<div class="grid colours">' +
+      fld("bgcolor", "Background",
+          '<div class="colorrow"><input id="f-bgpick" type="color" value="' + (isHex(f.bgcolor) ? f.bgcolor : "#888888") + '">' +
+          '<input id="f-bgcolor" type="text" value="' + esc(f.bgcolor) + '" maxlength="7"></div>', null, e.bgcolor) +
+      fld("color", "Text",
+          '<div class="colorrow"><input id="f-fgpick" type="color" value="' + (isHex(f.color) ? f.color : "#ffffff") + '">' +
+          '<input id="f-color" type="text" value="' + esc(f.color) + '" maxlength="7"></div>', null, e.color) +
+    "</div>" +
+    '<div class="field" style="margin-top:14px"><label for="f-desc">Description</label>' +
+      '<textarea id="f-desc" rows="2" maxlength="200">' + esc(f.description || "") + "</textarea>" +
+      '<span class="hint">For humans reading this page. Never load-bearing - no renderer and no client acts on it.</span>' +
+      (e.description ? '<span class="err">' + esc(e.description) + "</span>" : "") + "</div>" +
+    '<div class="preview">' +
+      '<div class="panelmock" style="background:' + (isHex(f.bgcolor) ? f.bgcolor : "#888") + ";color:" + (isHex(f.color) ? f.color : "#fff") + '">' +
+        '<div class="big">' + esc(f.label || "LABEL") + "</div>" +
+        '<div class="small">' + esc(idPreview || "id") + "</div>" +
+      "</div>" +
+      '<div class="previewnote">This is the SH1106 panel at arm’s length. Contrast <b>' + rat.text + "</b>.<br><br>" +
+        "The mono OLED cannot render colour at all - it draws the label. Colour is carried for the colour lamp " +
+        "and for Companion button faces, and it reaches the ESP32 through the config pull, not the state write.</div>" +
+    "</div>" +
+    '<div class="editoracts">' +
+      '<button class="btn primary" data-act="rowsave">Save row</button>' +
+      '<button class="btn" data-act="rowcancel">Cancel</button>' +
+      '<span class="spacer"></span>' +
+      '<span style="color:var(--ink-3);font-size:12px">Saving stages this row. It does not reach the service.</span>' +
+    "</div></div>";
+}
+
+function fld(key, label, control, hint, err) {
+  return '<div class="field' + (err ? " bad" : "") + '"><label for="f-' + key + '">' + label + "</label>" + control +
+    (hint ? '<span class="hint">' + hint + "</span>" : "") +
+    (err ? '<span class="err">' + esc(err) + "</span>" : "") + "</div>";
+}
+
+function renderAdmin() {
+  return '<div class="card"><header><h2>Admin settings</h2>' +
+    "<p>The human credential. It gates this console and nothing else - machines use the passphrase.</p></header>" +
+    '<div class="pad">' +
+      (server.admin.changed ? "" : '<div class="banner warn" style="margin-bottom:16px"><span class="icon">!</span><div>' +
+        "You are still on the shipped defaults, <code class=\"mono\">rocket</code> / <code class=\"mono\">ESP32</code>. " +
+        "Anyone on this network who has read the repo can log in. Changing them takes ten seconds.</div></div>") +
+      '<div class="grid">' +
+        '<div class="field"><label>User</label><input type="text" value="' + esc(server.admin.user) + '"></div>' +
+        '<div class="field"><label>New password</label><input type="text" placeholder="leave blank to keep"></div>' +
+      "</div>" +
+    "</div></div>" +
+
+    '<div class="card"><header><h2>Passphrase</h2>' +
+    "<p>The machine credential. The ESP32, Companion and VCREC all present this. It is shown in " +
+    "full because you have to type it into three places by hand.</p></header>" +
+    '<div class="pad">' +
+      '<div class="field" style="max-width:420px"><label>Current passphrase</label>' +
+      '<input type="text" class="mono" value="' + esc(server.passphrase) + '"></div>' +
+      '<div class="banner info" style="margin-top:16px"><span class="icon">i</span><div>' +
+        "Rotating breaks every machine client at once. The previous passphrase keeps working for " +
+        "<b>60 minutes</b> after a rotation, so you can walk around the house instead of racing.<br><br>" +
+        "After rotating, update: <b>the ESP32</b> (its own page at the device IP) and <b>Companion</b> " +
+        "(connection config). VCREC picks it up from its own config." +
+      "</div></div>" +
+      '<div style="margin-top:16px;display:flex;gap:8px"><button class="btn" data-act="rotate">Rotate passphrase</button></div>' +
+    "</div></div>" +
+
+    '<div class="card"><header><h2>Factory reset</h2>' +
+    "<p>Returns the state table to the seed rows, clears any hold, resets the admin login, and " +
+    "generates a new random passphrase - shown once.</p></header>" +
+    '<div class="pad">' +
+      '<div class="banner err"><span class="icon">!</span><div>This always asks for the admin password, even here at the Mac. ' +
+      "It is the one operation that can lock you out of a box in another room.</div></div>" +
+      '<div style="margin-top:16px"><button class="btn danger" data-act="reset">Factory reset...</button></div>' +
+    "</div></div>";
+}
+
+function renderNetwork() {
+  const n = server.network;
+  return '<div class="card"><header><h2>Network</h2>' +
+    "<p>What the service listens on. Loopback is always bound; this chooses what else.</p></header>" +
+    '<div class="pad">' +
+      '<div class="grid">' +
+        '<div class="field"><label>Listen on</label><select id="n-bind">' +
+          ['<option value="all"' + (n.bind === "all" ? " selected" : "") + ">All interfaces (default)</option>",
+           '<option value="loopback"' + (n.bind === "loopback" ? " selected" : "") + ">This machine only</option>",
+           '<option value="iface:en0"' + (n.bind === "iface:en0" ? " selected" : "") + ">en0 - Wi-Fi - 10.42.14.189</option>",
+           '<option value="iface:en7"' + (n.bind === "iface:en7" ? " selected" : "") + ">en7 - Thunderbolt Ethernet</option>",
+           '<option value="iface:utun4"' + (n.bind === "iface:utun4" ? " selected" : "") + ">utun4 - Tailscale - 100.83.2.19</option>"].join("") +
+        "</select><span class=\"hint\">Stored as a mode plus an interface <b>name</b>, re-resolved every startup. A stored address goes stale, and a stale address is a crash loop under launchd.</span></div>" +
+        '<div class="field"><label>Port</label><input type="number" value="' + n.port + '"><span class="hint">Changing this rebinds in place. No restart, and it rolls back if the new port will not bind.</span></div>' +
+      "</div>" +
+      '<div class="banner info" style="margin-top:16px"><span class="icon">i</span><div>' +
+        "Loopback is not in this list on purpose. Binding one LAN interface makes <code class=\"mono\">127.0.0.1</code> " +
+        "refuse connections - measured - which would switch off the no-password local login you are using right now, " +
+        "from the page that switched it off." +
+      "</div></div>" +
+      '<div class="banner info" style="margin-top:10px"><span class="icon">i</span><div>' +
+        "Six link-local-only interfaces are hidden as noise. They are annotated out by address, never by name - " +
+        "a name filter would delete Tailscale." +
+      "</div></div>" +
+    "</div></div>";
+}
+
+function renderDevice() {
+  const d = server.device;
+  return '<div class="card"><header><h2>The light</h2>' +
+    "<p>Where the ESP32 lives, and the credential this service uses to drive it. This is a different " +
+    "credential from the passphrase and it always has been.</p></header>" +
+    '<div class="pad"><div class="grid">' +
+      '<div class="field"><label>Host</label><input type="text" class="mono" value="' + esc(d.host) + '"></div>' +
+      '<div class="field"><label>Device user</label><input type="text" class="mono" value="' + esc(d.username) + '"></div>' +
+      '<div class="field"><label>Device password</label><input type="text" class="mono" value="' + esc(d.password) + '"></div>' +
+    "</div>" +
+    '<div class="banner info" style="margin-top:16px"><span class="icon">i</span><div>' +
+      "This service <b>pushes</b> state to the device and reads it back, which is what makes <code class=\"mono\">confirmed</code> " +
+      "a real device read. The device <b>pulls</b> the state table from here every five minutes. Two directions, on purpose." +
+    "</div></div></div></div>" +
+
+    '<div class="card"><header><h2>Shortcut rows</h2>' +
+    "<p>Which rows the two-value endpoints mean, for phone shortcuts and anything else that can only say yes or no.</p></header>" +
+    '<div class="pad"><div class="grid">' +
+      selField("POST /on", server.shortcuts.on) +
+      selField("POST /off", server.shortcuts.off) +
+    "</div>" +
+    '<div class="banner info" style="margin-top:16px"><span class="icon">i</span><div>' +
+      "Set explicitly rather than guessed. “Fall back to the first row” is a bad rule when the first row is ON AIR." +
+    "</div></div></div></div>";
+}
+function selField(label, val) {
+  return '<div class="field"><label>' + label + "</label><select>" +
+    server.states.slice().sort(byOrder).map(s =>
+      '<option value="' + s.id + '"' + (s.id === val ? " selected" : "") + ">" + esc(s.id) + "</option>").join("") +
+    "</select></div>";
+}
+
+function renderModal() {
+  const m = ui.modal;
+  if (m.kind === "delete") {
+    const r = draftRow(m.id);
+    return '<div class="modalwrap"><div class="modal" role="dialog" aria-modal="true">' +
+      "<header><h3>Delete " + esc(r.label) + "?</h3></header>" +
+      '<div class="pad">' +
+        '<div class="banner err"><span class="icon">!</span><div>' +
+          (m.isLive ? "<b>This row is live right now.</b> On save, the state resolves to <code class=\"mono\">unknown</code> - " +
+                      "conspicuous, not calm - and <code class=\"mono\">GET /status</code> reports where it came from.<br>" : "") +
+          (m.isHeld ? "<b>A hold is pinned to this row.</b> The pin is released in the same operation.<br>" : "") +
+          "Any Companion button bound to <code class=\"mono\">" + esc(r.id) + "</code> will start getting a <code class=\"mono\">400</code>." +
+        "</div></div>" +
+        '<p style="color:var(--ink-2);font-size:13px;margin-bottom:0">Nothing happens until you save the configuration.</p>' +
+      "</div>" +
+      '<footer><button class="btn" data-act="modalcancel">Keep it</button>' +
+      '<button class="btn danger" data-act="modalconfirm" data-id="' + m.id + '">Stage the delete</button></footer>' +
+    "</div></div>";
+  }
+  return '<div class="modalwrap"><div class="modal" role="dialog" aria-modal="true">' +
+    "<header><h3>Factory reset</h3></header>" +
+    '<div class="pad"><div class="field"><label>Admin password</label><input type="text" placeholder="required, from any origin"></div></div>' +
+    '<footer><button class="btn" data-act="modalcancel">Cancel</button>' +
+    '<button class="btn danger" data-act="modalcancel">Reset everything</button></footer></div></div>';
+}
+
+// ---------------------------------------------------------------- wiring
+function wire() {
+  document.querySelectorAll("[data-sec]").forEach(el =>
+    el.addEventListener("click", () => { ui.section = el.dataset.sec; ui.editing = null; ui.form = null; render(); }));
+
+  document.querySelectorAll("[data-act]").forEach(el => {
+    el.addEventListener("click", ev => {
+      const a = el.dataset.act, id = el.dataset.id;
+      if (a === "edit") startEdit(id);
+      else if (a === "rowsave") saveRowToDraft();
+      else if (a === "rowcancel") cancelEdit();
+      else if (a === "revert") revertRow(id);
+      else if (a === "del") requestDelete(id);
+      else if (a === "addrow") addRow();
+      else if (a === "discard") discardAll();
+      else if (a === "save") saveConfig();
+      else if (a === "busy") { ui.form.busy = el.dataset.v === "1"; render(); }
+      else if (a === "modalcancel") { ui.modal = null; render(); }
+      else if (a === "modalconfirm") doDelete(id);
+      else if (a === "goadmin") { ui.view = "admin"; ui.authed = !ui.remote; render(); }
+      else if (a === "login") { ui.authed = true; render(); toast("Logged in."); }
+      else if (a === "setlive") { server.live.state = id; server.live.source = "human:ui"; server.live.ageSeconds = 0; delete server.live.resolvedFrom; render(); }
+      else if (a === "togglehold") { server.live.hold = server.live.hold ? null : server.live.state; render();
+        toast(server.live.hold ? "Pinned to " + server.live.hold + "." : "Hold released - back to auto."); }
+      else if (a === "rotate") { server.passphrase = randPhrase(); render(); toast("Rotated. The old passphrase keeps working for 60 minutes."); }
+      else if (a === "reset") { ui.modal = { kind:"reset" }; render(); }
+      ev.preventDefault();
+    });
+  });
+
+  // live-binding the editor fields so the preview and contrast update as you type
+  const bind = (sel, fn) => { const el = document.querySelector(sel); if (el) el.addEventListener("input", () => { fn(el.value); repaintEditor(); }); };
+  bind("#f-label", v => {
+    ui.form.label = v;
+    if (ui.form._isNew) { ui.form.id = slugify(v); const idEl = document.querySelector("#f-id"); if (idEl) idEl.value = ui.form.id; }
+  });
+  bind("#f-id", v => { ui.form.id = v; });
+  bind("#f-order", v => { ui.form.order = Number(v) || 0; });
+  bind("#f-desc", v => { ui.form.description = v; });
+  bind("#f-bgcolor", v => { ui.form.bgcolor = v; const p = document.querySelector("#f-bgpick"); if (p && isHex(v)) p.value = v; });
+  bind("#f-color", v => { ui.form.color = v; const p = document.querySelector("#f-fgpick"); if (p && isHex(v)) p.value = v; });
+  bind("#f-bgpick", v => { ui.form.bgcolor = v; const t = document.querySelector("#f-bgcolor"); if (t) t.value = v; });
+  bind("#f-fgpick", v => { ui.form.color = v; const t = document.querySelector("#f-color"); if (t) t.value = v; });
+}
+
+// Repaint just the preview + swatch, so typing never steals focus from the input.
+function repaintEditor() {
+  const f = ui.form; if (!f) return;
+  const mock = document.querySelector(".editor .panelmock");
+  if (mock) {
+    mock.style.background = isHex(f.bgcolor) ? f.bgcolor : "#888";
+    mock.style.color = isHex(f.color) ? f.color : "#fff";
+    mock.querySelector(".big").textContent = f.label || "LABEL";
+    mock.querySelector(".small").textContent = f.id || (f.label ? slugify(f.label) : "id");
+  }
+  const note = document.querySelector(".editor .previewnote b");
+  if (note) note.textContent = ratioLabel(f.bgcolor, f.color).text;
+}
+
+function randPhrase() {
+  const w = ["moth","lantern","gravel","ember","tidal","copper","quiet","signal","amber","drift"];
+  const p = () => w[Math.floor(Math.random() * w.length)];
+  return p() + "-" + p() + "-" + Math.floor(1000 + Math.random() * 9000);
+}
+
+$("#viewToggle").addEventListener("click", () => {
+  ui.view = ui.view === "landing" ? "admin" : "landing";
+  if (ui.view === "admin") ui.authed = !ui.remote;
+  render();
+});
+$("#remoteToggle").addEventListener("click", () => {
+  ui.remote = !ui.remote;
+  ui.authed = !ui.remote;
+  render();
+  toast(ui.remote ? "Off-machine: the Origin waiver does not apply, so admin asks for a password."
+                  : "At the Mac: loopback plus a valid Origin, so admin opens with no prompt.");
+});
+
+setInterval(() => { server.live.ageSeconds += 1; if (ui.section === "status" && ui.view === "admin") render(); }, 1000);
+
+render();
+</script>

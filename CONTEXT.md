@@ -882,3 +882,48 @@ else (state, light control, API) lives on the receiver.
   **What dies with `select`:** the `GET /select/Presence?detail=all` trick for reading the
   firmware's compiled option list and warning that firmware is stale. It is not replaced and
   does not need to be - the entire point is that the device no longer declares a set of states.
+- **D-39 (2026-08-23)** **The admin UI shape, settled by building it.** Resolves
+  [#31](https://github.com/jwnichols3/rocket-on-air-sensor/issues/31). Prototype:
+  `docs/prototypes/2026-08-23-admin-state-table.html` (throwaway; it informs the spec and does
+  not become it). Published to click on:
+  https://claude.ai/code/artifact/92558b8a-42f9-4389-b726-3e2413e213c1
+  **One page with a section rail, not tabs** - Status, States, Admin settings, Network, Light.
+  Tabs imply peers; these are one configuration document with a live readout at the top of it.
+  **The commit bar is in the header and never scrolls away**, carrying the staged count,
+  Discard all, and **Save configuration**. Two-level commit is unusual and easy to make
+  confusing, and the thing that makes it legible is that the second level is *always visible* -
+  you can see, at every moment, that there is something staged and that it has not been applied.
+  **Three commit levels, three distinct affordances** - and building it surfaced a distinction
+  prose had missed. *Cancel* while editing abandons the edit session and returns the row to its
+  **last staged** value. *Revert* on a staged row is a separate button that drops the row back
+  to **live**. Collapsing them into one control loses the ability to abandon a typo without
+  also throwing away a change staged ten minutes ago.
+  **The live swatch carries a contrast ratio, and that is the single most valuable thing on the
+  page.** Every row renders its own label on its own background with a WCAG ratio and an AA
+  verdict, and a failing pair raises a banner on the row. Legibility across a room is a real
+  constraint (`docs/research/2026-08-22-wall-indicator.md`), and it turns out to be checkable
+  the instant a colour changes rather than after a firmware round trip. The editor also shows
+  a full panel mock at the SH1106's proportions.
+  **The id is visible, monospace, and visibly locked** on every row, with the label immediately
+  beside it. Making the immutability *visible* is what stops someone expecting a rename to
+  rebind their Companion buttons. A new row's id is auto-slugged from the label as it is typed
+  and frozen when the row is staged.
+  **Deleting a live or pinned row opens a confirm that says what will actually happen** - the
+  state resolves to `unknown`, `GET /status` reports where it came from, the pin releases,
+  bound Companion buttons start getting `400` - and it still only *stages* the delete.
+  **The unauthenticated landing page is a tally, not a dashboard.** Big state word on the state
+  colour, description under it, five facts (service running, currently sending, written by, last
+  write age, hold), and a log-in button. It is exactly `GET /public/status` rendered, which is
+  what keeps D-35's thin-public-read honest - if the page needs a field the endpoint does not
+  have, that is a decision, not an oversight.
+  **Verified by driving it**, not by looking at it: five rows render with correct contrast
+  ratios; a bad hex blocks the row save with an inline error; renaming a row leaves the id
+  untouched; adding a row auto-slugs `Deep Work` to `deep-work`; the reserved row has no delete
+  control; deleting the live row stages, then on save resolves live state to `unknown` and
+  reports `stateResolvedFrom`; revert un-stages one row without touching the others; the remote
+  toggle demands the admin password while the at-the-Mac state opens with no prompt; all five
+  sections render; light and dark both resolve. One real bug was found and fixed this way - the
+  staged counter double-counted deletions.
+  **Taste calls made in the prototype, all on the review list:** the section order and names, the
+  seed palette's exact hex values, "Busy / Calm" as the wording for the `busy` toggle, and the
+  decision to show the passphrase in plaintext on the Admin page rather than behind a reveal.
