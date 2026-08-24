@@ -21,3 +21,17 @@ Canonical five roles (`needs-triage`, `needs-info`, `ready-for-agent`,
 
 Single-context: `CONTEXT.md` at root; decisions recorded in its `## Decisions` section
 (the ADR record). See `docs/agents/domain.md`.
+
+## Dependencies
+
+**Minimal, necessary, trusted - not zero.** A dependency earns its place by being
+genuinely needed and coming from a source worth trusting; it is not rejected merely for
+existing. Judge each one on need, trustworthiness, and maintenance burden.
+
+Historical note: earlier docs in this repo assert a "zero production npm dependencies"
+hard rule and attribute it to D-11. **That rule was never decided.** It entered as a
+`Tech Stack:` line in the first plan (`docs/superpowers/plans/2026-08-05-onair-api-service.md`),
+was copied forward into every later plan and spec, and D-11 then cited it as pre-existing
+("preserves the zero-production-dependency rule") rather than establishing it. Rocket
+retired it explicitly on 2026-08-23. Treat "zero production dependencies" in any older
+plan, spec, or research doc as superseded by this section.

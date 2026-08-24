@@ -47,7 +47,10 @@ else (state, light control, API) lives on the receiver.
 
 ## Domain glossary
 
-- **Detector** - the process on the Mac that decides "call in progress: yes/no".
+- **Detector** - an *external* client that decides "call in progress: yes/no" and writes
+  the result to the On-air API. Since D-30 it lives outside this repo entirely (the VCREC
+  project); nothing here imports it or knows its shape. It is distinguished on the wire only
+  by `source` on a write.
 - **Receiver** - the role of the device/computer that receives the state change and
   drives the light. Mac Mini first (development), Raspberry Pi as the long-term host
   (D-4). Never the work Mac.
@@ -76,9 +79,9 @@ else (state, light control, API) lives on the receiver.
 
 ## Open questions
 
-- [ ] Sensing mechanism: mic/camera-in-use (macOS APIs / log stream), process + window
-      detection, CGDisplayStream, or Zoom/Meet-specific signals? (vcrec repo has prior
-      art on macOS meeting detection - check its detection registry.)
+- [x] Sensing mechanism: **out of this repo's scope, see D-30.** Zoom/Meet detection is
+      VCREC's job; it will be evolved to push events to this server against
+      `docs/api-contract.md`. Issue #5 leaves scope with it.
 - [x] Light hardware: **resolved 2026-08-23, see D-16.** DIY ESP32 (Elegoo EL-KIT-032)
       running ESPHome, firmware in `jwnichols3/rocket-esp32`. The road there:
       `docs/research/2026-08-10-onair-light-hardware-slate.md` (17 ranked buy options),
@@ -393,3 +396,38 @@ else (state, light control, API) lives on the receiver.
   WebSocket and the remote kiosk, none of which can send a header - after D-24/D-25 it is
   needed only off-machine.
 
+- **D-28 (2026-08-23)** **Monorepo: all four parts live in this repo.** On-Air v2 has four
+  surfaces - the server, the admin UI, the ESP32 firmware, and a Bitfocus Companion module -
+  and all of them are directories here, not separate repos. **Reverses D-16's split.** D-16
+  put the firmware in a private `jwnichols3/rocket-esp32` on the reasoning that it "already
+  existed as a working lab with its own uv/Makefile toolchain, so the split already
+  happened". Rocket's ruling (2026-08-23): that repo was set up "as an example, not
+  necessarily to store things in", and he is "fine replicating whatever we need for making
+  the ESP32 work locally". What D-16 got right survives: `docs/api-contract.md` is the wire
+  contract and is what holds the parts apart. What changes is that the seam is now a
+  directory boundary rather than a repo boundary, which is cheaper to keep honest - a
+  contract change and its two implementations land in one diff.
+- **D-29 (2026-08-23)** **Dependency policy: minimal, necessary, trusted - not zero.** The
+  "zero production npm dependencies" hard rule this repo has enforced since day one **was
+  never decided by anyone.** Traced 2026-08-23: it entered as a `Tech Stack:` line in the
+  first plan (`docs/superpowers/plans/2026-08-05-onair-api-service.md`), was copied forward
+  verbatim into every subsequent plan and spec, and D-11 then cited it as pre-existing
+  ("preserves the zero-production-dependency rule") rather than establishing it - laundering
+  a copied line into a decision that later work treated as binding. It appears in no
+  `CLAUDE.md`. Rocket's actual rule: a dependency earns its place by being genuinely
+  necessary and coming from a source worth trusting. Recorded in `CLAUDE.md`; every older
+  doc asserting the zero rule is superseded. Consequence for v2: the Companion module may
+  take `@companion-module/base` and the admin UI may take a frontend toolchain without
+  either being an exception to anything. D-11's hand-rolled WebSocket is **not** revisited -
+  it works and is deployed; the rule that justified it is simply no longer a rule.
+- **D-30 (2026-08-23)** **The detector is decoupled entirely; it is a client, not a
+  component.** Zoom/Meet sensing is done by a separate existing project (VCREC), which will
+  be evolved to push events to this server. This repo never imports it, never names it in
+  code, and never depends on its shape. **Amends D-2** (which sequenced "detector
+  integration later as a separate module/plugin"): there is no detector module in this repo
+  at all, later or otherwise. Consequence: `docs/api-contract.md` must be legible enough to
+  be written against by a client whose source we are not reading - the contract is the only
+  coupling. `CONTEXT.md`'s open question on the sensing mechanism, and issue #5, leave this
+  repo's scope. `source` on a write keeps its meaning (an automated writer vs a human), which
+  is what hold semantics are defined over; that is now the only trace the detector leaves
+  here.
