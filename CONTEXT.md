@@ -742,3 +742,143 @@ else (state, light control, API) lives on the receiver.
   against: stop the service before hand-editing, or lose the edit.
   **Factory reset** wipes the table back to the seed rows, clears the hold, sets live state to
   `unknown`, and resets credentials per D-35.
+- **D-37 (2026-08-23)** **Monorepo layout: four flat directories, three npm workspaces, one
+  verify command.** Resolves
+  [#24](https://github.com/jwnichols3/rocket-on-air-sensor/issues/24). **Implements D-28;
+  amends D-10 and D-13.**
+  ```
+  /                     CONTEXT.md  CLAUDE.md  README.md  package.json (workspaces)  docs/  deploy/
+    server/             the Node service - package "onair-api", bin, src/ test/ dist/ tsconfig*.json
+    admin-ui/           the SPA - package "onair-admin-ui", builds to server/public/admin/
+    firmware/           ESPHome - pyproject.toml uv.lock Makefile configs/
+    companion-module/   package "companion-module-rocket-onair", @companion-module/base ~2.1.3
+  ```
+  **Flat top-level directories, not `packages/` or `apps/`.** Two of the four are not npm
+  packages and `apps/firmware` would be a lie. Four names that say what they are.
+  **npm workspaces cover the three Node parts only.** `firmware/` is a sibling with its own uv
+  toolchain, driven from root scripts (`npm run firmware:config` -> `make -C firmware config`).
+  That is the answer to "must not make the non-Node parts second-class": it is not a workspace
+  because it is not a package, but it is reachable from the same command surface. **`npm run
+  verify` at the root is the single gate** - all three workspaces' tests, all three
+  typechecks, plus `esphome config` on the firmware YAML, which validates the build with no
+  hardware and no flash. Today's `npm test` (145 server tests) becomes `npm test -w server`
+  and is included.
+  **What moves:** `src/`, `test/`, `dist/`, `tsconfig.json`, `tsconfig.test.json` -> `server/`.
+  **What stays:** `CONTEXT.md`, `CLAUDE.md`, `README.md`, `INSTALL.md`, `docs/`, `deploy/` -
+  repo-wide by nature.
+  **The installer promise, and what breaking it costs.** D-13's plist supervises
+  `node dist/index.js` from a checkout at `~/code/rocket-on-air-sensor`, and D-14 built the
+  config-file-first design so the plist would never change after install. Moving `dist/` to
+  `server/dist/` is a change to that path. Reading the promise precisely: D-14 promised the
+  plist never changes **for a config change**. A repo restructure is not a config change - it
+  is an update, and `onair update` (D-14) exists to carry updates, health-gated with automatic
+  rollback. **Decision: the layout change ships with a plist rewrite performed by
+  `onair update`**, which detects an old-shape `ProgramArguments` and rewrites it before
+  restarting. There is exactly one installed host, nothing is production (D-22 notwithstanding
+  - the map's Notes are explicit), and a failed update rolls back. Cost accepted.
+  A root-level `dist/index.js` shim that re-exports `server/dist/index.js` was considered as a
+  way to avoid touching the plist at all. **Rejected:** three lines of permanent cruft, at the
+  root, forever, to avoid a one-time migration on a single machine - and it would leave two
+  plausible entry points for every future reader to disambiguate.
+  **Package identity.** `server/` keeps `onair-api` and its `bin`. The **root package is
+  `private: true` with no `bin`**, which means `npx --yes github:jwnichols3/rocket-on-air-sensor`
+  no longer resolves an executable. **That path is formally retired** - D-15 had already
+  demoted it to "a throwaway demo, never an install or boot path", so this amends D-10 by
+  finishing what D-15 started rather than by taking anything away.
+  **Firmware import: copy, no history.** `configs/elegoo-esp32.yaml`, `Makefile`,
+  `pyproject.toml`, `uv.lock` and `secrets.yaml.example` come across as files. `secrets.yaml`
+  does not (gitignored, and it holds the D-17 device credentials). History in the other repo is
+  a lab log, not this project's provenance, and a subtree import would drag an unrelated
+  toolchain history into a repo whose log is currently readable end to end. The ESPHome pin to
+  `2026.8.0` comes with it, comment intact - D-16's warning that the REST URL scheme changed in
+  that release still applies to every driver URL. **`jwnichols3/rocket-esp32` is left exactly as
+  it is** - not archived, not deleted; it was set up as a lab and it can stay one. A README
+  pointer here is the only change, and it is the only change this run is willing to make to a
+  repo outside this one.
+  **CI: none, and deliberately not invented.** There is no CI today. `npm run verify` is the
+  gate, run by a human or an agent before a commit that touches source, which is this repo's
+  existing bar. Adding GitHub Actions is a separate decision with its own costs (secrets for
+  the ESPHome build, a runner that cannot flash hardware) and it is out of this map's scope.
+- **D-38 (2026-08-23)** **State pushes, config pulls, and the device's `select` becomes a
+  `text`.** Resolves [#30](https://github.com/jwnichols3/rocket-on-air-sensor/issues/30).
+  **Amends D-17 and D-22; corrects a factual error in the wayfinder brief.**
+  **The brief is wrong about the current system and the correction is load-bearing.** It says
+  pull *"matches how the device already polls `GET /status` (D-17)"*. The device does not poll.
+  D-17 and D-27 are explicit that **the server is the HTTP client of the device** - it writes
+  the state and reads it back, which is what makes `confirmed` a genuine device read. The
+  brief's *ruling* (pull, for config) is a deliberate choice and stands; its premise about
+  today's behaviour does not. Resolving them:
+  > **State stays PUSH (server -> device). Config becomes PULL (device -> server).**
+  They are not the same direction, so they cannot be the same request - which decisively
+  answers the ticket's "one endpoint or two". State push is live, measured at 120 ms median
+  set-to-confirm (D-22), and `confirmed` requires the server to read the device anyway;
+  converting it to a poll would be a pure latency regression for nothing. Config pull keeps the
+  server **stateless about devices** - no registry, no reachability requirement, no retry logic
+  - which is what the brief actually wanted. Both directions are hand-configured: the server
+  holds one device host (as today), the device holds one server host.
+  **The device's state entity changes from `select` to `text`.** ESPHome's template `select`
+  options are compile-time YAML: *"Traits are set once at startup and valid for the lifetime of
+  the program"*, options are baked in at codegen as `const char *` into flash, and the complete
+  action set navigates without adding, removing or renaming. A user-editable table would mean a
+  reflash per row, which is not a product. **The ownership argument is the real one, though:** a
+  `select` asserts that *the firmware owns the set of valid states*. In this architecture the
+  server owns the set and the panel is a renderer. `text` encodes that correctly.
+  Verified against the pinned ESPHome **2026.8.0** source in
+  `esphome/components/web_server/web_server.cpp` and `text/__init__.py`, not against `dev`:
+  - `POST /text/<Name>/set?value=<key>` -> `200`. `GET /text/<Name>` ->
+    `{"id","value","state","min_length","max_length","pattern"}`. The unverified endpoint shape
+    the research flagged is now **confirmed**.
+  - `handle_text_request` wraps the call in `DEFER_ACTION(call, call.perform())` and sends the
+    `200` **before** applying - byte for byte the same respond-before-apply behaviour as
+    `select`. **So D-22.3 carries over unchanged: a write is not confirmed by the next read,
+    and the driver must re-read across the gap.**
+  - `max_length` defaults to **255**, which is far more than a slug needs.
+  - `mode: password` masks the value to `********` in the JSON, so a passphrase entered on the
+    device is not readable from its own REST API.
+  Cost, stated plainly: `select` gave free rejection of unknown options at the device; `text`
+  does not. **Validation moves to the server**, where D-34 already put it.
+  **Colour reaches the device through the config pull, not the state write.** That dissolves the
+  schema-versus-firmware tension #20 surfaced: no single ESPHome entity can carry a row, and it
+  does not have to. The state write is one opaque key; the table, with `label`, `color` and
+  `bgcolor`, arrives separately and rarely.
+  **Config pull: `GET /config/states`, passphrase-gated, every 300 s and on boot**, plus
+  immediately whenever the device is handed a key its table does not contain. `If-None-Match:
+  "<version>"` makes the steady state a `304`. Five minutes is "if the server changes you
+  change" at a cadence nobody notices, without polling a table that changes monthly; the number
+  is a taste call. `http_request`'s `max_response_buffer_size` defaults to 1 kB and must be
+  raised (8 kB) for a 64-row table.
+  **Feasibility, and the part that is not buildable.** The device-served page Rocket described
+  splits cleanly in two:
+  - **Buildable, and ships in v2:** the connection settings - which server, which port, which
+    passphrase - as template `text` / `number` / `switch` entities with `restore_value: true`
+    (NVS-persisted across reboots), `mode: password` on the passphrase, all served at the
+    device's own IP through the existing `web_server` behind D-17's basic auth. That is
+    Rocket's actual list, behind a login, at the device's address.
+  - **Not buildable in stock ESPHome:** a bespoke page with its own login form and an editable
+    state-table grid. `web_server` serves a fixed dashboard plus entity REST endpoints; it is
+    not a web framework. What ships is ESPHome's own dashboard listing those entities.
+  - **Not buildable: a persisted local table.** ESPHome restoring string globals are capped at
+    `max_restore_data_length` <= **254 bytes** (verified: `cv.int_range(0, 254)` in
+    `globals/__init__.py`), which a multi-row table exceeds; sharding across globals to fake it
+    is exactly the kind of cleverness that rots. **So the device does not persist the table.**
+    It holds it in RAM and pulls on boot. Before its first successful pull it renders the
+    `unknown` appearance with `NO CONFIG` - which is correct under the invariant anyway, so the
+    missing persistence costs nothing real.
+  **Custom mode is cut down to one bit, honestly.** Full local overrides need flash-persisted
+  structured config and an editable grid on the device, which means leaving ESPHome for
+  hand-written firmware - **a much larger decision than this ticket, and not one to make as a
+  side effect.** What ships is a `switch`: `auto` (default) pulls and follows; `custom` freezes
+  the table last pulled and stops pulling. That is buildable in four lines of YAML and it
+  answers the real question behind the ask - *"the server changed and I do not want to follow it
+  right now."* The editable-table-on-device vision gets its own ticket.
+  **Unreachable server.** State pushes stop arriving -> the device's existing staleness watchdog
+  trips to NO DATA, as it already does. Config pulls fail -> it keeps the table in RAM. No table
+  at all (fresh boot, server down) -> `unknown` appearance, `NO CONFIG` on the panel. Never
+  calm, at any point in that sequence.
+  **Server-side lifecycle events while the device holds a stale table** (#28 from the device's
+  side): the server pushes a key the device does not know -> the device renders `unknown`
+  conspicuously **and triggers an immediate config re-pull**, so it self-heals within one round
+  trip instead of waiting out the 300 s interval.
+  **What dies with `select`:** the `GET /select/Presence?detail=all` trick for reading the
+  firmware's compiled option list and warning that firmware is stale. It is not replaced and
+  does not need to be - the entire point is that the device no longer declares a set of states.
