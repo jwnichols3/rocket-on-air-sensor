@@ -55,20 +55,52 @@ else (state, light control, API) lives on the receiver.
   drives the light. Mac Mini first (development), Raspberry Pi as the long-term host
   (D-4). Never the work Mac.
 - **On-air light** - the physical light or display. Since D-16: a DIY ESP32 running
-  ESPHome, driving an SH1106 OLED today and a colour lamp later (D-20). Firmware:
-  `jwnichols3/rocket-esp32`.
-- **Call state** - since D-18, one of three rungs on a ladder:
-  `available < interruptible < dnd`. Stored as `level`. The old boolean survives as
-  `intended`, a derived read-only projection (`available` -> `off`, anything else -> `on`).
-- **Hold** - a persisted **floor** on `level`, set by a manual write (D-19). The detector
-  may raise above it but never lower below it. Released explicitly, never on a timer.
-- **On-air API** - the REST service on the receiver: set state, query state. The
-  system's source of truth, callable by the detector or any other client. Contract:
-  `docs/api-contract.md`.
-- **Intended state** - what the API was last told (`on`/`off`). Persisted; survives
-  restarts.
-- **Confirmed state** - what the light acknowledged (`on`/`off`/`unknown`). Never
-  guessed; `unknown` when the light can't report or can't be reached.
+  ESPHome, driving an SH1106 OLED today and a colour lamp later (D-20). Since D-28/D-37 the
+  firmware lives in `firmware/` in this repo.
+- **State table** - the user-editable set of rows defining everything the light can say
+  (D-31). Fowler's **knowledge level**: rules, not facts. Registration policy: first come
+  first served, registrant is the LAN admin via the admin UI. **Replaces the ladder.**
+  *Not* "option table" and *not* "config" - the user is defining what the light means, not
+  filling a dropdown.
+- **Row** - one entry in the state table: `id`, `label`, `color`, `bgcolor`, `description`,
+  `busy`, `order` (D-31).
+- **`id`** - a row's immutable slug. The **only** addressable handle: the one thing clients,
+  Companion buttons and the device name on the wire. Never renumbered, never renamed
+  (D-31/D-34).
+- **`label`** - a row's human phrase, freely editable, drawn by every renderer and carried
+  alongside the `id` in every status response. **Never a key.**
+- **`busy`** - a per-row boolean: does this state mean the camera may be live. Carries the
+  entire safety axis - it defines `intended`, it is what the staleness rule is written over,
+  and it is the one thing that can break a pin (D-31/D-32/D-33).
+- **`order`** - a row's display sort hint. Presentation only. **Never on the wire, never an
+  address** (D-31/D-34).
+- **Current state** - the operational level: a **reference to a row**, not a copy of one
+  (Type Object). Stored as an `id`.
+- **Hold** - a persisted **pin** on the current state, set by a `human:` source (D-32,
+  replacing D-19's floor). While pinned, an automated writer may only escalate from a
+  `busy: false` state to a `busy: true` one; nothing else moves it. Released explicitly by a
+  human, never on a timer. The released regime is called **auto**.
+- **`source`** - `kind:label`, where `kind` is `auto` or `human`. Wire contract, because
+  under D-30 it is the only trace the detector leaves here. An absent or unprefixed `source`
+  reads as `human:`.
+- **On-air API** - the REST service on the receiver: set state, query state, serve and edit
+  config. The system's source of truth, callable by the detector or any other client.
+  Contract: `docs/api-contract.md`.
+- **Intended state** - a derived two-value projection, `table[state].busy ? "on" : "off"`
+  (D-33). Read-only on the wire; kept so a consumer that has never heard of a row invented
+  tomorrow still does something correct.
+- **Confirmed state** - the row `id` the light acknowledged, read back from the device
+  itself, or `unknown`. Never guessed.
+- **`unknown`** - the one reserved row (D-34). Undeletable, `busy: true`, conspicuous. Where
+  every dangling reference resolves, and what any renderer draws when handed an `id` it does
+  not know. A Null Object, not a rung.
+- **Passphrase** - the machine-to-machine credential (D-35, replacing `ONAIR_TOKEN`). Gates
+  data routes. Presented by the ESP32, Companion and VCREC.
+- **Admin credentials** - the human credential (D-35). Gate the admin UI and nothing else.
+- **Gone words.** `level` and the ladder (`available < interruptible < dnd`) no longer exist.
+  Neither does `dnd` as a shipped state. Banned in code and docs: `state machine`,
+  `statechart`, `transition`, `guard`, `event`, `taxonomy`, `traits`; `select` and `option`
+  are ESPHome transport words only.
 
 ## Invariants (draft)
 
@@ -92,10 +124,14 @@ else (state, light control, API) lives on the receiver.
       we write is always-awake, sub-second and honestly readable.
 - [x] REST API shape: endpoints, auth, port, state model - resolved, see
       `docs/api-contract.md` and D-5..D-7.
-- [x] Light behavior: **resolved 2026-08-23, see D-18.** Three rungs -
-      `available < interruptible < dnd` - named semantically, not by colour, so the mono
-      OLED and a future colour lamp are two renderers of one state. Colour mapping and the
-      accessibility problem with red/green are in `docs/research/2026-08-22-wall-indicator.md`.
+- [x] Light behavior: **re-resolved 2026-08-23 by On-Air v2, see D-31..D-34.** D-18's three
+      rungs are gone; the state set is a **user-editable state table**, seeded with
+      `available` / `on-air` / `interruptible` / `recording` plus a reserved `unknown` row.
+      States are still renderer-agnostic - the mono OLED and a future colour lamp are two
+      renderers of one row. Colour is now a field on the row and reaches the device through
+      the config pull (D-38). Colour mapping and the accessibility problem with red/green are
+      in `docs/research/2026-08-22-wall-indicator.md`; the admin UI shows a live WCAG contrast
+      ratio per row so a bad pair is caught at edit time (D-39).
 - [x] Pi packaging: npx one-command install + systemd unit - resolved, see D-10 and
       `docs/pi-setup.md`.
 - [x] How does the API confirm the light actually changed vs just recording intent?
@@ -107,6 +143,35 @@ else (state, light control, API) lives on the receiver.
       return `confirmed` to `unknown` without another write.
 
 ## Decisions
+
+> **Supersession index (2026-08-23).** On-Air v2 rewrote the state model. Read this before
+> reading any decision below it - several are still written in a vocabulary the system no
+> longer uses.
+>
+> | Decision | Fate |
+> |---|---|
+> | **D-5** contract v1 state model | **Amended** by D-31/D-32/D-33 and rewritten in `docs/api-contract.md` v2. `level`, `onAir`, `/on`, `/off` and the five hardcoded rung routes are gone. |
+> | **D-6** no TTL / staleness visible, never acted on | **Intact in principle; its rule is restated** by D-32's BUSY RULE. No TTL, no decay, no auto-raise - all confirmed. |
+> | **D-7** optional `ONAIR_TOKEN` | **Superseded** by D-35. Becomes the UI-configurable passphrase. |
+> | **D-9** `/display` browser tally | **Intact**, but its appearances are now table-driven rather than four hardcoded ones. |
+> | **D-10** `npx github:` distribution | **Amended** by D-15 then D-37. The `npx github:` path is formally retired; `deploy/get-onair` is the install path. |
+> | **D-11** hand-rolled WebSocket | **Intact and deployed.** The zero-dependency rule that justified it was never a rule (D-29); the code is not revisited. Its feedback wiring survives v2 because of D-33. |
+> | **D-12** light hardware on hold | Already superseded by D-16/D-18/D-21. |
+> | **D-13** LaunchDaemon supervision | **Intact**, but the plist's `ProgramArguments` path changes once with D-37's layout, carried by `onair update`. |
+> | **D-14** config-file-first install | **Amended** by D-36. `config.env` retires as the config source and survives as an env overlay; the plist still carries no `ONAIR_*`. |
+> | **D-16** firmware in a separate repo | **Reversed** by D-28, implemented by D-37. Firmware moves to `firmware/`. The ESPHome `2026.8.0` pin and its warning survive. |
+> | **D-17** device transport over plain HTTP | **Intact**, **amended** by D-38: the device entity moves from `select` to `text`. Basic auth stays mandatory and stays separate from the passphrase. |
+> | **D-18** three-rung ladder | **Superseded** by D-31 (table), D-32 (busy rule), D-33 (`intended`). |
+> | **D-19** hold as a floor | **Superseded** by D-32. Hold is a pin with one escalation carve-out. |
+> | **D-21.1** reconciliation merges only on contradiction | **Intact in spirit**, restated over `busy` rather than rungs. |
+> | **D-21.2** a manual write below the floor releases the floor | **Superseded** by D-32: a manual write naming a state other than the held one releases the pin. |
+> | **D-22** ESP32 integration live and accepted | **Intact.** All three sub-findings survive; D-22.3 (a write is not confirmed by the next read) is re-verified against `text` in D-38. |
+> | **D-23** `ONAIR_TOKEN` set on this host | **Superseded** by D-35. |
+> | **D-24** loopback alone does not authenticate; `Origin` does | **Survives, unweakened**, and is cited verbatim by D-35. The two measured attacks stay as regression tests. |
+> | **D-25** `/ui` and `/display` unauthenticated | **Amended** by D-35. `/ui` retires into the admin UI; the reasoning is restated as unauthenticated shell plus gated data. |
+> | **D-26** SwiftBar, not a native app | **Survives**, confirmed. |
+> | **D-27** one credential, no read/write split | **Carried forward** onto the passphrase by D-35, and sharpened: the split that *does* exist is machine credential vs human admin credential, which is a different axis. |
+> | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
 
 - **D-1 (2026-08-05)** Receiver is a Raspberry Pi hosting a REST API; the work Mac runs
   only a thin detector that calls that API. Rationale: light-control logic must not
