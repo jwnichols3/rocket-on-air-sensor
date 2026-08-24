@@ -1109,3 +1109,15 @@ else (state, light control, API) lives on the receiver.
   the **state table** (D-31), and a synonym for it is exactly what the vocabulary discipline
   exists to prevent. "Refresh profile from server" is a good *button label* on the device page,
   and it is used there.
+- **D-43 (2026-08-24)** **Factory reset returns the passphrase to a fixed default, not a random
+  one.** Rocket's call, overriding the recommendation in D-35. The concern was raised twice -
+  a documented default passphrase is a LAN backdoor known to anyone who has read this repo -
+  and he decided; it is his machine, his LAN, and his risk to take. Recorded rather than
+  re-argued.
+  **The default is `onair`.** No default passphrase was ever spoken, so this is a filled blank
+  rather than a recorded value, and it is on the review list. It is deliberately **not** `ESP32`:
+  reusing the admin password would collapse the two-credential separation that D-35 exists to
+  create, which would be a much larger change than the one being asked for.
+  **One mitigation, consistent with a choice Rocket already made rather than fighting this
+  one:** the admin UI shows a change-me nag for the passphrase exactly as it does for the admin
+  password (D-35), and does not force a change. Same treatment, same reasoning, no new argument.
