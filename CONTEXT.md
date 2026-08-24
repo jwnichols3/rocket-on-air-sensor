@@ -605,3 +605,140 @@ else (state, light control, API) lives on the receiver.
   file holds current state only), so there is nothing to reinterpret; the stamp exists so that
   when a history store lands, "which table was in force" is already recorded. Snapshotting old
   tables is explicitly deferred, not overlooked.
+- **D-35 (2026-08-23)** **One auth model, two credentials, two audiences.** Resolves
+  [#25](https://github.com/jwnichols3/rocket-on-air-sensor/issues/25). **Supersedes D-7 and
+  D-23; retires `/ui`; amends D-25.**
+  **The passphrase replaces `ONAIR_TOKEN`**, same role - the machine-to-machine credential
+  presented by the ESP32, Companion and the detector - but stored in the structured config
+  store (D-36) and editable in the admin UI rather than only in an env file. Presented as
+  `Authorization: Bearer <passphrase>`, or `?passphrase=` where a header is impossible
+  (`EventSource`, the WebSocket upgrade, a remote kiosk navigation). `?token=` is accepted as
+  a deprecated alias so nothing on the LAN breaks the day this lands. `ONAIR_PASSPHRASE` in
+  the real environment still wins over the file, which is D-14's rule and the break-glass path.
+  **Admin credentials are separate**: default user `rocket`, default password `ESP32`,
+  literally as spoken - Rocket's call, made with the exposure explained. A change-me nag on
+  first login; no forced change. They gate the human-facing admin UI and nothing else.
+  **Two different trust questions, and the split is the point.** The passphrase says "you may
+  read and write state." The admin session says "you may reconfigure the system, including
+  rotating the passphrase." **Admin routes accept only a session token; data routes accept
+  only the passphrase. Neither credential is ever accepted on the other's routes.** That is a
+  sharpening of D-27, not a reversal of it: D-27 rejected splitting the *data* credential into
+  read and write halves, and that still stands - there is one passphrase, no read/write split.
+  **D-24's Origin waiver grants a full admin session.** Rocket asked not to type a password at
+  home and chose neither extreme; the waiver is what he chose. Its ruling is carried over
+  verbatim and unweakened: waived only when the connection is from loopback **and** `Host`
+  names a loopback name on our port **and** `Origin` is absent or exactly one of ours, and
+  never when `Sec-Fetch-Site` is present and is anything other than `same-origin` or `none`.
+  The two measured attacks stay as regression tests. **One carve-out: factory reset always
+  requires the admin password, from any origin, including loopback.** Everything else an admin
+  session can do is recoverable; a factory reset on a box across the house is the lockout path,
+  and one password prompt in its lifetime is a fair price. Revealing the passphrase in the UI
+  is deliberately *not* carved out - Rocket has to read it to type it into the ESP32 and
+  Companion, and demanding a password each time defeats the thing he asked for.
+  **Session mechanics: no cookie.** D-23's objection does not evaporate because there is now a
+  login form - a cookie brings CSRF back into scope on a server whose write routes are
+  deliberately CORS-simple. Instead the admin UI is an SPA that holds a session token **in
+  memory only** and sends it as `Authorization: Bearer <sessionToken>` on every fetch. A
+  header cannot be forged cross-origin without a preflight, so CSRF on admin routes is
+  structurally impossible rather than defended against. Cost: a page refresh logs you out -
+  which at home is invisible, because the SPA immediately re-establishes under the D-24 waiver
+  with no prompt. `POST /admin/session` accepts either nothing (waiver applies) or
+  `{user, password}`. Sessions live 12 hours, sliding, in memory only; a service restart logs
+  everyone out and at home the re-establish is silent.
+  **Rotation has a grace window.** Changing the passphrase rewrites the config store and
+  breaks every machine client at once - inherent, not fixable. Two mitigations: the admin UI
+  shows a rotation checklist naming the hand-configured clients (ESP32, Companion) *before* it
+  applies, and **the previous passphrase keeps working for 60 minutes after a rotation**, with
+  the countdown visible in the admin UI. That converts a simultaneous outage into a walk
+  around the house.
+  **Factory reset** (`POST /admin/factory-reset`, admin password in the body, always): admin
+  credentials return to `rocket`/`ESP32`; **the passphrase is regenerated at random and shown
+  once in the response**, because a *known default* passphrase would be a documented LAN
+  backdoor - the brief said reset returns credentials to defaults but never named a default
+  passphrase, so this fills a blank rather than contradicting one; the state table returns to
+  the seed rows; the hold is cleared; live state becomes `unknown`; `bind` returns to `all`
+  and the port to 8484. A clean install produces the same result from nothing.
+  **D-25's reasoning survives; its subject changes.** `/ui` is **retired** and folded into the
+  new admin UI. The new admin UI is not byte-identical for every caller in the way `/ui` was -
+  it renders config - so the split is made explicit: **the admin UI ships as a static bundle
+  served unauthenticated (byte-identical for everyone, zero interpolation, discloses nothing),
+  and every byte of data it renders comes from gated routes.** That is D-25's argument applied
+  correctly to an app instead of a page, and it answers the ticket's question: unauthenticated
+  shell plus gated data, not gated wholesale.
+  **`GET /public/status` is added, unauthenticated and deliberately thin**:
+  `{state, label, color, bgcolor, busy, ageSeconds, stale}` and nothing else - no passphrase,
+  no config, no hold, no source, no device detail. It is what the memo's unauthenticated
+  landing page asks for (*"is it active? what's it currently sending out?"*) and what
+  `/display` needs to render colours now that colours live in config. It does disclose
+  presence to anyone on the LAN; D-27 already accepted that LAN read consumers are trusted,
+  and the landing page Rocket described cannot exist without it.
+  **Device auth stays separate and stays compile-time.** D-17's basic auth on the ESP32 is
+  confirmed unchanged: that credential guards API-to-device, the passphrase guards
+  clients-to-API, and they are never the same value. ESPHome's `web_server: auth:` is
+  compile-time YAML with no runtime API, so the device half cannot move into a UI; the
+  *server's copy* of it moves into the config store under `device.username` / `device.password`
+  and is editable in the admin UI, where it was previously in `config.env`.
+  **Multi-user admin is decided: not built.** Rocket's *"change that or add a new one"* is read
+  as editability, which is delivered. A second admin account on a single-user machine adds a
+  user store, a per-user session table and a password-reset path to protect nothing D-24 does
+  not already cover. Closes that item from the map's "Not yet specified"; revisit if a second
+  human ever administers this box - the same trigger D-24 already carries.
+- **D-36 (2026-08-23)** **Config is one structured file, edits are staged in the browser, and
+  the service never fails closed.** Resolves
+  [#29](https://github.com/jwnichols3/rocket-on-air-sensor/issues/29). **Amends D-14.**
+  **Storage: `~/.onair/config.json`, 0600, one document.** It holds the port, the bind mode,
+  the passphrase, the admin credentials, the device credentials, the shortcut rows, and the
+  state table. `config.env` **retires as the config source** but is still loaded if present, as
+  an env overlay only - real environment variables still win, which is D-14's rule and the
+  documented way to unbrick a box over SSH. The whole file is hand-editable JSON, which is the
+  answer to "readable and editable by hand, on a Pi, over SSH, with no UI". D-14's actual
+  promise - **the plist carries no `ONAIR_*` config and never changes for a config change** -
+  is unaffected: the service still finds its own config.
+  **Config and state never share a file.** `~/.onair/config.json` is knowledge level, slow,
+  user-owned. `~/.onair/state.json` is operational level, fast, service-owned. Different
+  lifetimes, different writers, different files - permanently.
+  **One write path, enforced by construction.** Home Assistant demonstrates the two-writer trap
+  *inside a single application*: `input_select`'s `set_options` service mutates memory and never
+  touches the storage collection, so it silently does not survive a restart, while UI editing
+  goes through an entirely separate path. Two writers, two lifetimes, no reconciliation. The
+  rule here: **the admin UI has no privileged path.** It calls the same `PUT /admin/config`
+  every other client would, through one validation function and one atomic write (temp file,
+  `fsync`, `rename`). There is no second way in.
+  **Failure handling.** Atomic rename means the file on disk is either wholly the old document
+  or wholly the new one, never half. `ENOSPC` returns `507` with the running config untouched.
+  **On startup, an unparseable or invalid config file does not stop the service**: it logs
+  loudly, binds **loopback only**, serves the admin UI, and presents a repair screen showing the
+  parse error and the raw text, with fix-or-reset. That is the generalisation of the network
+  research's "never fail closed", and it is aimed directly at the failure this ticket names -
+  *a config save that leaves the service unable to start, on a machine Rocket is not sitting in
+  front of.*
+  **Bind mode, absorbed from the network-interface research (#22).** `bind` is a **mode**, not
+  an address: `all` (default, `::` dual-stack) / `loopback` / `iface:<name>`. **Loopback is
+  always bound and is never a user choice** - the picker chooses what *else* to bind. Measured:
+  binding a single LAN address makes `127.0.0.1` return `ECONNREFUSED`, which would silently
+  disable D-24's waiver and therefore the admin surface, from a UI whose purpose is
+  administration. Two `http.Server` objects sharing one handler bind two addresses on one port,
+  measured working. The interface **name** is stored and re-resolved at every startup; a stored
+  address goes stale and `EADDRNOTAVAIL` under D-13's `KeepAlive` is a crash-loop. A missing
+  interface at boot binds loopback, starts, warns, and retries.
+  **Editing model: the draft lives in the browser.** Client-side only, mirrored to
+  `sessionStorage` so a reload does not lose it. No server-side draft resource - that would add
+  a second lifetime, a second write path and a "whose draft is this" question for two tabs,
+  and the browser already holds the draft. Three commit levels, matching what Rocket described:
+  a row being edited is *editing*; a row saved into the draft is *staged*, badged, and diffed
+  against live; the page-level **Save configuration** button is the only thing that reaches the
+  server. Row cancel reverts that row to live and drops it from the draft; **Discard all** drops
+  everything; leaving with staged changes fires `beforeunload`.
+  **One save button, and the server decides what that costs.** Everything except `port` and
+  `bind` applies live. If `port` or `bind` changed, the server **rebinds in place** - closes the
+  listeners, opens new ones, never exits, never involves the supervisor. **If the new binding
+  fails it rolls back to the previous one, keeps running, and returns `409` naming the error.**
+  That is strictly better than "restart and hope" and it is what makes a config UI safe to use
+  from across the house.
+  **Concurrency: optimistic.** `PUT /admin/config` carries the `version` it was based on; a
+  mismatch is `409` with the current document, and the UI shows what changed underneath.
+  **A hand-edit made while the service is running is overwritten by the next UI save** - the
+  running service is the only writer it knows about. Documented plainly rather than defended
+  against: stop the service before hand-editing, or lose the edit.
+  **Factory reset** wipes the table back to the seed rows, clears the hold, sets live state to
+  `unknown`, and resets credentials per D-35.
