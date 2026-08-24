@@ -13,8 +13,9 @@ Decisions: D-31..D-41 in `CONTEXT.md`. Design: `docs/superpowers/specs/2026-08-2
 > **What changed from v1.** `level` and the three-rung ladder are gone, replaced by a
 > user-editable **state table**. `hold` is a pin, not a floor. `onAir`, `POST /on`,
 > `POST /off` and the five hardcoded rung routes are gone or redefined. `ONAIR_TOKEN` is
-> now the **passphrase**. `source` has a required shape. Nothing in v1 is production
-> (map #19), so this is a replacement, not a migration.
+> now the **passphrase**. `source` has a required shape. **Presentation left the state
+> payload** - `label`, `color` and `bgcolor` come from `GET /config/states`, not from a state
+> change. Nothing in v1 is production (map #19), so this is a replacement, not a migration.
 
 ---
 
@@ -36,7 +37,8 @@ Everything the light can say is a row in a user-editable table. A row:
 
 - `id` never changes. If you store one, it stays valid until the row is deleted.
 - `label`, `color`, `bgcolor`, `description`, `busy` and `order` may change under you at
-  any time. Re-read them; do not cache them across a `tableVersion` bump.
+  any time. They reach you **only** through `GET /config/states`, never on a state change.
+  Cache them, and re-pull whenever `tableVersion` moves.
 - Index/position is **not** an address. There is no "set option 3". Reordering rows is a
   cosmetic change and must never change what any client resolves to.
 - **`unknown` always exists.** It cannot be deleted and its `busy` is always `true`.
@@ -64,9 +66,7 @@ One object, persisted atomically, restored on restart.
 | Field | Type | Meaning |
 |---|---|---|
 | `state` | string | The row `id` currently asserted. **A reference to a row, not a copy of one.** |
-| `label` | string | `table[state].label`, carried alongside so a reader never has to fetch the table just to render. |
-| `color` / `bgcolor` | string | `table[state]`'s colours, same reason. |
-| `busy` | boolean | `table[state].busy`. |
+| `busy` | boolean | `table[state].busy`. Carried because it is **semantics, not presentation** - see the rule below. |
 | `intended` | `"on"` \| `"off"` | **Derived, read-only.** `busy ? "on" : "off"`. Writing it has no effect. Exists so a client that has never heard of a row invented tomorrow still does something correct. |
 | `confirmed` | string \| `"unknown"` | The row `id` the light acknowledged, read back from the device itself. `unknown` when the light is unreachable or the panel is not repainting. **Never guessed.** |
 | `hold` | string \| `null` | The pinned row `id`, or `null` for the **auto** regime. See §3. |
@@ -77,6 +77,22 @@ One object, persisted atomically, restored on restart.
 | `tableVersion` | integer | The table version in force. Bumped on every config save. |
 | `stateResolvedFrom` | string \| absent | Present only when the live row was deleted and the state fell back to `unknown`. Names the dead `id`. |
 | `message` | string \| `null` | Optional display message. Independent of state writes - heartbeats never touch it. |
+
+> **PRESENTATION TRAVELS WITH THE PROFILE, NOT WITH THE STATE.**
+>
+> `label`, `color` and `bgcolor` are **not** in this payload. A state change says only *which
+> row* is now current; how that row looks is in the table, which a renderer fetches from
+> `GET /config/states` on its own slow schedule. A state write happens many times an hour; the
+> table changes a few times a year. Sending the second with the first would put configuration
+> data on every heartbeat and weld presentation into the state protocol permanently.
+>
+> `busy`, `intended` and `confirmed` **do** travel with the state, and the line is deliberate:
+> they are **semantics**. `intended` is RFC 3863's carry-along - the basic status that lets a
+> consumer which has never heard of a row still do something correct. Colour is not that; it is
+> a look.
+>
+> The two `/public/*` endpoints are the one exception, and they are a **view**, not the state
+> contract - see §5.
 
 ---
 
@@ -175,9 +191,6 @@ The full state object from §2.
 ```json
 {
   "state": "on-air",
-  "label": "ON AIR",
-  "color": "#ffffff",
-  "bgcolor": "#c1121f",
   "busy": true,
   "intended": "on",
   "confirmed": "on-air",
@@ -256,17 +269,38 @@ Self-describing so a client can ask what states exist rather than being compiled
 ```
 
 Send `If-None-Match: "<version>"` to get a `304` when nothing has changed. The ESP32 polls
-this every 300 s, on boot, and immediately after being handed an `id` it does not know.
+this every 300 s, on boot, immediately after being handed an `id` it does not know, and
+immediately when it notices `tableVersion` has moved (see below).
 
-### `GET /public/status`
+**The version nudge.** Polling alone would leave a colour edit up to 5 minutes from the panel,
+which feels broken when you just made it in the admin UI. So the server also writes the current
+`tableVersion` to a small entity on the device, alongside the state it already writes. A device
+seeing a version it does not hold re-pulls at once. This is a *trigger* for a pull, not a push
+of the table - the server still sends no configuration on the state path, and still keeps no
+device registry beyond the one host it already writes to.
 
-**Unauthenticated**, and deliberately thin. Everything the landing page and `/display`
-need, and nothing else.
+### `GET /public/status` and `GET /public/events`
+
+**Unauthenticated**, deliberately thin, and **the one place the current row is served
+already resolved for rendering.**
 
 ```json
 { "state":"on-air", "label":"ON AIR", "color":"#ffffff", "bgcolor":"#c1121f",
-  "busy":true, "ageSeconds":12, "stale":false }
+  "busy":true, "ageSeconds":12, "stale":false, "tableVersion":7 }
 ```
+
+`GET /public/events` is the same payload as an unauthenticated SSE stream, with the same
+connect/change/15s-keep-alive behaviour as `GET /events`. It exists because `/display` and the
+landing page are served unauthenticated and therefore cannot read the gated stream.
+
+**Why these carry colour when `GET /status` does not.** They serve two browser pages that hold
+no state table and should not fetch one - the whole point of `/display` is that it is a dumb
+page you can point a kiosk at. So the server resolves the row for them. That is a **rendering
+view of the state**, not the state contract, and no machine client should read it: it has no
+`hold`, no `source`, no `confirmed`, and it is free to change shape to suit the two pages.
+
+**A renderer that holds a table must not use these.** The ESP32, Companion and any other
+client take the state key from the gated endpoints and the look from `GET /config/states`.
 
 No passphrase, no config, no `hold`, no `source`, no device information. This does disclose
 presence to anyone on the LAN; that is accepted (D-27, D-35).
@@ -304,7 +338,7 @@ anything keyed to ladder rungs does not.
 ### `GET /display`
 
 A self-contained HTML tally page for kiosk use. Renders the current row's `label` on its
-`bgcolor` in its `color`, live via `/events`. Shows a DISCONNECTED overlay when the stream
+`bgcolor` in its `color`, live via `/public/events`. Shows a DISCONNECTED overlay when the stream
 drops, a stale badge when `stale`, and a client-side watchdog reconnects after ~45 s of
 silence even with no socket error. Unauthenticated.
 
@@ -374,7 +408,7 @@ regression tests.
 `POST /admin/factory-reset` always requires the admin password, from any origin, including
 loopback.
 
-**Unauthenticated:** `GET /public/status`, `GET /display`, and the admin UI's static bundle
+**Unauthenticated:** `GET /public/status`, `GET /public/events`, `GET /display`, and the admin UI's static bundle
 (byte-identical for every caller, and it renders no data of its own).
 
 **Device auth is separate and always has been.** The service authenticates *to* the ESP32

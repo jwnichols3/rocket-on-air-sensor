@@ -74,6 +74,11 @@ else (state, light control, API) lives on the receiver.
   and it is the one thing that can break a pin (D-31/D-32/D-33).
 - **`order`** - a row's display sort hint. Presentation only. **Never on the wire, never an
   address** (D-31/D-34).
+- **Profile refresh** - Rocket's phrase for the config pull: a renderer fetching the state
+  table from `GET /config/states` on its own slow schedule (D-38). *"Profile" is a button
+  label, not a domain word* - the thing itself is the **state table**. The rule it enforces
+  (D-42): **presentation travels with the profile, semantics travel with the state.** `label`,
+  `color` and `bgcolor` never ride on a state change; `busy`, `intended` and `confirmed` do.
 - **Current state** - the operational level: a **reference to a row**, not a copy of one
   (Type Object). Stored as an `id`.
 - **Hold** - a persisted **pin** on the current state, set by a `human:` source (D-32,
@@ -174,6 +179,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
 > | **D-32** unprefixed `source` reads as `human:` | **Amended** by D-41: required and prefixed on `PUT /state`, optional on the convenience routes. |
 > | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. |
+> | **D-31** "colour is on the wire" | **Narrowed** by D-42: colour is in the profile (`GET /config/states`), never on a state change. Presentation travels with the profile, semantics with the state. |
 
 - **D-1 (2026-08-05)** Receiver is a Raspberry Pi hosting a REST API; the work Mac runs
   only a thin detector that calls that API. Rationale: light-control logic must not
@@ -1062,3 +1068,44 @@ else (state, light control, API) lives on the receiver.
   A robot reaching for the machine route must declare itself; a human reaching for the
   convenience route still types nothing. The failure direction now matches the system's
   invariant instead of working against it.
+- **D-42 (2026-08-24)** **Presentation travels with the profile; semantics travel with the
+  state.** Rocket's call, amending D-31 and the v2 contract as first drafted. D-31 accepted
+  "colour is on the wire" wholesale and D-38 then routed colour to the device through the
+  config pull - but the contract as written *also* denormalised `label`, `color` and `bgcolor`
+  into every `GET /status` response and every SSE/WebSocket push. Rocket: *"I agree we
+  shouldn't send the color with the state... I would like the profile refresh capability or
+  auto profile to load the configuration from the server onto the destination. And in that
+  case we would send the information. But that should only happen every so often, not with
+  every state change, right?"* Correct, and the inconsistency was ours.
+  **The line, and why it falls where it does:**
+  - **Out of the state payload:** `label`, `color`, `bgcolor`. A state change says only *which
+    row* is current. A state write happens many times an hour; the table changes a few times a
+    year. Carrying the second on the first puts configuration data on every heartbeat.
+  - **Still in the state payload:** `busy`, `intended`, `confirmed`. These are **semantics, not
+    presentation** - `intended` is RFC 3863's carry-along, the basic status that lets a consumer
+    which has never heard of a row still act correctly (D-33). A look is not that.
+  This also removes most of the cost D-31 accepted knowingly. Colour is no longer welded into
+  the state protocol; it lives in a versioned configuration document, which is a far cheaper
+  thing to change later.
+  **It surfaced a real bug in the first draft, which is the second reason this decision
+  exists.** `/display` is served unauthenticated (D-25/D-35) but was told to read the
+  passphrase-gated `GET /events`. It could not have worked. Fixed by adding **`GET
+  /public/events`** - an unauthenticated SSE stream carrying the `/public/status` payload.
+  **The two `/public/*` endpoints are the deliberate exception**, and they are named as a
+  *rendering view*, not the state contract: they serve two browser pages that hold no table and
+  must not fetch one, so the server resolves the row for them. Any client that holds a table -
+  the ESP32, Companion, VCREC - takes the key from the gated endpoints and the look from
+  `GET /config/states`. Stated in the contract so nobody reads `/public/status` and thinks it
+  is the machine interface.
+  **The version nudge.** Polling alone leaves a colour edit up to 300 s from the panel, which
+  feels broken when it was just made in the admin UI. So the server writes the current
+  `tableVersion` to a small entity on the device alongside the state it already writes, and a
+  device seeing a version it does not hold re-pulls at once. That is a **trigger for a pull,
+  not a push of the table**: no configuration travels on the state path, and the server still
+  keeps no device registry beyond the one host it already writes to. Cost is one integer on a
+  path that already exists.
+  **Vocabulary.** Rocket's *"profile refresh"* and *"auto profile"* name the config pull and
+  D-38's `auto` mode. **"Profile" is not adopted as a second domain word** - the thing is still
+  the **state table** (D-31), and a synonym for it is exactly what the vocabulary discipline
+  exists to prevent. "Refresh profile from server" is a good *button label* on the device page,
+  and it is used there.

@@ -72,10 +72,23 @@ staleness rule is written over, and it is the one thing that can break a pin. Ad
 precedence ordinal only when a second automated writer actually competes; there is one
 (D-30), and at that point max-merge gives order-independence for free.
 
-**Colour is on the wire, against every surveyed precedent.** No presence system does this,
-because federation forces client-side theming. This system is not federated - one owner, N
-dumb renderers he also owns, none of which can carry a sitemap. Accepted cost, taken
-knowingly: **presentation is welded into the wire protocol permanently.**
+**Colour is on the wire, but only in the profile - never on a state change** (D-42). An
+earlier draft denormalised `label`/`color`/`bgcolor` into every status response and every
+push, and Rocket rejected it: colour belongs to the profile refresh, which happens *"every so
+often, not with every state change"*. He is right, and it is a better line than the one it
+replaced.
+
+The rule: **presentation travels with the profile; semantics travel with the state.** `busy`,
+`intended` and `confirmed` stay in the state payload because they are what a consumer needs to
+*act* correctly on a row it has never heard of (RFC 3863's carry-along). `label`, `color` and
+`bgcolor` are a look, and they arrive through `GET /config/states` on the renderer's own slow
+schedule.
+
+Putting colour in the profile at all is still a divergence from every surveyed system - none
+puts colour in the protocol, because federation forces client-side theming. This system is not
+federated: one owner, N dumb renderers he also owns, none of which can hold a colour scheme of
+its own. But the cost that divergence carried has largely gone. Colour is now in a
+configuration document with a version on it, not welded into the state protocol.
 
 **One reserved row, `unknown`.** Undeletable, `busy: true`, conspicuous. It is a Null
 Object, not a rung - nothing is ordered against it. It exists because the fallback for a
@@ -483,6 +496,7 @@ are the ones worth a minute of Rocket's attention.
 | `on-air` and `recording` as separate rows | separate | They give a passer-by different instructions. Having both is the point of v2. |
 | `dnd` dropped from the seeds | dropped | Not in Rocket's list; `on-air` covers it; re-adding is one row in the UI. |
 | Row field named `busy` | `busy` | Not `intended` (it is a property, not an intention) and not `onAir` (`on-air` is a row id). |
+| Colour on the wire | in the profile only, never on a state change | **Rocket's call, not a taste default.** Presentation travels with the profile, semantics with the state. |
 | `source` requirement | **required and prefixed on `PUT /state`, optional on the convenience routes** (D-41) | An earlier draft was forgiving everywhere, which let a robot silently gain human authority. Rocket confirmed VCREC is not written yet, so there was no ergonomics cost to getting it right. |
 | Factory reset regenerates the passphrase | random, shown once | A known default passphrase is a LAN backdoor. The brief said "both to defaults" but never named a default passphrase. |
 | Admin session lifetime | 12 h sliding, memory only | Invisible at home under the waiver; one login away from home. |
