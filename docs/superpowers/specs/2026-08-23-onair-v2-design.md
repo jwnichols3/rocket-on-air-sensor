@@ -1,7 +1,7 @@
 # On-Air v2 design
 
 **Status:** decided. Every question on map [#19](https://github.com/jwnichols3/rocket-on-air-sensor/issues/19) is answered; nothing here is waiting on a conversation.
-**Decisions:** D-28..D-39 in `CONTEXT.md`. **Wire contract:** `docs/api-contract.md` (v2).
+**Decisions:** D-28..D-41 in `CONTEXT.md`. **Wire contract:** `docs/api-contract.md` (v2).
 **Source memo:** `docs/2026-08-23-onair-v2-wayfinder-brief.md`.
 
 This document is what the SDD pipeline writes per-part implementation specs from. It fixes
@@ -392,21 +392,25 @@ must be raised (8 kB).
   template `text` / `number` / `switch` entities with `restore_value: true`, `mode: password`
   on the passphrase, served at the device's own IP through the existing `web_server` behind
   D-17's basic auth. That is his actual list, behind a login, at the device's address.
-- **Not buildable in stock ESPHome:** a bespoke page with its own login form and an editable
-  grid. `web_server` is not a web framework.
-- **Not buildable:** a persisted local table. Restoring string globals cap at
-  `max_restore_data_length <= 254` bytes (`cv.int_range(0, 254)`), which a multi-row table
-  exceeds; sharding across globals to fake it is cleverness that rots.
+- **Not configurable from YAML:** a bespoke page with its own login form and an editable grid.
+  `web_server` is not a web framework, and no amount of YAML makes it one.
+- **But see D-40** - that is a limit of the *YAML surface*, not of the platform. An ESPHome
+  **external component** can register arbitrary HTTP handlers on the same server and port via
+  `web_server_base::add_handler()`, inheriting D-17's basic auth, and can persist a table as
+  an NVS blob well inside the ~19 KB practical ceiling. `captive_portal` does the first of
+  those in-tree. The device page and local overrides are **a chunk of C++, not a firmware
+  track change.**
 
-So **the device does not persist the table.** It holds it in RAM and pulls on boot, rendering
-`unknown` / `NO CONFIG` until the first successful pull - which is correct under the invariant
-anyway, so the missing persistence costs nothing real.
+**v2 still ships auto-only, and the device still does not persist the table** - it holds it in
+RAM and pulls on boot, rendering `unknown` / `NO CONFIG` until the first successful pull, which
+is correct under the invariant anyway. That is now a **scheduling** decision rather than a
+platform limit, which is a materially different thing to record.
 
-**Custom mode is cut to one bit, honestly.** Full local overrides mean leaving ESPHome for
-hand-written firmware, which is a much larger decision than this and not one to make as a side
-effect - it is [issue #33](https://github.com/jwnichols3/rocket-on-air-sensor/issues/33). What
-ships is a `switch`: `auto` pulls and follows; `custom` freezes the table last pulled and
-stops pulling. Four lines of YAML, and it answers the real question behind the ask.
+**Custom mode ships as one bit** for v2: a `switch` where `auto` pulls and follows and `custom`
+freezes the table last pulled and stops pulling. Four lines of YAML, and it answers the real
+question behind the ask. The full device-served editor is
+[#33](https://github.com/jwnichols3/rocket-on-air-sensor/issues/33), rescoped by D-40 from
+"needs different firmware" to "needs an external component".
 
 **Unreachable server:** state pushes stop -> the existing watchdog trips to NO DATA; config
 pulls fail -> keep the RAM table; no table at all -> `unknown` / `NO CONFIG`. Never calm, at
@@ -454,7 +458,7 @@ Named so the pipeline does not silently assume it:
 - **The colour lamp renderer** (D-20). Still deferred. The table's colour fields are the first
   thing it would consume, and they now exist.
 - **Device-side table editing** - [#33](https://github.com/jwnichols3/rocket-on-air-sensor/issues/33).
-  Needs firmware beyond ESPHome.
+  Buildable as an ESPHome external component (D-40); deferred on effort, not on feasibility.
 - **A history store.** `tableVersion` is stamped so one can be added without a migration, but
   nothing records state over time today.
 - **CI.** No pipeline. `npm run verify` is the gate.
@@ -479,7 +483,7 @@ are the ones worth a minute of Rocket's attention.
 | `on-air` and `recording` as separate rows | separate | They give a passer-by different instructions. Having both is the point of v2. |
 | `dnd` dropped from the seeds | dropped | Not in Rocket's list; `on-air` covers it; re-adding is one row in the UI. |
 | Row field named `busy` | `busy` | Not `intended` (it is a property, not an intention) and not `onAir` (`on-air` is a row id). |
-| Unprefixed `source` reads as `human:` | forgiving | Keeps curl and Shortcuts working. The unsafe direction, documented in bold. |
+| `source` requirement | **required and prefixed on `PUT /state`, optional on the convenience routes** (D-41) | An earlier draft was forgiving everywhere, which let a robot silently gain human authority. Rocket confirmed VCREC is not written yet, so there was no ergonomics cost to getting it right. |
 | Factory reset regenerates the passphrase | random, shown once | A known default passphrase is a LAN backdoor. The brief said "both to defaults" but never named a default passphrase. |
 | Admin session lifetime | 12 h sliding, memory only | Invisible at home under the waiver; one login away from home. |
 | Rotation grace window | 60 minutes | Long enough to walk the house, short enough not to be a second credential. |

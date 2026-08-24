@@ -8,7 +8,7 @@ source.** VCREC - the external detector (D-30) - is exactly that reader: this re
 imports it, never names it in code, and never depends on its shape. Anything a client
 needs to know has to be here.
 
-Decisions: D-31..D-38 in `CONTEXT.md`. Design: `docs/superpowers/specs/2026-08-23-onair-v2-design.md`.
+Decisions: D-31..D-41 in `CONTEXT.md`. Design: `docs/superpowers/specs/2026-08-23-onair-v2-design.md`.
 
 > **What changed from v1.** `level` and the three-rung ladder are gone, replaced by a
 > user-editable **state table**. `hold` is a pin, not a floor. `onAir`, `POST /on`,
@@ -145,12 +145,22 @@ label  := free text, 1..32 chars, for display only
 - `auto:vcrec`, `auto:calendar-sync` - an automated writer. Subject to the pin rule.
 - `human:menubar`, `human:ui`, `human:shortcut` - a person. May set, move and clear holds.
 
-> **If you are writing an automated client, you MUST send the `auto:` prefix.** An absent
-> or unprefixed `source` is read as `human:`, which means your writes will break the
-> owner's holds. This default is chosen so `curl`, phone Shortcuts and hand-written tools
-> behave sensibly with no ceremony; the cost is that a forgetful robot gets human
-> authority. The one legacy value mapped for continuity is the bare string `detector`,
-> which is read as `auto:detector`.
+**The rule is split by route, so neither audience pays for the other's convenience:**
+
+| Route | `source` | Missing or unprefixed |
+|---|---|---|
+| `PUT /state` - the canonical write, what an automated client uses | **required, prefixed** | `400` |
+| `POST /state/{id}`, `/on`, `/off` - the curl and Shortcuts surface | optional | defaults to `human:anonymous` |
+
+An earlier draft made `source` forgiving everywhere, so an automated writer that forgot the
+prefix would silently get human authority and break the owner's holds. That is the wrong
+direction to fail in a system whose whole invariant is "false OFF is worse than false ON".
+Splitting by route costs nothing: the route a robot reaches for demands the prefix, the
+route a human reaches for does not. **If you are writing an automated client, use
+`PUT /state` and send `auto:<yourname>`.**
+
+The one legacy value mapped for continuity is the bare string `detector`, read as
+`auto:detector`.
 
 ---
 
@@ -192,7 +202,7 @@ The canonical write. Idempotent - repeating the same body just refreshes `update
 | Field | Required | Notes |
 |---|---|---|
 | `state` | yes | A row `id` that exists in the current table. |
-| `source` | no | Defaults to `human:anonymous`. See §4 - **automated clients must send `auto:`**. |
+| `source` | **yes** | Must carry a valid `auto:` or `human:` prefix. `400` otherwise - see §4. |
 | `hold` | no | `true` pins at this request's state; `false` releases. Omitting leaves the hold untouched. **`human:` sources only.** |
 
 Errors:
@@ -200,6 +210,7 @@ Errors:
 - unknown `state` -> `400 {"error":"unknown state 'x'","validStates":["available","on-air",...]}`.
   **Never accept-and-fall-back** - a typo must not render calm.
 - missing `state` -> `400`.
+- missing or unprefixed `source` -> `400 {"error":"source must be prefixed auto: or human:"}`.
 - `hold` sent by an `auto:` source -> `403`.
 - an `auto:` write refused by the pin rule -> `409` with the current status body, so the
   client can see what stands. This is **not** an error to retry; it is the system working.
@@ -211,6 +222,9 @@ Response: `200` with the same body as `GET /status`, after the write and the lig
 No-body convenience for `curl`, phone Shortcuts and Companion. Sets that row.
 `?source=<kind:label>`, `?hold=1`, `?hold=0` as query parameters. Response identical to
 `PUT /state`.
+
+**On this route `source` is optional and defaults to `human:anonymous`**, unlike `PUT /state`.
+That asymmetry is deliberate - see §4.
 
 ### `POST /on` / `POST /off`
 

@@ -172,6 +172,8 @@ else (state, light control, API) lives on the receiver.
 > | **D-26** SwiftBar, not a native app | **Survives**, confirmed. |
 > | **D-27** one credential, no read/write split | **Carried forward** onto the passphrase by D-35, and sharpened: the split that *does* exist is machine credential vs human admin credential, which is a different axis. |
 > | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
+> | **D-32** unprefixed `source` reads as `human:` | **Amended** by D-41: required and prefixed on `PUT /state`, optional on the convenience routes. |
+> | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. |
 
 - **D-1 (2026-08-05)** Receiver is a Raspberry Pi hosting a REST API; the work Mac runs
   only a thin detector that calls that API. Rationale: light-control logic must not
@@ -992,3 +994,71 @@ else (state, light control, API) lives on the receiver.
   **Taste calls made in the prototype, all on the review list:** the section order and names, the
   seed palette's exact hex values, "Busy / Calm" as the wording for the `busy` toggle, and the
   decision to show the passphrase in plaintext on the Admin page rather than behind a reveal.
+- **D-40 (2026-08-24)** **Correction: a real device web interface and a persisted local table
+  ARE buildable inside ESPHome. D-38's feasibility verdict was scoped too narrowly.**
+  Rocket pushed back on the "not buildable" finding - *"I have to assume there is a webserver
+  solution for the esp32"* - and he was right. D-38 asked "what can `web_server` be configured
+  to do from YAML", and the honest answer to *that* question is "not this". The question it
+  should have asked is "what can an **ESPHome external component** do", which is a supported,
+  documented extension mechanism, and the answer there is "essentially all of it". Recording
+  the mistake as well as the fix, because the failure mode - taking a component's YAML surface
+  for the platform's ceiling - will recur otherwise.
+  **Verified against the pinned ESPHome 2026.8.0 source and Espressif's docs:**
+  - `web_server_base` exposes **`add_handler(AsyncWebHandler *)`** and
+    `add_handler_without_auth(...)` (`web_server_base.h:158,166`). `add_handler()` is
+    documented as the variant that **respects web server authentication**, so a custom page
+    inherits D-17's mandatory basic auth for free rather than re-implementing it.
+  - **`captive_portal` uses exactly this in-tree** (`captive_portal.cpp:82`), which is the
+    existence proof that the extension point is real and supported rather than incidental.
+  - **The interface is unified across frameworks.** `web_server_idf` defines its own
+    `AsyncWebHandler` with the same `canHandle`/`handleRequest` shape
+    (`web_server_idf.h:244`), and dispatches to registered handlers
+    (`web_server_idf.cpp:244,262`). So this works on `framework: esp-idf`, which is what D-17
+    pinned. Both classes are in ESPHome's published API docs.
+  - **The 254-byte limit is a YAML schema limit, not a platform limit.** It is
+    `cv.int_range(0, 254)` on `globals:`'s `max_restore_data_length`. ESPHome's own NVS path
+    calls `nvs_set_blob(key, save.data.data(), save.data.size())` with no such cap
+    (`esp32/preferences.cpp:233`); the 255-word ceiling nearby applies only to the **RTC**
+    backend used across deep sleep, which this always-awake device never uses.
+  - **`nvs_set_blob` allows 508,000 bytes, or 97.6% of the partition minus 4000, whichever is
+    lower** (Espressif docs). The default ESP32 NVS partition is 24 KB, so the practical
+    ceiling is roughly 19 KB against a 64-row table at well under 5 KB. Espressif warn that
+    page fragmentation can fail a large blob write even when overall space looks sufficient -
+    so a write must be checked, not assumed.
+  - **ESPHome supports custom partition tables** (`esp32: partitions:`, `esp32/__init__.py`),
+    so a LittleFS/SPIFFS data partition is available if the blob ever stops being enough.
+  **The options, ranked, with what each costs:**
+  1. **External component + NVS blob (recommended).** A C++ component in `firmware/` that
+     implements `AsyncWebHandler`, registers via `add_handler()`, serves a real config page on
+     the device's own IP and port 80 behind the existing basic auth, and persists the table as
+     one preference blob. Stays entirely on ESPHome, so OTA, `make logs`, the display lambda,
+     the frame counter (D-22) and the whole existing toolchain keep working. Cost: hand-written
+     C++ compiled into the firmware, and an HTML page to maintain in a second place.
+  2. **Same, but LittleFS/SPIFFS** if the page or table outgrows a blob. Adds a custom
+     partition table and a filesystem to the failure surface. Only if 1 proves too small.
+  3. **Hand-written ESP-IDF firmware.** What D-38 assumed was required. Now clearly the *last*
+     resort: it would mean rebuilding the display driver, Wi-Fi/OTA, the entity REST surface
+     the D-17 driver depends on, and D-22's liveness signal, all of which ESPHome provides.
+  4. **Server-only editing** (v2's shipped default). Still a legitimate choice, and now a
+     genuine one rather than a limitation dressed up as a decision.
+  **What changes in the design:** D-38's *architecture* is untouched and still right - state
+  pushes, config pulls, `select` -> `text`, colour via the config pull, `unknown`/`NO CONFIG`
+  before the first pull. What changes is that **"custom mode is cut because ESPHome cannot"
+  becomes "custom mode is deferred because it is a chunk of work"** - an honest scheduling
+  call rather than a platform limit. [#33](https://github.com/jwnichols3/rocket-on-air-sensor/issues/33)
+  is rescoped and reopened accordingly.
+- **D-41 (2026-08-24)** **`source` is required and prefixed on `PUT /state`, and optional on
+  the convenience routes.** Amends D-32. D-32 made an absent or unprefixed `source` read as
+  `human:` everywhere, and flagged on the review list that this is the unsafe direction - an
+  automated writer that forgets the prefix silently gets human authority and breaks the
+  owner's holds. Rocket's answer removed the reason for the compromise: **VCREC has not been
+  written yet and will not be until this spec is finished**, so there is no automated client
+  whose ergonomics need protecting. Splitting the rule by route now costs nothing and gets
+  both halves right:
+  - **`PUT /state`** - the canonical write, what an automated client uses - **requires** a
+    `source` carrying a valid `auto:` or `human:` prefix. `400` otherwise.
+  - **`POST /state/{id}`, `/on`, `/off`** - the curl and phone-Shortcuts surface - keep
+    `source` optional, defaulting to `human:anonymous`.
+  A robot reaching for the machine route must declare itself; a human reaching for the
+  convenience route still types nothing. The failure direction now matches the system's
+  invariant instead of working against it.
