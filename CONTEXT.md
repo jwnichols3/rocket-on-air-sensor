@@ -431,3 +431,177 @@ else (state, light control, API) lives on the receiver.
   repo's scope. `source` on a write keeps its meaning (an automated writer vs a human), which
   is what hold semantics are defined over; that is now the only trace the detector leaves
   here.
+
+- **D-31 (2026-08-23)** **The state table: row schema, identity and seeds.** Resolves
+  [#20](https://github.com/jwnichols3/rocket-on-air-sensor/issues/20). **Supersedes D-18's
+  ladder.** The state set is a user-editable **state table** (the domain word - not "option
+  table", not "config"; the user is defining what the light *means*, not filling a
+  dropdown). Registration policy, in RFC 8126's sense: *first come first served; the
+  registrant is the LAN admin via the admin UI.*
+  **Identity is an immutable slug `id`**, `^[a-z0-9][a-z0-9-]{0,31}$`, unique, assigned at
+  creation and never editable thereafter. Rocket reached for a numeric ID ("0, 1, 2, 3, 4
+  ... all the way up to whatever"); that number becomes **`order`, a presentation-only sort
+  hint** which may be renumbered freely and **never appears on the wire as an address**.
+  Five independent threads converged on the ID/label split (Type Object; Matter's
+  `ModeOptionStruct`; HA's `unique_id`; openHAB's `{value,label}`; Companion 5.0.x's
+  one-time preset *copy*, which permanently freezes into a placed button whatever id it was
+  created with). The last of those makes it a hard requirement rather than a nicety, and it
+  pays forward: Companion 5.1's live-linked preset references turn "drag it again after
+  every edit" into "it just updates" *only* if ids are stable across regeneration.
+  **Rocket's "phrase that would be sent with the state" is honoured, not discarded:** the
+  `label` travels *alongside* the id in every status response (openHAB's self-describing
+  shape), so the phrase is on the wire - just not as the key.
+  **Row schema:**
+  | Field | Type | Rules |
+  |---|---|---|
+  | `id` | string | Immutable slug. `^[a-z0-9][a-z0-9-]{0,31}$`. Unique. The only addressable handle. |
+  | `label` | string | 1..64 chars trimmed. Freely editable. Duplicates warn, never block. |
+  | `color` | string | `#rrggbb`. Foreground/text. **Companion's field name, verbatim.** |
+  | `bgcolor` | string | `#rrggbb`. Background. **Companion's field name, verbatim.** |
+  | `description` | string | 0..200. A comment for humans. **Never load-bearing** (RFC 3863's warning about `<note>`). |
+  | `busy` | boolean | Does this state mean "camera may be live, do not interrupt". Required; **new rows default `true`** (fail safe). See D-33. |
+  | `order` | integer | 0..999. Display order only. Ties break by `id`. |
+  Table rules: at most 64 rows; at least one; the reserved `unknown` row must be present
+  (D-34); duplicate `id` is `400`. Colours normalise to lowercase on save.
+  **No `severity` ordinal.** The safety axis is carried by the `busy` boolean alone (see
+  D-32), which is the research's own recommendation - start with the boolean and add a
+  precedence ordinal only when a second automated writer actually competes, at which point
+  max-merge gives order-independence for free. There is one automated writer (VCREC, D-30).
+  **Colour is on the wire, deliberately and against every surveyed precedent.** No presence
+  system puts colour in the protocol, because a federated system must let a stranger's
+  client theme the status. This system is not federated - one owner, N dumb renderers he
+  also owns, none of which can carry a sitemap. Accepted cost: presentation is welded into
+  the wire contract permanently.
+  **Seed rows** (Rocket's list, plus the reserved row):
+  | `order` | `id` | `label` | `busy` | `bgcolor` | `color` |
+  |---|---|---|---|---|---|
+  | 0 | `available` | AVAILABLE | false | `#0b6e2e` | `#ffffff` |
+  | 1 | `on-air` | ON AIR | true | `#c1121f` | `#ffffff` |
+  | 2 | `interruptible` | INTERRUPTIBLE | false | `#e8a317` | `#1a1a1a` |
+  | 3 | `recording` | RECORDING | true | `#6a0dad` | `#ffffff` |
+  | 99 | `unknown` | NO DATA | true | `#1a1a1a` | `#ff00ff` |
+  Two sub-decisions inside the seed: **`dnd` does not survive** - it is not in Rocket's list,
+  `on-air` covers it, and it is his to re-add; and **`on-air` and `recording` are distinct
+  rows**, because they give a passer-by different instructions (camera live: do not enter;
+  audio live: do not make noise), and having both is the entire point of v2.
+  **Vocabulary.** Adopt: *state table*, *row*, *id*, *label*, *registry/registration policy*,
+  and Fowler's **knowledge level** (the table) vs **operational level** (live state + hold).
+  Banned: *state machine*, *statechart*, *transition*, *guard*, *event* - there are no
+  transitions here, a complete graph carries zero information, and the words invite a
+  contributor to invent some. Also banned at row level: *taxonomy* (the set is flat),
+  *traits* (ESPHome's word, welded to "immutable, compile-time" - the exact property being
+  escaped), *entity* (the panel is an entity; rows are not). `select`/`option` are confined
+  to the ESPHome transport layer and are not domain words. This resolves the one recorded
+  disagreement between the two vocabulary surveys in favour of the generic-patterns report.
+- **D-32 (2026-08-23)** **Hold is a pin with one escape hatch, and the ladder rule is
+  rewritten over `busy`.** Resolves
+  [#26](https://github.com/jwnichols3/rocket-on-air-sensor/issues/26). **Supersedes D-19 and
+  D-21.2, and rewrites D-6/D-18's staleness rule.** A floor over an unordered set is
+  meaningless, so hold-as-floor is gone. A *naive* pin is also wrong, and there is production
+  evidence: Microsoft Teams ships hold-as-pin (`user-preferred state > session-level states`),
+  so a Teams user who prefers `Available` and then joins a call shows **Available** - the
+  precise failure D-19 named. Teams can afford a wrong-but-chosen chat status; a light whose
+  only job is to say whether a camera is live cannot.
+  > **THE PIN RULE - while a hold is set, a write from an automated source is applied only if
+  > it moves the system from a `busy: false` state to a `busy: true` state. Every other
+  > automated write is refused (`409`) and the held state stands. Manual writes always apply;
+  > a manual write naming a state other than the held one releases the hold.**
+  That single carve-out reproduces every behaviour D-19 wanted and drops the wart it carried.
+  Pinned to `interruptible` (`busy: false`), a detector `on-air` escalation is allowed, the
+  pin survives it, and the end-of-call `available` is refused - so *"I am interruptible
+  today"* survives a meeting, exactly as D-19 intended. Pinned to `recording` (`busy: true`),
+  nothing automated moves it at all. And **a pin at `available` is now legal** (D-19 made it a
+  `400`), because a pin at a calm state still cannot force calm against a live camera - the
+  reason for the old prohibition has been designed out.
+  > **THE BUSY RULE (replaces THE LADDER RULE) - the server never moves from a `busy: true`
+  > state to a `busy: false` state, and never asserts a `busy: false` state to a renderer, on
+  > the strength of evidence that is stale (`ageSeconds > 90`). Moving to or staying at
+  > `busy: true` is always allowed. Absence of information never renders calm.**
+  Every ordering word is gone and the invariant it protects ("false OFF is worse than false
+  ON") is stated directly instead of encoded in a rank. `busy: true -> busy: true` changes,
+  which the ladder rule had to special-case as the `dnd -> interruptible` decay, need no rule:
+  they only ever happen on a write, and a write is fresh evidence by definition. As before,
+  staleness is *visible*, never acted on: rather than heartbeat a stale calm state forever the
+  server withholds the assertion and lets the device watchdog trip to NO DATA. That is
+  withdrawal of a liveness claim, not a state change. No TTL, no decay, no auto-raise -
+  confirming D-6.
+  **`source` becomes contract, not an implementation detail** - under D-30 it is the only
+  trace the detector leaves in this system. It is `kind:label`, where `kind` is `auto` or
+  `human` and `label` is free text for display (`auto:vcrec`, `human:menubar`). An absent or
+  unprefixed `source` is read as `human:` - which keeps curl, phone Shortcuts and the legacy
+  `webui` working, and is the *unsafe* default, so `docs/api-contract.md` states in bold that
+  **an automated writer which omits `auto:` is treated as a human and will break pins.** The
+  one legacy value mapped for continuity is `detector` -> `auto:detector`.
+  **Release is explicit only, never a TTL** (confirming D-6 and D-19), and **only a `human:`
+  source may set, move or clear a pin.** Teams' severity-scaled hold expiry (1 day for
+  DND/Busy, 7 otherwise) is recorded as a **conflict, not an adoption**. Slack's `auto` is
+  adopted as the *word* for the released regime in the UI and menu bar; the wire keeps
+  `hold: true|false` on a write and `hold: "<id>" | null` on a read. Slack's provenance split
+  is adopted too: `GET /status` reports `source` and `hold` together, so any client can always
+  tell whether the current state was held or detected.
+- **D-33 (2026-08-23)** **`intended` survives, re-derived from a per-row `busy` flag.**
+  Resolves [#27](https://github.com/jwnichols3/rocket-on-air-sensor/issues/27). **Amends
+  D-18.** The projection `level === 'available' ? 'off' : 'on'` has no definition over an
+  arbitrary table, so it is replaced by `intended = table[state].busy ? 'on' : 'off'`. The
+  flag lives on the row; the derived field keeps its name on the wire.
+  Four unrelated sources argued for the per-row flag: **RFC 3863 (PIDF)** requires every
+  extended status value to *carry* the basic `open`/`closed` alongside it, so a consumer that
+  has never heard of the value still does something correct; **Type Object** says a type
+  object carries per-type data; **HA's capability-attribute split** models what a thing *can*
+  be separately from what it *is*; and **the existing Companion wiring** keys its feedback off
+  `$.intended == "on"`, so keeping the flag keeps the only Companion integration that exists
+  working with zero config changes until a module is built.
+  That last one inverts the framing the ticket was written with. D-18 kept `intended` for
+  *backward* compatibility with consumers the map's Notes say are abandonable. PIDF's argument
+  is **forward**-looking and does not weaken as those consumers die: the whole point of a
+  user-editable table is that the state set changes *after* the consumers ship, and the flag is
+  what makes a row invented tomorrow safe for a client written last month. So this is **not**
+  D-18's "separate, later, boring ticket" to delete `intended`; that ticket is cancelled.
+  Naming: the row field is **`busy`**, not `intended` - on a row it is a property of the state,
+  not an intention - and not `onAir`, because `on-air` is a seed row `id` and reusing the
+  phrase as a field name invites exactly the confusion this decision exists to prevent. The
+  wire field stays `intended` because renaming it buys nothing and costs the Companion wiring.
+- **D-34 (2026-08-23)** **State lifecycle: one reserved row, and identity that cannot rot.**
+  Resolves [#28](https://github.com/jwnichols3/rocket-on-air-sensor/issues/28).
+  **Renumbering dissolves.** `id` is immutable, `order` is presentation-only and freely
+  renumbered, and **index never appears on the wire or in a Companion preset**. That last
+  clause is load-bearing and free now: HA's options are positional with no identity, so index
+  is a de facto second address - reorder the rows and an index-based caller silently resolves
+  to something else, with nothing erroring because every index is still valid. A Stream Deck
+  button bound to "option 3" is that failure exactly.
+  **Renaming the `label` is always safe** and is not a breaking change, because the label was
+  never the key. **Changing an `id` is not offered** - the UI has no id field after creation;
+  changing identity is delete-plus-create, which is what it actually is. HA is the cautionary
+  tale here, not the template: its `input_select` options are bare strings, so a rename is not
+  modelled as a rename at all - one string vanishes, another appears, nothing is migrated,
+  nothing is warned. The stable per-row id is the fix HA never applied.
+  **One reserved row: `unknown`.** It cannot be deleted, its `busy` is forced `true`, and it is
+  where every dangling reference resolves. Its `label`, colours and description are editable
+  like any other row. This is a Null Object, not a ladder in disguise: it carries no rank and
+  nothing is ordered against it. Both prior-art threads insisted the fallback must not be
+  `available` ("a delete that silently resolves to the calm state is the invariant violation
+  wearing a maintenance-operation costume"), and HA's `options[0]` fallback is the same trap -
+  *"'fall back to the first row' is a bad rule if the first row is ON AIR."* Naming the
+  fallback explicitly, and making it conspicuous rather than calm, answers both.
+  **Deletion is allowed, never silent.** Deleting the row that is currently live is permitted;
+  on save the live state resolves to `unknown`, `GET /status` reports
+  `stateResolvedFrom: "<dead-id>"`, and the admin UI warns before the save that the row is live
+  right now. Deleting the pinned row releases the pin in the same operation, with the same
+  warning. HA's containment asymmetry is adopted wholesale - **degrade quietly on the state,
+  fail loudly on the command** - with one correction: HA logs its live-delete fallback as a
+  *warning*, which on a physical light means the panel changes colour with no explanation, so
+  here it is surfaced in `GET /status` and on the admin UI, not only in a log.
+  **A write naming an unknown `id` is `400`**, listing the valid ids. Never accept-and-fall-back:
+  that would let a typo render calm. **A renderer handed an id it does not know renders the
+  `unknown` appearance** - conspicuous, never calm, and never silently dropped. That last
+  clause is aimed at XMPP's rule that unknown extensions MUST be ignored, which degrades a
+  custom state to *nothing*; that is the failure mode to design against.
+  **Table versioning.** The table carries a monotonic integer `version`, bumped on every master
+  save, and `GET /status` stamps `tableVersion`. **Old versions are not retained.** Renaming a
+  row does change the meaning of every past record - HA takes this seriously enough that
+  `InputSelect` deliberately subtracts `SelectEntity`'s history exclusion, putting the option
+  list back into recorded history precisely because for a *user-editable* list the option list
+  *is* history. The honest position here: this system has no history store at all (the state
+  file holds current state only), so there is nothing to reinterpret; the stamp exists so that
+  when a history store lands, "which table was in force" is already recorded. Snapshotting old
+  tables is explicitly deferred, not overlooked.
