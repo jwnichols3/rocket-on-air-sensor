@@ -2,17 +2,21 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * Loads ONAIR_* config from an env file into process.env, if present.
+ * Loads ONAIR_* values from an env file into process.env, if present.
  *
- * Resolution order for the file path: explicit `path` argument, then
- * `ONAIR_CONFIG`, then `~/.onair/config.env`. Real environment variables
- * already set always win over values in the file - that's how
- * `process.loadEnvFile` behaves, and this function does not fight it.
+ * **This is an OVERLAY, not the config source.** `~/.onair/config.json` is the config
+ * document (D-36); `config.env` retired as the source and survives only for this, because
+ * a real environment variable winning over the file is D-14's rule and the documented way
+ * to unbrick a box over SSH.
  *
- * A missing file is not an error (sensible defaults apply). Any other
- * failure (e.g. the path is a directory) is rethrown.
+ * Resolution order for the file path: explicit `path` argument, then `ONAIR_CONFIG`, then
+ * `~/.onair/config.env`. Real environment variables already set always win over values in
+ * the file - that's how `process.loadEnvFile` behaves, and this function does not fight it.
+ *
+ * A missing file is not an error (sensible defaults apply). Any other failure (e.g. the
+ * path is a directory) is rethrown.
  */
-export function loadConfig(path?: string): void {
+export function loadEnvOverlay(path?: string): void {
   const resolved = path ?? process.env.ONAIR_CONFIG ?? join(homedir(), '.onair', 'config.env');
   try {
     process.loadEnvFile(resolved);
@@ -21,3 +25,6 @@ export function loadConfig(path?: string): void {
     throw err;
   }
 }
+
+/** @deprecated Kept so existing callers and tests keep compiling. Use `loadEnvOverlay`. */
+export const loadConfig = loadEnvOverlay;

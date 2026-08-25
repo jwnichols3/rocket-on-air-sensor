@@ -1,4 +1,12 @@
 import type { Server } from 'node:http';
+import {
+  ConfigWriteError,
+  defaultConfig,
+  loadConfigFile,
+  resolveBind,
+  saveConfigFile,
+  type OnAirConfig,
+} from './config-store.js';
 import { NoopDriver, type LightDriver } from './driver.js';
 import { EsphomeTextDriver } from './esphome-driver.js';
 import { loadState, saveState } from './persist.js';
@@ -10,9 +18,20 @@ import { createWsBridge } from './ws.js';
 
 export interface AppOptions {
   stateFile: string;
-  port: number;
+  /** Where the config document lives. Omitted in tests that do not exercise config. */
+  configFile?: string;
+  /** Overrides the config's port. The real environment still wins over the file (D-14). */
+  port?: number;
   token?: string;
   driver?: LightDriver;
+  /** Built from the config's `light` block when not supplied. */
+  makeDriver?: (config: OnAirConfig) => LightDriver | undefined;
+  /**
+   * Applied to the defaults when there is no config file yet, and then written out. This
+   * is how `config.env`'s values become the document on an upgrading host - after which
+   * the env file is only an overlay, which is what D-36 retired it to.
+   */
+  seedConfig?: (base: OnAirConfig) => OnAirConfig;
   log?: (line: string) => void;
   /** Test seam: overrides for the supervisor's timers. */
   supervise?: { pollMs?: number; reassertMs?: number; decayMs?: number };
@@ -21,26 +40,121 @@ export interface AppOptions {
 export interface App {
   port: number;
   store: StateStore;
+  config: () => OnAirConfig;
   close: () => Promise<void>;
+}
+
+/**
+ * Open one listener per address. Node's `Server` listens once, so N addresses on one port
+ * is N `Server` objects sharing one set of handlers (measured working, #22). They share the
+ * store, the write queue, the SSE hub and the WS bridge, so which listener a request
+ * arrived on is invisible above this line.
+ */
+async function listenAll(
+  make: () => Server,
+  addresses: string[],
+  port: number,
+): Promise<{ servers: Server[]; port: number }> {
+  const servers: Server[] = [];
+  try {
+    let bound = port;
+    for (const address of addresses) {
+      const server = make();
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(bound, address, () => {
+          server.removeListener('error', reject);
+          resolve();
+        });
+      });
+      const addr = server.address();
+      // Port 0 means "any free port" - resolve it on the first listener so the rest land
+      // on the SAME port rather than each getting its own.
+      if (typeof addr === 'object' && addr !== null) bound = addr.port;
+      servers.push(server);
+    }
+    return { servers, port: bound };
+  } catch (err) {
+    await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
+    throw err;
+  }
+}
+
+async function closeAll(servers: Server[]): Promise<void> {
+  for (const s of servers) s.closeIdleConnections();
+  await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
+}
+
+/**
+ * Stop accepting new connections, and DO NOT wait for in-flight requests to finish.
+ *
+ * This is not an optimisation, it is a deadlock fix. A rebind is triggered by a request,
+ * and that request is itself one of the in-flight connections: awaiting the close means
+ * `close()` waits for the response to be sent, while the response waits for `close()` to
+ * return. The listening socket shuts immediately either way, which is all the rebind
+ * actually needs - the new listener can take the port at once.
+ *
+ * The old sockets are swept a moment later, by which time our own response has flushed.
+ * Anything still attached then is a keep-alive client, and it will reconnect to the new
+ * listener on its next request.
+ */
+function stopAccepting(servers: Server[]): void {
+  for (const s of servers) {
+    s.close();
+    s.closeIdleConnections();
+  }
+  setTimeout(() => {
+    for (const s of servers) {
+      s.closeIdleConnections();
+      s.closeAllConnections();
+    }
+  }, 1000).unref();
 }
 
 export async function createApp(opts: AppOptions): Promise<App> {
   const log = opts.log ?? console.log;
-  const driver = opts.driver ?? new NoopDriver(log);
-  const loaded = await loadState(opts.stateFile, log);
-  // The seed table, hardcoded for this ticket. #39 loads it from the config document and
-  // hands it to store.setTable().
-  const store = new StateStore(loaded ?? defaultState(), new StateTable());
+  /** A real environment variable always wins over the file - D-14's rule, and the SSH escape hatch. */
+  const effectivePort = (c: OnAirConfig): number => opts.port ?? c.port;
+
+  // --- config: a broken file NEVER stops the service (D-36) ---------------------------
+  const loaded = opts.configFile
+    ? await loadConfigFile(opts.configFile)
+    : { config: defaultConfig(), fromDisk: true, problem: undefined };
+  let config = loaded.config;
+  let problem = loaded.problem;
+
+  // First boot: write the document out. A config file that does not exist until you use a
+  // UI is not "hand-editable over SSH with no UI" (D-36) - there has to be a file to edit.
+  // A file that failed to LOAD is never overwritten here; that is what the repair view is
+  // for, and clobbering it would destroy the thing the owner needs to read.
+  if (opts.configFile && !problem && !loaded.fromDisk) {
+    config = opts.seedConfig ? opts.seedConfig(config) : config;
+    try {
+      await saveConfigFile(opts.configFile, config);
+      log(`[onair] wrote a starting config to ${opts.configFile}`);
+    } catch (err) {
+      // Not fatal: the service runs on the in-memory document either way.
+      log(`[onair] could not write a starting config: ${errorMessage(err)}`);
+    }
+  }
+  if (problem) {
+    log(`[onair] CONFIG UNUSABLE - starting on loopback with defaults, serving the repair view:`);
+    for (const e of problem.errors) log(`[onair]   ${e}`);
+  }
+
+  const driver =
+    opts.driver ?? opts.makeDriver?.(config) ?? driverFor(config, log) ?? new NoopDriver(log);
+
+  const stateLoaded = await loadState(opts.stateFile, log);
+  const store = new StateStore(stateLoaded ?? defaultState(), new StateTable(config.states, config.version));
 
   // Startup config check. A wrong entity name is a deploy bug and must be loud, so
   // DriverConfigError propagates and stops the service. An unreachable device does not:
   // crash-looping on a dead light is the failure persist.ts was just fixed to avoid.
   //
-  // It checks that the entity EXISTS and nothing more. The old check also compared the
-  // device's compiled option list against LEVELS and refused to start on a mismatch;
-  // under `text` there is no such list, by design (D-38), so a firmware/server skew is
-  // no longer detectable here. It shows up where it now belongs: as a read-back that
-  // does not match, i.e. `confirmed: unknown`.
+  // It checks that the entity EXISTS and nothing more. `select` could be asked for its
+  // compiled option list; `text` has no such list by design (D-38), so a firmware/server
+  // skew now surfaces as a read-back that does not match, i.e. `confirmed: unknown`.
   if (driver instanceof EsphomeTextDriver) {
     if ((await driver.verifyEntity()) === null) {
       log('[onair] light unreachable at boot; continuing with confirmed=unknown');
@@ -53,13 +167,11 @@ export async function createApp(opts: AppOptions): Promise<App> {
     const table = store.getTable();
     const cur = await driver.read();
     const want = store.get().state;
-    const stale = store.stale();
-    if (cur !== UNKNOWN_ID && table.has(cur) && table.busy(cur) && !table.busy(want) && stale) {
+    if (cur !== UNKNOWN_ID && table.has(cur) && table.busy(cur) && !table.busy(want) && store.stale()) {
       log(`[onair] boot: device says ${cur}, our stale ${want} is calm - adopting the device`);
       // Adopt into `state`, not only `confirmed`. `state` is what every other renderer
       // draws, so adopting halfway leaves the browser page green beside a red panel - the
-      // same lie in a different window. Moving to a busy row is always allowed, and a live
-      // device read is fresh evidence.
+      // same lie in a different window.
       store.write(cur, { kind: 'auto', label: 'device', raw: 'auto:device' }, new Date());
       store.setConfirmed(cur);
     } else {
@@ -82,22 +194,98 @@ export async function createApp(opts: AppOptions): Promise<App> {
 
   const hub = createSseHub();
   const wsBridge = createWsBridge();
-  const server: Server = createApiServer({
-    store,
-    driver,
-    persist: (state) => saveState(opts.stateFile, state),
-    enqueueWrite,
-    token: opts.token,
-    hub,
-    ws: wsBridge,
-    log,
-    stateFile: opts.stateFile,
-  });
+  let servers: Server[] = [];
+  let boundPort = 0;
 
-  await new Promise<void>((resolve) => server.listen(opts.port, resolve));
-  const address = server.address();
-  const port = typeof address === 'object' && address !== null ? address.port : opts.port;
-  log(`[onair] listening on :${port}, state file ${opts.stateFile}`);
+  const makeServer = (): Server =>
+    createApiServer({
+      store,
+      driver,
+      persist: (state) => saveState(opts.stateFile, state),
+      enqueueWrite,
+      token: opts.token,
+      hub,
+      ws: wsBridge,
+      log,
+      stateFile: opts.stateFile,
+      config: () => config,
+      configProblem: () => problem,
+      applyConfig,
+    });
+
+  /**
+   * The one apply path (D-36). Persist first, then swap the table in, then rebind if the
+   * port or bind mode moved.
+   *
+   * **It never exits.** A rebind that fails rolls back to the previous listeners and
+   * answers `409` - "restart and hope" is not safe to invoke from across the house, and
+   * under KeepAlive a process exit on a bad address is a crash-loop.
+   */
+  async function applyConfig(next: OnAirConfig): Promise<{ ok: true } | { ok: false; status: 409 | 507; error: string }> {
+    if (opts.configFile) {
+      try {
+        await saveConfigFile(opts.configFile, next);
+      } catch (err) {
+        // ENOSPC leaves the running config untouched - that is what the atomic write buys.
+        if (err instanceof ConfigWriteError && err.outOfSpace) {
+          return { ok: false, status: 507, error: `config not saved: ${err.message}` };
+        }
+        return { ok: false, status: 409, error: `config not saved: ${errorMessage(err)}` };
+      }
+    }
+    // The env override wins over the document (D-14), so a port change in the document is
+    // not a rebind while it is set - otherwise a save would silently undo the escape hatch
+    // someone used to get the service back up.
+    const rebinding = effectivePort(next) !== effectivePort(config) || next.bind !== config.bind;
+    const previous = config;
+    config = next;
+    problem = undefined; // a successful save is the repair
+    store.setTable(new StateTable(next.states, next.version));
+
+    if (!rebinding) return { ok: true };
+
+    const target = resolveBind(next.bind);
+    if (target.warning) log(`[onair] ${target.warning}`);
+    // Stop accepting BEFORE binding: the new addresses usually overlap the old ones on the
+    // same port, so binding first would just be EADDRINUSE against ourselves.
+    stopAccepting(servers);
+    try {
+      const opened = await listenAll(makeServer, target.addresses, effectivePort(next));
+      servers = opened.servers;
+      boundPort = opened.port;
+      log(`[onair] rebound to ${target.addresses.join(', ')} on :${boundPort}`);
+      return { ok: true };
+    } catch (err) {
+      log(`[onair] rebind failed (${errorMessage(err)}) - rolling back to :${previous.port}`);
+      config = previous;
+      store.setTable(new StateTable(previous.states, previous.version));
+      if (opts.configFile) await saveConfigFile(opts.configFile, previous).catch(() => {});
+      try {
+        const back = await listenAll(makeServer, resolveBind(previous.bind).addresses, effectivePort(previous));
+        servers = back.servers;
+        boundPort = back.port;
+      } catch (err2) {
+        // Never fail closed. If even the old binding will not come back, loopback is the
+        // last resort that still leaves an admin surface to fix this from.
+        log(`[onair] rollback bind ALSO failed (${errorMessage(err2)}) - falling back to loopback`);
+        const last = await listenAll(makeServer, ['127.0.0.1'], effectivePort(previous));
+        servers = last.servers;
+        boundPort = last.port;
+      }
+      return { ok: false, status: 409, error: `rebind failed and was rolled back: ${errorMessage(err)}` };
+    }
+  }
+
+  // A config the service could not read is a config it must not act on: bind loopback,
+  // start anyway, and serve the repair view. The port override still applies so a test or
+  // an operator can pin it.
+  const startBind = problem ? 'loopback' : config.bind;
+  const resolved = resolveBind(startBind);
+  if (resolved.warning) log(`[onair] ${resolved.warning}`);
+  const opened = await listenAll(makeServer, resolved.addresses, effectivePort(config));
+  servers = opened.servers;
+  boundPort = opened.port;
+  log(`[onair] listening on ${resolved.addresses.join(', ')}:${boundPort}, state file ${opts.stateFile}`);
 
   const supervisor = startSupervisor({
     store,
@@ -113,14 +301,28 @@ export async function createApp(opts: AppOptions): Promise<App> {
   });
 
   return {
-    port,
+    get port() {
+      return boundPort;
+    },
     store,
+    config: () => config,
     close: async () => {
       supervisor.stop(); // synchronous: never await an in-flight tick
       hub.closeAll();
       wsBridge.closeAll();
-      server.closeIdleConnections();
-      await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+      await closeAll(servers);
     },
   };
+}
+
+/** The device driver described by the config's `light` block, or nothing. */
+function driverFor(config: OnAirConfig, log: (line: string) => void): LightDriver | undefined {
+  if (!config.light.host) return undefined;
+  return new EsphomeTextDriver({
+    host: config.light.host,
+    entity: config.light.entity,
+    username: config.light.username ?? undefined,
+    password: config.light.password ?? undefined,
+    log,
+  });
 }

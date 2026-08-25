@@ -163,7 +163,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-11** hand-rolled WebSocket | **Intact and deployed.** The zero-dependency rule that justified it was never a rule (D-29); the code is not revisited. Its feedback wiring survives v2 because of D-33. |
 > | **D-12** light hardware on hold | Already superseded by D-16/D-18/D-21. |
 > | **D-13** LaunchDaemon supervision | **Intact**, but the plist's `ProgramArguments` path changes once with D-37's layout, carried by `onair update` - built and tested in D-47, and **not yet applied on this host** (it needs one sudo run). |
-> | **D-14** config-file-first install | **Amended** by D-36. `config.env` retires as the config source and survives as an env overlay; the plist still carries no `ONAIR_*`. |
+> | **D-14** config-file-first install | **Amended** by D-36, **shipped** by D-50. `config.env` retires as the config source and survives as an env overlay. The claim that the plist carries no `ONAIR_*` was **not true on this host** - it carries `ONAIR_PORT` and `ONAIR_STATE_FILE`, which D-47's re-render removes. See D-50. |
 > | **D-16** firmware in a separate repo | **Reversed** by D-28, implemented by D-37 and **done** in D-47. Firmware lives in `firmware/`. The ESPHome `2026.8.0` pin and its warning survive. |
 > | **D-17** device transport over plain HTTP | **Intact**, **amended** by D-38: the device entity moves from `select` to `text`. Basic auth stays mandatory and stays separate from the passphrase. |
 > | **D-18** three-rung ladder | **Superseded** by D-31 (table), D-32 (busy rule), D-33 (`intended`), and **deleted from the code** by D-48. `level`, `onAir` and the rung routes no longer exist. |
@@ -1392,3 +1392,63 @@ else (state, light control, API) lives on the receiver.
   **Measured on the real light**, end to end: pin -> escalate -> refuse -> settle back, with
   the panel following each step (INTERRUPTIBLE, ON AIR, INTERRUPTIBLE), then release and a
   clean automated `available`. 199 server tests, 19 deploy tests, `esphome config`, all green.
+- **D-50 (2026-08-24)** **Config is a document the service can survive.** Resolves
+  [#39](https://github.com/jwnichols3/rocket-on-air-sensor/issues/39). Implements D-36 and
+  contract §5 (`GET /config/states`), §10.
+  **What shipped.** `~/.onair/config.json`, 0600, holding version, port, bind mode, the state
+  table, the shortcut rows, the device credentials and a reserved `auth` block. One validation
+  function, one atomic write (temp file created 0600 *before* any content, `fsync`, `rename`),
+  one apply path - the admin UI has no privileged route, it calls the same `PUT /admin/config`
+  anything else would. `GET /config/states` serves the versioned table with an `ETag` and
+  honours `If-None-Match`. Saves are optimistic on `version`; a stale base is `409` **with the
+  current document**, so the UI can show what moved underneath rather than overwrite it.
+  **`config.env` is retired as the config source and survives as an env overlay**, because a
+  real environment variable winning over the file is D-14's rule and the documented way to
+  unbrick a box over SSH. On first boot the document is **written out**, seeded from the env
+  where present: a config file that does not exist until you use a UI is not "hand-editable, on
+  a Pi, over SSH, with no UI". A file that failed to *load* is never overwritten - that is what
+  the repair view is for, and clobbering it would destroy the thing the owner needs to read.
+  **A deadlock, found by a test that hung.** `applyConfig` awaited the old listeners closing
+  before binding the new ones. But a rebind is triggered *by a request*, and that request is
+  itself one of the in-flight connections: `close()` waits for the response to be sent, and the
+  response waits for `close()` to return. It hung for exactly as long as the test timeout, in
+  three tests at once. **This was not a test artifact** - the same deadlock would have hit the
+  first time anyone changed the port from the admin UI, which is the only way that route is
+  ever going to be called. Fixed by not awaiting: the listening socket shuts immediately either
+  way, which is all a rebind needs, and the old sockets are swept a second later once our own
+  response has flushed.
+  **A test that wrote into `$HOME`, found by deploying.** `config.test.ts` spawns the *real*
+  service to prove the config file is read before `ONAIR_PORT`. It set `ONAIR_CONFIG` (the env
+  overlay path) but not `ONAIR_CONFIG_FILE` - which did not matter until this ticket made the
+  service **write** a document on first boot. It then wrote `~/.onair/config.json` on the
+  development machine, with the test's port and no device. Found because deploying showed a
+  config file that already existed and was wrong. Fixed, plus a test that asserts the document
+  lands where it was told, plus both spawned-service tests moved off hardcoded ports - a fixed
+  port is a flake by construction, and one of them duly failed once on an orphan of my own.
+  **The trap that leaves behind, and it is live.** The installed plist carries
+  `ONAIR_PORT=8484` and `ONAIR_STATE_FILE` in `EnvironmentVariables`, which the **template does
+  not**. So when `sudo deploy/onair update` re-renders it (D-47), those variables **disappear**,
+  and the port stops coming from the environment and starts coming from the document. The
+  polluted document said `18473`. The service would have moved port on the next restart, on the
+  one host that exists. The document has been corrected on the host to `8484` with the real
+  device settings, so the migration is now safe - but the general shape is worth stating:
+  **retiring an env var means the file it falls back to had better be right first.**
+  This also means D-14's promise - *the plist carries no `ONAIR_*` config* - becomes true again
+  after that update, having quietly not been true on this host.
+  **Never fail closed, and it is tested rather than asserted.** An unparseable or invalid config
+  logs every error, binds **loopback only**, starts on defaults, and serves `/admin/repair` - a
+  self-contained page that renders the errors and the raw text **server-side**, because a
+  diagnosis that only appears if a second request succeeds is the wrong way round on a page
+  whose entire job is "something is broken". Saving from it is the repair. With a healthy config
+  the route is a `404`, which is the honest answer.
+  **Rebind rolls back.** A port or bind change closes and re-opens in place; a failure restores
+  the previous binding and answers `409`, and if even that fails it falls back to loopback. It
+  never exits - under `KeepAlive` a process exit on a bad address is a crash-loop, and "restart
+  and hope" is not safe to invoke from across the house. Proven by pointing the service at an
+  occupied port and watching it keep serving on the old one.
+  **Loopback is always bound**, in every mode, including `iface:<name>` and including a name
+  that does not resolve. Binding only a LAN address makes `127.0.0.1` refuse, which would
+  disable the admin surface from the UI whose only purpose is administration.
+  **Measured live**: `ETag "1"` -> `304`; a label edit -> version 2, `ETag "2"`, table live
+  immediately; the same document resubmitted -> `409` naming both versions. 236 server tests,
+  19 deploy tests, `esphome config`, green.

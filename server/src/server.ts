@@ -3,8 +3,14 @@ import { accessSync, constants as fsConstants } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname } from 'node:path';
 import type { Duplex } from 'node:stream';
+import {
+  ConfigWriteError,
+  validateConfig,
+  type OnAirConfig,
+} from './config-store.js';
 import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
+import { repairHtml } from './repair.js';
 import { createSseHub, type SseHub } from './sse.js';
 import {
   coerceSource,
@@ -35,8 +41,17 @@ export interface ServerDeps {
   stateFile?: string;
   /** Called (once) to actually exit the process for POST /admin/restart. Defaults to process.exit(0). */
   exitFn?: () => void;
-  /** Which rows `/on` and `/off` resolve to. Seeded here; #39 moves them into the config document. */
+  /** Which rows `/on` and `/off` resolve to. Falls back to the seed when no config is loaded. */
   shortcuts?: Shortcuts;
+  /** The live config document, and the one way to replace it. Supplied by app.ts. */
+  config?: () => OnAirConfig;
+  /**
+   * Apply a validated config: persist it, swap the table in, rebind if the port or bind
+   * mode moved. Resolves with an error message when the rebind failed and rolled back.
+   */
+  applyConfig?: (next: OnAirConfig) => Promise<{ ok: true } | { ok: false; status: 409 | 507; error: string }>;
+  /** Set when the config file on disk could not be used, so the repair view is served. */
+  configProblem?: () => { errors: string[]; raw: string } | undefined;
 }
 
 // `POST /state/{id}` is matched separately - it is the one route with a variable segment.
@@ -52,6 +67,9 @@ const ROUTES: Record<string, string[]> = {
   '/ui': ['GET'],
   '/admin/health': ['GET'],
   '/admin/restart': ['POST'],
+  '/config/states': ['GET'],
+  '/admin/config': ['GET', 'PUT'],
+  '/admin/repair': ['GET'],
 };
 const STATE_ID_PATH = /^\/state\/([^/]+)$/;
 
@@ -272,7 +290,9 @@ async function handle(
   // unread body doesn't stall the socket and break keep-alive for the next request.
   // This condition must list exactly the routes/methods that call readBody() below —
   // adding a body-reading route without updating it will cause req.resume() to eat the body first.
-  const willReadBody = (path === '/state' || path === '/message') && method === 'PUT';
+  const willReadBody =
+    ((path === '/state' || path === '/message') && method === 'PUT') ||
+    (path === '/admin/config' && method === 'PUT');
   if (!willReadBody) req.resume();
 
   if (path === '/status') {
@@ -307,6 +327,76 @@ async function handle(
     res.on('finish', doExit);
     res.on('close', doExit);
     setTimeout(doExit, 250).unref();
+    return;
+  }
+
+  // The state table, for renderers and for Companion preset generation. Self-describing,
+  // so a client asks what states exist rather than being compiled with them.
+  if (path === '/config/states') {
+    const table = deps.store.getTable();
+    const etag = `"${table.version}"`;
+    // The ESP32 polls this every 300s. `If-None-Match` makes the steady state a 304, which
+    // is the difference between a poll that costs a header and one that costs a table.
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { etag }).end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json', etag, 'cache-control': 'no-cache' });
+    res.end(`${JSON.stringify({ version: table.version, updatedAt: deps.store.get().updatedAt, states: table.rows() })}\n`);
+    return;
+  }
+
+  // Served ONLY while the config on disk is unusable. A 404 the rest of the time is the
+  // honest answer: there is nothing to repair.
+  if (path === '/admin/repair') {
+    const p = deps.configProblem?.();
+    if (p === undefined) {
+      sendJson(res, 404, { error: 'nothing to repair: the config loaded cleanly' });
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(repairHtml(p));
+    return;
+  }
+
+  if (path === '/admin/config') {
+    if (deps.config === undefined || deps.applyConfig === undefined) {
+      sendJson(res, 501, { error: 'no config store is wired up' });
+      return;
+    }
+    if (method === 'GET') {
+      sendJson(res, 200, { config: deps.config(), problem: deps.configProblem?.() });
+      return;
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch (err) {
+      sendJson(res, 400, { error: `malformed JSON body: ${errorMessage(err)}` });
+      return;
+    }
+    const validated = validateConfig(body);
+    if (!validated.ok) {
+      sendJson(res, 400, { error: 'invalid config', problems: validated.errors });
+      return;
+    }
+    // OPTIMISTIC CONCURRENCY. The submitted document carries the version it was based on;
+    // if the live one has moved since, the save is refused with the current document so the
+    // UI can show what changed underneath rather than silently overwriting it.
+    const live = deps.config();
+    if (validated.config.version !== live.version) {
+      sendJson(res, 409, {
+        error: `config has changed underneath you (yours ${validated.config.version}, current ${live.version})`,
+        config: live,
+      });
+      return;
+    }
+    const applied = await deps.applyConfig({ ...validated.config, version: live.version + 1 });
+    if (!applied.ok) {
+      sendJson(res, applied.status, { error: applied.error, config: deps.config() });
+      return;
+    }
+    sendJson(res, 200, { config: deps.config() });
     return;
   }
 
@@ -423,7 +513,7 @@ async function handle(
   // POST /on | /off - they no longer NAME a state, they resolve through configuration.
   // "Fall back to the first row" is a bad rule when the first row is ON AIR, so an unset
   // shortcut is a 409 rather than a guess.
-  const shortcuts = deps.shortcuts ?? SEED_SHORTCUTS;
+  const shortcuts = deps.config?.().shortcuts ?? deps.shortcuts ?? SEED_SHORTCUTS;
   const target = path === '/on' ? shortcuts.on : shortcuts.off;
   if (target === null || target === undefined) {
     sendJson(res, 409, { error: `no shortcut row is configured for ${path}` });
