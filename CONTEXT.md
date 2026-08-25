@@ -1694,3 +1694,31 @@ else (state, light control, API) lives on the receiver.
   grace window exists exactly so the detector, Companion and the panel do not all break at
   once - and it is on the review list rather than done, because it is a live-credential
   change that is Rocket's to make.
+
+- **D-56 (2026-08-25)** **One default login for the whole product.** Rocket's call:
+  *"it is super confusing to have two different default user/pw combos. please make the
+  default user/pw for the esp32 the same as the admin console."* The panel's `web_server`
+  auth moves from `onair` + a random per-device password to **`rocket` / `ESP32`**, which is
+  `DEFAULT_ADMIN_USER` / `DEFAULT_ADMIN_PASSWORD` in `server/src/auth.ts`.
+  **What this costs, stated rather than buried:** `ESP32` is published in a public repo, so a
+  strong per-device secret is replaced by a known one. Two things make that acceptable and
+  they are both load-bearing. The panel is a LAN device driving a light, so the blast radius
+  of its web UI is the light. And **the credential that actually matters is a different one**
+  - the server passphrase gates every data route, is not a default on this host, and as of
+  D-55 is not readable from the panel at all. This decision does not touch it.
+  **It does NOT collapse D-35's two audiences.** Those are still two credentials for two
+  jobs; they merely start life at the same default value, the way a product ships one
+  default rather than two. `web_server_password` remains a secret in `secrets.yaml`, so a
+  per-device password is a one-line change plus `light.password` in the config document.
+  **A wrinkle worth knowing:** the console's credential is editable at runtime and the
+  panel's is compiled in, so changing the admin password in the console does **not** change
+  the panel's - they match as shipped and can diverge afterwards. Making them track each
+  other would mean the server pushing a credential to the device, which is exactly the
+  coupling D-55 just removed.
+  **Not changed:** `fallback_ap_password` (WPA needs 8 characters; `ESP32` is five) and
+  `api_encryption_key`. Neither is a login anyone types.
+  Migration is a reflash plus `light.username`/`light.password` in `~/.onair/config.json`
+  **and** the `ONAIR_LIGHT_USER`/`ONAIR_LIGHT_PASS` lines in `config.env`, which override the
+  document (D-14) and would otherwise silently keep the old credential. Verified after:
+  `rocket:ESP32` → 200, `onair:ESP32` → 401, and a write round-tripped to
+  `confirmed: on-air` then `confirmed: available`, which is the device answering.

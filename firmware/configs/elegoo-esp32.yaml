@@ -101,7 +101,16 @@ web_server:
   ota: false
   log: false
   auth:
-    username: onair
+    # ONE default login for the whole product, matching DEFAULT_ADMIN_USER and
+    # DEFAULT_ADMIN_PASSWORD in server/src/auth.ts (D-56). Two different default
+    # credentials for two web UIs of the same system was confusing for no benefit.
+    #
+    # Stated plainly: `ESP32` is published in a public repo, so this replaces a random
+    # per-device password with a KNOWN one. Deliberate. The panel is on a LAN and drives a
+    # light; the credential that actually matters - the server passphrase - is a different
+    # one, is not a default, and is not readable from here (D-55). Set
+    # `web_server_password` in secrets.yaml to something else per device if you want.
+    username: rocket
     password: !secret web_server_password
     # MUST be explicit: the default flips to digest in ESPHome 2027.1.0, which would
     # silently break every driver request.

@@ -48,6 +48,9 @@ is for.
 ## The device's own entities
 
 All of these are at the device's IP on port 80, behind the `web_server` basic auth (D-17).
+**The login is `rocket` / `ESP32`** - the same default as the admin console (D-56). It is a
+published default, not a secret; change `web_server_password` in `secrets.yaml` for a
+per-device one, and set `light.password` in `~/.onair/config.json` to match.
 
 | Entity | What it is |
 |---|---|
@@ -74,7 +77,7 @@ exists only to set it.
 Change it with:
 
 ```sh
-curl -u onair:<web_server_password> -d '' \
+curl -u rocket:ESP32 -d '' \
   "http://<device>/text/ServerPassphrase/set?value=<new passphrase>"
 ```
 
