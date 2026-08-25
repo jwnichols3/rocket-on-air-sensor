@@ -19,8 +19,8 @@ export const DISPLAY_HTML = `<!doctype html>
     font-weight: 800; letter-spacing: 0.08em; text-align: center;
     line-height: 1.1; padding: 0 4vw; overflow-wrap: anywhere;
   }
-  body.dnd { background: #b30000; }
-  body.dnd #word { color: #fff; }
+  body.on-air { background: #b30000; }
+  body.on-air #word { color: #fff; }
   body.interruptible { background: #b38600; }
   body.interruptible #word { color: #fff; }
   body.available { background: #111; }
@@ -34,7 +34,7 @@ export const DISPLAY_HTML = `<!doctype html>
     font-size: 4vw; font-weight: 600; letter-spacing: 0.05em;
     padding: 0 4vw; overflow-wrap: anywhere; display: none;
   }
-  body.dnd #sub, body.interruptible #sub { color: rgba(255,255,255,0.85); }
+  body.on-air #sub, body.interruptible #sub { color: rgba(255,255,255,0.85); }
   body.available #sub, body.unknown #sub { color: #7a7a7a; }
   #held {
     position: fixed; top: 2vh; left: 2vw; display: none;
@@ -67,8 +67,10 @@ export const DISPLAY_HTML = `<!doctype html>
     var token = new URLSearchParams(location.search).get('token');
     var word = document.getElementById('word');
     var sub = document.getElementById('sub');
-    var LEVELS = ['available', 'interruptible', 'dnd', 'unknown'];
-    var WORDS = { available: 'OFF AIR', interruptible: 'INTERRUPTIBLE', dnd: 'ON AIR', unknown: 'NO DATA' };
+    // INTERIM. Hardcoded seed rows; #41 rebuilds this page against the real table, at
+    // which point the look comes from the row rather than from a stylesheet in here.
+    var LEVELS = ['available', 'interruptible', 'on-air', 'unknown'];
+    var WORDS = { available: 'AVAILABLE', interruptible: 'INTERRUPTIBLE', 'on-air': 'ON AIR', unknown: 'NO DATA' };
     var last = null;
     var lastAt = 0;
     var es;
@@ -101,14 +103,16 @@ export const DISPLAY_HTML = `<!doctype html>
     }
 
     function render(s) {
-      // A kiosk tab under D-10 can be running week-old JS, so fall back to the derived
-      // 'intended' when a stale page meets a new server, or a new page an old server.
-      var level = s.level;
-      if (LEVELS.indexOf(level) === -1) level = s.intended === 'on' ? 'dnd' : 'available';
+      // A kiosk tab can be running week-old JS, and a row invented this morning is one
+      // this page has never heard of - so fall back to the derived 'intended'. That is
+      // exactly RFC 3863's carry-along: a consumer that does not know the row still does
+      // something correct, and 'busy' means the fallback is ON AIR, never calm.
+      var level = s.state;
+      if (LEVELS.indexOf(level) === -1) level = s.intended === 'on' ? 'on-air' : 'available';
       for (var i = 0; i < LEVELS.length; i++) {
         document.body.classList.toggle(LEVELS[i], LEVELS[i] === level);
       }
-      document.body.classList.toggle('held', s.hold === 'interruptible' || s.hold === 'dnd');
+      document.body.classList.toggle('held', s.hold !== null && s.hold !== undefined);
 
       // D-9: a message may never replace or obscure the state word. It renders as a
       // subordinate line underneath it.

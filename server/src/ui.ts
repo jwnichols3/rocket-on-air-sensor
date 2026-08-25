@@ -60,7 +60,7 @@ export const UI_HTML = `<!doctype html>
     background: #1b1e22; color: var(--muted);
     transition: background 0.2s, box-shadow 0.2s, color 0.2s, border-color 0.2s;
   }
-  .pill.dnd { background: rgba(224,49,49,0.15); color: var(--accent); border-color: var(--accent); box-shadow: 0 0 12px rgba(224,49,49,0.45); }
+  .pill.on-air { background: rgba(224,49,49,0.15); color: var(--accent); border-color: var(--accent); box-shadow: 0 0 12px rgba(224,49,49,0.45); }
   .pill.interruptible { background: rgba(224,169,49,0.15); color: #e0a931; border-color: #e0a931; box-shadow: 0 0 12px rgba(224,169,49,0.4); }
   .pill.available { background: #1b1e22; color: var(--muted); }
   .pill.unknown { background: #2a1414; color: #e0a931; border-color: #5a2a2a; }
@@ -136,7 +136,7 @@ export const UI_HTML = `<!doctype html>
 
   .controls-row { display: flex; gap: 12px; }
   .btn-big { flex: 1; padding: 20px; font-size: 15px; font-weight: 700; letter-spacing: 0.05em; }
-  .btn-dnd.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 20px rgba(224,49,49,0.5), inset 0 1px 0 rgba(255,255,255,0.15); }
+  .btn-on-air.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 20px rgba(224,49,49,0.5), inset 0 1px 0 rgba(255,255,255,0.15); }
   .btn-interruptible.active { background: #b38600; border-color: #e0a931; color: #fff; box-shadow: 0 0 20px rgba(224,169,49,0.45), inset 0 1px 0 rgba(255,255,255,0.15); }
   .btn-available.active { background: #20232a; border-color: #3a3d42; color: var(--text); }
   .btn-hold.active { background: #e0a931; border-color: #e0a931; color: #1b1e22; }
@@ -187,7 +187,7 @@ export const UI_HTML = `<!doctype html>
   #log li:last-child { border-bottom: none; }
   @keyframes slide-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
   .ev-time { color: var(--muted); }
-  .ev-level.dnd { color: var(--accent); font-weight: 700; }
+  .ev-level.on-air { color: var(--accent); font-weight: 700; }
   .ev-level.interruptible { color: #e0a931; font-weight: 700; }
   .ev-level.available { color: var(--muted); }
   .ev-source { color: var(--text); }
@@ -240,12 +240,12 @@ export const UI_HTML = `<!doctype html>
     <section class="card">
       <h2>Transport</h2>
       <div class="controls-row">
-        <button id="btn-dnd" class="btn btn-big btn-dnd">ON AIR</button>
+        <button id="btn-on-air" class="btn btn-big btn-on-air">ON AIR</button>
         <button id="btn-interruptible" class="btn btn-big btn-interruptible">INTERRUPTIBLE</button>
         <button id="btn-available" class="btn btn-big btn-available">AVAILABLE</button>
       </div>
       <div class="controls-row">
-        <button id="btn-hold" class="btn btn-sm btn-hold">Hold this level</button>
+        <button id="btn-hold" class="btn btn-sm btn-hold">Pin this state</button>
         <button id="btn-release" class="btn btn-sm">Release hold</button>
       </div>
       <div id="controls-err" class="err-strip"></div>
@@ -297,26 +297,26 @@ export const UI_HTML = `<!doctype html>
         <div class="row"><span class="row-label">PUT /state</span>
           <div class="row-actions"><button class="btn btn-sm send-btn">Send</button><button class="btn btn-sm copy-btn">&#x29c9; curl</button></div>
         </div>
-        <textarea class="row-body" rows="2">{"level": "dnd", "source": "webui"}</textarea>
+        <textarea class="row-body" rows="2">{"state": "on-air", "source": "human:webui"}</textarea>
         <div class="well"></div>
       </div>
 
-      <div class="console-row" id="row-dnd">
-        <div class="row"><span class="row-label">POST /dnd</span>
+      <div class="console-row" id="row-on-air">
+        <div class="row"><span class="row-label">POST /state/on-air</span>
           <div class="row-actions"><button class="btn btn-sm send-btn">Send</button><button class="btn btn-sm copy-btn">&#x29c9; curl</button></div>
         </div>
         <div class="well"></div>
       </div>
 
       <div class="console-row" id="row-interruptible">
-        <div class="row"><span class="row-label">POST /interruptible</span>
+        <div class="row"><span class="row-label">POST /state/interruptible</span>
           <div class="row-actions"><button class="btn btn-sm send-btn">Send</button><button class="btn btn-sm copy-btn">&#x29c9; curl</button></div>
         </div>
         <div class="well"></div>
       </div>
 
       <div class="console-row" id="row-available">
-        <div class="row"><span class="row-label">POST /available</span>
+        <div class="row"><span class="row-label">POST /state/available</span>
           <div class="row-actions"><button class="btn btn-sm send-btn">Send</button><button class="btn btn-sm copy-btn">&#x29c9; curl</button></div>
         </div>
         <div class="well"></div>
@@ -376,15 +376,18 @@ export const UI_HTML = `<!doctype html>
     var pill = document.getElementById('pill');
     var led = document.getElementById('led');
     var ageEl = document.getElementById('age');
-    var LEVELS = ['available', 'interruptible', 'dnd'];
-    var WORDS = { available: 'OFF AIR', interruptible: 'INTERRUPTIBLE', dnd: 'ON AIR', unknown: 'NO DATA' };
+    // INTERIM. This page names three seed rows because it is hardcoded; #41 rebuilds it
+    // against the real table so the buttons follow whatever rows the owner has defined.
+    var LEVELS = ['available', 'interruptible', 'on-air'];
+    var WORDS = { available: 'AVAILABLE', interruptible: 'INTERRUPTIBLE', 'on-air': 'ON AIR',
+                  recording: 'RECORDING', unknown: 'NO DATA' };
     var holdPill = document.getElementById('hold-pill');
     var btnHold = document.getElementById('btn-hold');
     var btnRelease = document.getElementById('btn-release');
     var levelButtons = {
       available: document.getElementById('btn-available'),
       interruptible: document.getElementById('btn-interruptible'),
-      dnd: document.getElementById('btn-dnd')
+      'on-air': document.getElementById('btn-on-air')
     };
     var currentLevel = 'unknown';
     var msgInput = document.getElementById('msg-input');
@@ -575,7 +578,7 @@ export const UI_HTML = `<!doctype html>
     var lastLoggedKey = null;
 
     function logKey(s) {
-      return s.level + '|' + (s.hold || '') + '|' + s.source + '|' + (s.message === null || s.message === undefined ? '' : s.message);
+      return s.state + '|' + (s.hold || '') + '|' + s.source + '|' + (s.message === null || s.message === undefined ? '' : s.message);
     }
 
     function addLogRow(s) {
@@ -596,9 +599,11 @@ export const UI_HTML = `<!doctype html>
       li.appendChild(timeSpan);
 
       var levelSpan = document.createElement('span');
-      var lv = LEVELS.indexOf(s.level) === -1 ? (s.intended === 'on' ? 'dnd' : 'available') : s.level;
+      // A row this hardcoded page has never heard of still renders SOMETHING, and never
+      // renders as calm - 'intended' is the carry-along that makes that possible.
+      var lv = s.state;
       levelSpan.className = 'ev-level ' + lv;
-      levelSpan.textContent = WORDS[lv] + ((s.hold === 'interruptible' || s.hold === 'dnd') ? ' (held)' : '');
+      levelSpan.textContent = (WORDS[lv] || lv.toUpperCase()) + (s.hold ? ' (pinned)' : '');
       li.appendChild(levelSpan);
 
       var sourceSpan = document.createElement('span');
@@ -623,17 +628,18 @@ export const UI_HTML = `<!doctype html>
       // A fresh status event means we're back in sync - clear any stale write errors.
       clearErr(controlsErr);
       clearErr(msgErr);
-      var level = s.level;
-      if (LEVELS.indexOf(level) === -1) level = s.intended === 'on' ? 'dnd' : 'available';
+      var level = s.state;
       currentLevel = level;
-      pill.textContent = WORDS[level];
-      pill.className = 'pill ' + level;
+      pill.textContent = WORDS[level] || level.toUpperCase();
+      // An unrecognised row falls back to the 'unknown' LOOK, never to a calm one, and
+      // 'busy' decides that rather than a rank.
+      pill.className = 'pill ' + (WORDS[level] ? level : 'unknown');
       for (var i = 0; i < LEVELS.length; i++) {
         levelButtons[LEVELS[i]].classList.toggle('active', LEVELS[i] === level);
       }
-      var held = s.hold === 'interruptible' || s.hold === 'dnd';
+      var held = s.hold !== null && s.hold !== undefined;
       holdPill.classList.toggle('shown', held);
-      holdPill.textContent = held ? 'HELD AT ' + WORDS[s.hold] : 'HELD';
+      holdPill.textContent = held ? 'PINNED AT ' + (WORDS[s.hold] || String(s.hold).toUpperCase()) : 'PINNED';
       btnHold.classList.toggle('active', held);
       msgCurrent.innerHTML = 'Current: <b></b>';
       msgCurrent.querySelector('b').textContent = (s.message !== null && s.message !== undefined) ? s.message : '(none)';
@@ -641,24 +647,27 @@ export const UI_HTML = `<!doctype html>
     }
 
     function doAction(path, hold) {
-      var q = '?source=webui' + (hold === undefined ? '' : '&hold=' + (hold ? '1' : '0'));
+      var q = '?source=human:webui' + (hold === undefined ? '' : '&hold=' + (hold ? '1' : '0'));
       reportWrite(fetch(path + q, { method: 'POST', headers: authHeaders() }), 'POST ' + path, controlsErr);
     }
     for (var li = 0; li < LEVELS.length; li++) {
       (function (lv) {
-        levelButtons[lv].addEventListener('click', function () { doAction('/' + lv); });
+        levelButtons[lv].addEventListener('click', function () { doAction('/state/' + lv); });
       })(LEVELS[li]);
     }
-    // Pinning green is meaningless - a floor at the bottom rung is not a hold - so the
-    // button pins whatever rung is showing, and refuses at 'available'.
+    // Pinning at 'available' is legal now: with no ladder there is no bottom rung, and a
+    // pin cannot force calm against a live camera anyway - the escalation carve-out sees
+    // to that. The only thing there is nothing to pin at is 'unknown'.
     btnHold.addEventListener('click', function () {
-      if (currentLevel === 'available' || currentLevel === 'unknown') {
-        setErr(controlsErr, 'a hold needs a level above available');
+      if (currentLevel === 'unknown') {
+        setErr(controlsErr, 'there is no state to pin yet');
         return;
       }
-      doAction('/' + currentLevel, true);
+      doAction('/state/' + currentLevel, true);
     });
-    btnRelease.addEventListener('click', function () { doAction('/' + (currentLevel === 'unknown' ? 'dnd' : currentLevel), false); });
+    btnRelease.addEventListener('click', function () {
+      doAction('/state/' + (currentLevel === 'unknown' ? 'on-air' : currentLevel), false);
+    });
 
     msgInput.addEventListener('input', function () {
       msgCounter.textContent = msgInput.value.length + '/200';
@@ -715,9 +724,9 @@ export const UI_HTML = `<!doctype html>
     var consoleRows = [
       { id: 'row-status', method: 'GET', path: '/status' },
       { id: 'row-state', method: 'PUT', path: '/state' },
-      { id: 'row-dnd', method: 'POST', path: '/dnd' },
-      { id: 'row-interruptible', method: 'POST', path: '/interruptible' },
-      { id: 'row-available', method: 'POST', path: '/available' },
+      { id: 'row-on-air', method: 'POST', path: '/state/on-air' },
+      { id: 'row-interruptible', method: 'POST', path: '/state/interruptible' },
+      { id: 'row-available', method: 'POST', path: '/state/available' },
       { id: 'row-message-set', method: 'PUT', path: '/message' },
       { id: 'row-message-clear', method: 'DELETE', path: '/message' }
     ];

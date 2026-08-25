@@ -7,13 +7,13 @@ import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createApp, type App } from '../src/app.js';
 import type { LightDriver } from '../src/driver.js';
-import { defaultState, type Confirmed, type Level } from '../src/state.js';
+import { defaultState, UNKNOWN_ID } from '../src/state.js';
 
 class StubDriver implements LightDriver {
-  async set(level: Level): Promise<Confirmed> {
-    return level;
+  async set(stateId: string): Promise<string> {
+    return stateId;
   }
-  async read(): Promise<Confirmed> {
+  async read(): Promise<string> {
     return 'unknown';
   }
 }
@@ -179,7 +179,7 @@ async function bootApp(opts: { token?: string } = {}): Promise<App> {
   // default (which is `dnd`, and has its own test in app-boot.test.ts).
   await writeFile(
     stateFile,
-    JSON.stringify({ ...defaultState(), level: 'available', intended: 'off' }),
+    JSON.stringify({ ...defaultState(), state: 'available', intended: 'off', tableVersion: 1 }),
     'utf8',
   );
   return createApp({ stateFile, port: 0, token: opts.token, driver: new StubDriver(), log: () => {} });
@@ -194,7 +194,7 @@ test('handshake + snapshot: 101, correct accept, first frame is status JSON', as
 
   const snapshot = await client.nextJson();
   assert.equal(snapshot.intended, 'off');
-  assert.equal(snapshot.level, 'available');
+  assert.equal(snapshot.state, 'available');
   assert.equal(snapshot.confirmed, 'available');
   assert.equal(snapshot.message, null);
   assert.equal(typeof snapshot.ageSeconds, 'number');

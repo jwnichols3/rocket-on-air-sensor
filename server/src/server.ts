@@ -7,16 +7,14 @@ import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
 import { createSseHub, type SseHub } from './sse.js';
 import {
-  isLevel,
-  levelToOnOff,
-  onAirToLevel,
-  LEVELS,
-  type Confirmed,
-  type Level,
-  type OnAirState,
-  type OnOff,
-  type PersistedState,
+  coerceSource,
+  parseSource,
+  SEED_SHORTCUTS,
+  UNKNOWN_ID,
+  type Shortcuts,
+  type Source,
   type StateStore,
+  type StatusBody,
 } from './state.js';
 import { UI_HTML } from './ui.js';
 import { createWsBridge, type WsBridge } from './ws.js';
@@ -24,7 +22,7 @@ import { createWsBridge, type WsBridge } from './ws.js';
 export interface ServerDeps {
   store: StateStore;
   driver: LightDriver;
-  persist: (state: PersistedState) => Promise<void>;
+  persist: (state: import('./state.js').PersistedState) => Promise<void>;
   /** Shared write queue. When absent the server makes its own; app.ts passes the same
    *  one to the supervisor so supervisor writes serialise with HTTP writes. */
   enqueueWrite?: EnqueueWrite;
@@ -36,16 +34,17 @@ export interface ServerDeps {
   stateFile?: string;
   /** Called (once) to actually exit the process for POST /admin/restart. Defaults to process.exit(0). */
   exitFn?: () => void;
+  /** Which rows `/on` and `/off` resolve to. Seeded here; #39 moves them into the config document. */
+  shortcuts?: Shortcuts;
 }
 
+// `POST /state/{id}` is matched separately - it is the one route with a variable segment.
+// `onAir`, `POST /available`, `POST /interruptible` and `POST /dnd` are GONE (contract §5).
 const ROUTES: Record<string, string[]> = {
   '/status': ['GET'],
   '/state': ['PUT'],
   '/on': ['POST'],
   '/off': ['POST'],
-  '/available': ['POST'],
-  '/interruptible': ['POST'],
-  '/dnd': ['POST'],
   '/message': ['PUT', 'DELETE'],
   '/events': ['GET'],
   '/display': ['GET'],
@@ -53,6 +52,7 @@ const ROUTES: Record<string, string[]> = {
   '/admin/health': ['GET'],
   '/admin/restart': ['POST'],
 };
+const STATE_ID_PATH = /^\/state\/([^/]+)$/;
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_MESSAGE_CHARS = 200;
@@ -142,19 +142,17 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(`${JSON.stringify(body)}\n`);
 }
 
-function statusBody(deps: ServerDeps): OnAirState & { intended: OnOff; ageSeconds: number } {
-  const s = deps.store.get();
-  // `intended` is computed at serialisation, so it can never drift from `level`.
-  return { ...s, intended: levelToOnOff(s.level), ageSeconds: deps.store.ageSeconds() };
+// Every derived field - `busy`, `intended`, `ageSeconds`, `stale`, `tableVersion` - is
+// computed at serialisation, so none of them can drift from `state`. Presentation
+// (`label`, `color`, `bgcolor`) is deliberately NOT here: it travels with the profile
+// (D-42), and putting it on a payload written many times an hour would weld configuration
+// into the state protocol permanently.
+function statusBody(deps: ServerDeps): StatusBody {
+  return deps.store.status();
 }
 
 function persistCurrent(deps: ServerDeps): Promise<void> {
-  const s = deps.store.get();
-  // Typed, never cast: `intended` is rollback insurance, and a cast here would let a
-  // future refactor delete it with no type error and no failing test.
-  // Invariant: persisted confirmed is always "unknown" - the live value is memory-only.
-  const out: PersistedState = { ...s, intended: levelToOnOff(s.level), confirmed: 'unknown' };
-  return deps.persist(out);
+  return deps.persist(deps.store.persisted());
 }
 
 function broadcastAndSend(res: ServerResponse, deps: ServerDeps, hub: SseHub, ws: WsBridge): void {
@@ -177,34 +175,27 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 async function doWrite(
   deps: ServerDeps,
-  level: Level,
-  source: string,
+  stateId: string,
+  source: Source,
   log: (line: string) => void,
   hold?: boolean,
 ): Promise<void> {
-  // write() may clamp a detector request UP to the hold floor, so the level we drive
-  // onto the light is the one the store settled on, never the one that was requested.
-  const applied = deps.store.write(level, source, new Date(), hold).level;
+  const applied = deps.store.write(stateId, source, new Date(), hold).state;
   await persistCurrent(deps);
-  let confirmed: Confirmed;
+  // A write always succeeds if the body is valid (contract §7). An unreachable light is
+  // not a failed write - it surfaces as `confirmed: "unknown"`.
+  let confirmed: string;
   try {
     confirmed = await deps.driver.set(applied);
   } catch (err) {
     log(`[onair] driver.set(${applied}) failed: ${errorMessage(err)}`);
-    confirmed = 'unknown';
+    confirmed = UNKNOWN_ID;
   }
-  deps.store.setConfirmed(confirmed);
+  // The device can hold any string. Only a row this server knows is evidence of anything.
+  deps.store.setConfirmed(deps.store.getTable().has(confirmed) ? confirmed : UNKNOWN_ID);
 }
 
-const PATH_LEVEL: Record<string, Level> = {
-  '/on': 'dnd',
-  '/off': 'available',
-  '/dnd': 'dnd',
-  '/interruptible': 'interruptible',
-  '/available': 'available',
-};
-
-/** `?hold=1|true` pins the floor, `?hold=0|false` releases it, absent leaves it alone. */
+/** `?hold=1|true` pins, `?hold=0|false` releases, absent leaves it alone. */
 function holdFromQuery(raw: string | null): boolean | undefined {
   if (raw === null) return undefined;
   if (raw === '1' || raw === 'true') return true;
@@ -263,7 +254,10 @@ async function handle(
     }
   }
 
-  const allowed = ROUTES[path];
+  // `/state/{id}` is the one route with a variable segment, so it is matched rather than
+  // looked up. It still goes through the same 404/405 gate: an id that is not a row is a
+  // 400 further down (with the valid ids), NOT a 404 - the path is real, the name is wrong.
+  const allowed = STATE_ID_PATH.test(path) ? ['POST'] : ROUTES[path];
   if (!allowed) {
     sendJson(res, 404, { error: `unknown path: ${path}` });
     return;
@@ -367,79 +361,79 @@ async function handle(
   }
 
   if (path === '/state') {
-    let level: unknown;
-    let onAir: unknown;
+    let state: unknown;
     let source: unknown;
     let hold: unknown;
     try {
       const body: unknown = JSON.parse(await readBody(req));
-      ({ level, onAir, source, hold } = body as {
-        level?: unknown;
-        onAir?: unknown;
-        source?: unknown;
-        hold?: unknown;
-      });
+      ({ state, source, hold } = body as { state?: unknown; source?: unknown; hold?: unknown });
     } catch (err) {
       sendJson(res, 400, { error: `malformed JSON body: ${errorMessage(err)}` });
       return;
     }
-    if (source !== undefined && typeof source !== 'string') {
-      sendJson(res, 400, { error: 'source must be a string' });
+    if (state === undefined) {
+      sendJson(res, 400, { error: 'body must contain state' });
+      return;
+    }
+    if (typeof state !== 'string') {
+      sendJson(res, 400, { error: 'state must be a string' });
       return;
     }
     if (hold !== undefined && typeof hold !== 'boolean') {
       sendJson(res, 400, { error: 'hold must be a boolean' });
       return;
     }
-
-    let target: Level;
-    if (level !== undefined) {
-      if (!isLevel(level)) {
-        sendJson(res, 400, { error: `level must be one of ${LEVELS.join(', ')}` });
-        return;
-      }
-      if (onAir !== undefined) {
-        if (typeof onAir !== 'boolean') {
-          sendJson(res, 400, { error: 'onAir must be a boolean' });
-          return;
-        }
-        // Never silently pick one. A client sending both and meaning different things
-        // has a bug, and guessing which half to believe is how a false green ships.
-        if (levelToOnOff(level) !== (onAir ? 'on' : 'off')) {
-          sendJson(res, 400, { error: 'level and onAir disagree' });
-          return;
-        }
-      }
-      target = level;
-    } else if (typeof onAir === 'boolean') {
-      target = onAirToLevel(onAir);
-    } else {
-      sendJson(res, 400, { error: 'body must contain level or onAir' });
+    // STRICT on this route, and only this route. It is what an automated client uses, so
+    // a forgotten prefix must be a 400 rather than a silent grant of human authority
+    // (D-41, §4). The convenience routes below are lenient on purpose.
+    const parsed = parseSource(source);
+    if (!parsed) {
+      sendJson(res, 400, { error: 'source must be prefixed auto: or human:' });
       return;
     }
-
-    if (!checkHold(res, target, hold as boolean | undefined)) return;
-    await enqueueWrite(() => doWrite(deps, target, source ?? 'manual', log, hold as boolean | undefined));
+    if (!checkState(res, deps, state)) return;
+    await enqueueWrite(() => doWrite(deps, state, parsed, log, hold as boolean | undefined));
     broadcastAndSend(res, deps, hub, ws);
     return;
   }
 
-  // POST /on | /off | /available | /interruptible | /dnd
-  const target = PATH_LEVEL[path]!;
+  // POST /state/{id} - the curl and Shortcuts surface. `source` is optional here.
+  const byId = STATE_ID_PATH.exec(path);
+  if (byId) {
+    const id = decodeURIComponent(byId[1]!);
+    if (!checkState(res, deps, id)) return;
+    const source = coerceSource(url.searchParams.get('source'));
+    const hold = holdFromQuery(url.searchParams.get('hold'));
+    await enqueueWrite(() => doWrite(deps, id, source, log, hold));
+    broadcastAndSend(res, deps, hub, ws);
+    return;
+  }
+
+  // POST /on | /off - they no longer NAME a state, they resolve through configuration.
+  // "Fall back to the first row" is a bad rule when the first row is ON AIR, so an unset
+  // shortcut is a 409 rather than a guess.
+  const shortcuts = deps.shortcuts ?? SEED_SHORTCUTS;
+  const target = path === '/on' ? shortcuts.on : shortcuts.off;
+  if (target === null || target === undefined) {
+    sendJson(res, 409, { error: `no shortcut row is configured for ${path}` });
+    return;
+  }
+  if (!checkState(res, deps, target)) return;
+  const source = coerceSource(url.searchParams.get('source'));
   const hold = holdFromQuery(url.searchParams.get('hold'));
-  if (!checkHold(res, target, hold)) return;
-  await enqueueWrite(() => doWrite(deps, target, url.searchParams.get('source') ?? 'manual', log, hold));
+  await enqueueWrite(() => doWrite(deps, target, source, log, hold));
   broadcastAndSend(res, deps, hub, ws);
 }
 
 /**
- * A floor at the bottom rung is either a no-op or, read the other way, a lever for
- * forcing green against the detector. Reject it rather than quietly ignoring it.
+ * An unknown id is a `400` that LISTS the valid ids - never accept-and-fall-back. A typo
+ * that resolved to something would eventually resolve to something calm, and that is the
+ * invariant violation this system exists to prevent (D-34).
  */
-function checkHold(res: ServerResponse, level: Level, hold: boolean | undefined): boolean {
-  if (hold === true && level === 'available') {
-    sendJson(res, 400, { error: 'hold cannot be set at available: a floor at the bottom rung is not a hold' });
-    return false;
-  }
-  return true;
+function checkState(res: ServerResponse, deps: ServerDeps, id: string): boolean {
+  const table = deps.store.getTable();
+  if (table.has(id)) return true;
+  sendJson(res, 400, { error: `unknown state '${id}'`, validStates: table.ids() });
+  return false;
 }
+

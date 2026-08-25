@@ -19,6 +19,17 @@ No body needed. `?source=companion` follows the API's convention for identifying
 client wrote the state (see `docs/api-contract.md`). If `ONAIR_TOKEN` is set on the
 service, add a Header field to each action: `{"Authorization": "Bearer <ONAIR_TOKEN>"}`.
 
+**`/on` and `/off` survived v2, and so did `?source=companion`.** They no longer *name* a
+state - they resolve through the configured shortcut rows (seeded `on-air` and
+`available`), so if you rename or re-point those in the admin UI these buttons follow. An
+unset shortcut is a `409` rather than a guess. And an unprefixed `source` on these routes
+reads as `human:` (D-41), which a Stream Deck press is, so `?source=companion` becomes
+`human:companion` with no change on your side.
+
+To reach a row that is not a shortcut - `recording`, say - use `POST /state/{id}`:
+
+- **Recording**: Method `POST`, URL `/state/recording?source=companion`
+
 ## Status feedback: `generic-websocket`
 
 - **Target URL**: `ws://<host>:8484/events/ws?token=<ONAIR_TOKEN>` - the token is
@@ -34,19 +45,32 @@ Use `intended`, not `confirmed`. `intended` reflects what was actually requested
 goes to `unknown` whenever the device is unreachable - not what you want a button colour
 keyed to.
 
-**Since D-18 the state has three rungs** (`available`, `interruptible`, `dnd`), but
-**this config keeps working untouched**: `intended` is now derived, and both
-`interruptible` and `dnd` read as `"on"`, so the button goes red for either. That is the
-cheap direction of error - a yellow call showing red says "maybe don't" rather than
-"come in".
+### ⚠️ `level` is gone. If you built the amber feedback, change it.
 
-To distinguish the middle rung, add a second feedback on the `level` JSON path:
+Earlier versions of this doc told you to add a second feedback on the `level` JSON path:
 
 ```
-$(genericwebsocket:level) == "interruptible"
+$(genericwebsocket:level) == "interruptible"     # NO LONGER WORKS
 ```
 
-and wire it to an amber background, ordered *above* the `intended` feedback so it wins.
+**`level` no longer exists.** The three-rung ladder was replaced by an unordered state
+table (D-31), and the field on the wire is now `state`, carrying a **row id**. That
+expression will silently never match - it will not error, the button will just stop going
+amber - so it is worth changing even though nothing looks broken. The replacement:
+
+```
+$(genericwebsocket:state) == "interruptible"
+```
+
+Wire it to an amber background, ordered *above* the `intended` feedback so it wins.
+`interruptible` is a seed row id and is stable; if you rename the row's **label** in the
+admin UI the id does not change, which is the whole reason ids exist (D-34).
+
+**The `intended` feedback below keeps working untouched, and always will.** It is derived
+from the row's `busy` flag, so a row invented next year that means "the camera is live"
+reads as `"on"` without you touching anything. That is the entire point of `intended`
+surviving v2 - a client that has never heard of a row still does something correct, and
+errs toward red.
 
 ## Button feedback
 

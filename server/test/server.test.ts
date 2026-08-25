@@ -8,26 +8,26 @@ import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { LightDriver } from '../src/driver.js';
 import { createApiServer, type ServerDeps } from '../src/server.js';
-import { defaultState, StateStore, type Confirmed, type Level, type PersistedState } from '../src/state.js';
+import { defaultState, StateStore, StateTable, UNKNOWN_ID, type PersistedState } from '../src/state.js';
 
 class StubDriver implements LightDriver {
-  calls: Level[] = [];
+  calls: string[] = [];
   fail = false;
   /** When set, set() throws this value instead of an Error (tests non-Error throw handling). */
   throwValue: unknown = undefined;
   /** When set, set() waits for this promise to resolve before returning. */
   gate: Promise<void> | null = null;
 
-  async set(level: Level): Promise<Confirmed> {
-    this.calls.push(level);
+  async set(stateId: string): Promise<string> {
+    this.calls.push(stateId);
     if (this.gate) await this.gate;
     if (this.throwValue !== undefined) throw this.throwValue;
     if (this.fail) throw new Error('light unreachable');
-    return level;
+    return stateId;
   }
 
-  async read(): Promise<Confirmed> {
-    return this.calls.at(-1) ?? 'unknown';
+  async read(): Promise<string> {
+    return this.calls.at(-1) ?? UNKNOWN_ID;
   }
 }
 
@@ -47,7 +47,7 @@ async function boot(token?: string, log?: (line: string) => void, extras?: BootE
   const driver = new StubDriver();
   const persisted: PersistedState[] = [];
   const deps: ServerDeps = {
-    store: new StateStore({ ...defaultState(), level: 'available' }),
+    store: new StateStore({ ...defaultState(), state: 'available' }, new StateTable()),
     driver,
     persist: async (state) => {
       persisted.push(state);
@@ -84,33 +84,34 @@ test('PUT /state turns on, persists, and reports driver confirmation', async () 
   const h = await boot();
   const res = await fetch(`${h.base}/state`, {
     method: 'PUT',
-    body: JSON.stringify({ onAir: true, source: 'detector' }),
+    body: JSON.stringify({ state: 'on-air', source: 'auto:detector' }),
   });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.intended, 'on');
-  assert.equal(body.level, 'dnd');
-  assert.equal(body.confirmed, 'dnd');
-  assert.equal(body.source, 'detector');
-  assert.deepEqual(h.driver.calls, ['dnd']);
+  assert.equal(body.state, 'on-air');
+  assert.equal(body.confirmed, 'on-air');
+  assert.equal(body.source, 'auto:detector');
+  assert.equal(body.busy, true);
+  assert.deepEqual(h.driver.calls, ['on-air']);
   assert.equal(h.persisted.length, 1);
   assert.equal(h.persisted[0]!.intended, 'on');
   assert.equal(h.persisted[0]!.confirmed, 'unknown');
   await h.close();
 });
 
-test('PUT /state defaults source to manual', async () => {
+test('PUT /state does NOT default source - it is required and prefixed (D-41)', async () => {
   const h = await boot();
-  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: false }) });
+  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ state: 'available' }) });
   const body = await res.json();
-  assert.equal(body.source, 'manual');
+  assert.match(body.error, /source must be prefixed/);
   await h.close();
 });
 
 test('driver failure still succeeds the write with confirmed unknown', async () => {
   const h = await boot();
   h.driver.fail = true;
-  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ state: 'on-air', source: 'human:test' }) });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.intended, 'on');
@@ -123,26 +124,29 @@ test('driver failure is logged before confirmed is set to unknown', async () => 
   const lines: string[] = [];
   const h = await boot(undefined, (line) => lines.push(line));
   h.driver.fail = true;
-  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ state: 'on-air', source: 'human:test' }) });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.confirmed, 'unknown');
   assert.ok(
-    lines.some((line) => /driver\.set\(dnd\) failed/.test(line)),
-    `expected a log line matching /driver\\.set\\(dnd\\) failed/, got: ${JSON.stringify(lines)}`,
+    lines.some((line) => /driver\.set\(on-air\) failed/.test(line)),
+    `expected a log line matching /driver\\.set\\(on-air\\) failed/, got: ${JSON.stringify(lines)}`,
   );
   await h.close();
 });
 
-test('POST /on and /off are manual conveniences with ?source= override', async () => {
+test('POST /on and /off are human conveniences with ?source= override', async () => {
   const h = await boot();
   let body = await (await fetch(`${h.base}/on`, { method: 'POST' })).json();
   assert.equal(body.intended, 'on');
-  assert.equal(body.source, 'manual');
+  assert.equal(body.state, 'on-air');
+  // Optional here, unlike PUT /state, and unprefixed reads as human: (D-41).
+  assert.equal(body.source, 'human:anonymous');
   body = await (await fetch(`${h.base}/off?source=shortcut`, { method: 'POST' })).json();
   assert.equal(body.intended, 'off');
-  assert.equal(body.source, 'shortcut');
-  assert.deepEqual(h.driver.calls, ['dnd', 'available']);
+  assert.equal(body.state, 'available');
+  assert.equal(body.source, 'human:shortcut');
+  assert.deepEqual(h.driver.calls, ['on-air', 'available']);
   await h.close();
 });
 
@@ -151,7 +155,7 @@ test('malformed and invalid bodies get 400 with error shape', async () => {
   const bad = await fetch(`${h.base}/state`, { method: 'PUT', body: '{not json' });
   assert.equal(bad.status, 400);
   assert.equal(typeof (await bad.json()).error, 'string');
-  const wrongType = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: 'yes' }) });
+  const wrongType = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ state: 42, source: 'human:x' }) });
   assert.equal(wrongType.status, 400);
   assert.deepEqual(h.driver.calls, []);
   await h.close();
@@ -161,7 +165,7 @@ test('driver throwing a non-Error value still succeeds the write and logs the st
   const lines: string[] = [];
   const h = await boot(undefined, (line) => lines.push(line));
   h.driver.throwValue = 'light offline';
-  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+  const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ state: 'on-air', source: 'human:test' }) });
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.confirmed, 'unknown');
@@ -205,7 +209,7 @@ test('auth gate runs before routing: unknown path 401s without a token, not 404'
 
 test('createApiServer rejects an empty token', () => {
   const deps: ServerDeps = {
-    store: new StateStore({ ...defaultState(), level: 'available' }),
+    store: new StateStore({ ...defaultState(), state: 'available' }, new StateTable()),
     driver: new StubDriver(),
     persist: async () => {},
     token: '',
@@ -217,7 +221,7 @@ test('PUT /state body over 16KB returns 400 with an error string', async () => {
   const h = await boot();
   const res = await fetch(`${h.base}/state`, {
     method: 'PUT',
-    body: JSON.stringify({ onAir: true, source: 'x'.repeat(17 * 1024) }),
+    body: JSON.stringify({ state: 'on-air', source: `human:${'x'.repeat(17 * 1024)}` }),
   });
   assert.equal(res.status, 400);
   assert.equal(typeof (await res.json()).error, 'string');
@@ -225,12 +229,12 @@ test('PUT /state body over 16KB returns 400 with an error string', async () => {
   await h.close();
 });
 
-test('PUT /state with no onAir field returns 400 and never calls the driver', async () => {
+test('PUT /state with no state field returns 400 and never calls the driver', async () => {
   const h = await boot();
   const res = await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({}) });
   assert.equal(res.status, 400);
   const body = await res.json();
-  assert.equal(body.error, 'body must contain level or onAir');
+  assert.equal(body.error, 'body must contain state');
   assert.deepEqual(h.driver.calls, []);
   await h.close();
 });
@@ -242,8 +246,8 @@ test('concurrent writes serialize: last write wins, driver calls and persists ha
     releaseGate = resolve;
   });
 
-  // Slow write: PUT /state {onAir:true} - blocks inside driver.set() until we release the gate.
-  const slow = fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+  // Slow write: PUT /state {state:'on-air'} - blocks inside driver.set() until we release the gate.
+  const slow = fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ state: 'on-air', source: 'human:test' }) });
 
   // Wait until the slow write has actually reached driver.set() (i.e. it's holding the write
   // queue) before firing the second write, so the arrival order is deterministic.
@@ -264,7 +268,7 @@ test('concurrent writes serialize: last write wins, driver calls and persists ha
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(
     h.driver.calls,
-    ['dnd'],
+    ['on-air'],
     'fast write must stay queued behind the slow write, not race through the driver',
   );
 
@@ -279,7 +283,7 @@ test('concurrent writes serialize: last write wins, driver calls and persists ha
   assert.equal(status.intended, 'off');
   assert.equal(status.confirmed, 'available');
 
-  assert.deepEqual(h.driver.calls, ['dnd', 'available']);
+  assert.deepEqual(h.driver.calls, ['on-air', 'available']);
   assert.equal(h.persisted.length, 2);
   assert.equal(h.persisted[0]!.intended, 'on');
   assert.equal(h.persisted[1]!.intended, 'off');
@@ -324,7 +328,7 @@ test('PUT /message validation: missing, empty, oversized text get 400', async ()
 test('heartbeat re-PUT of /state leaves the message intact', async () => {
   const h = await boot();
   await fetch(`${h.base}/message`, { method: 'PUT', body: JSON.stringify({ text: 'BE QUIET' }) });
-  await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ onAir: true, source: 'detector' }) });
+  await fetch(`${h.base}/state`, { method: 'PUT', body: JSON.stringify({ state: 'on-air', source: 'auto:detector' }) });
   const status = await (await fetch(`${h.base}/status`)).json();
   assert.equal(status.message, 'BE QUIET');
   assert.equal(status.intended, 'on');
@@ -348,7 +352,7 @@ test('token via query works on GETs only', async () => {
   assert.equal((await fetch(`${h.base}/status?token=sekrit`)).status, 200);
   assert.equal((await fetch(`${h.base}/status?token=wrong`)).status, 401);
   assert.equal((await fetch(`${h.base}/display?token=sekrit`)).status, 200);
-  const write = await fetch(`${h.base}/state?token=sekrit`, { method: 'PUT', body: JSON.stringify({ onAir: true }) });
+  const write = await fetch(`${h.base}/state?token=sekrit`, { method: 'PUT', body: JSON.stringify({ state: 'on-air', source: 'human:test' }) });
   assert.equal(write.status, 401); // writes require the header
   await h.close();
 });
@@ -364,9 +368,9 @@ test('GET /ui serves the control panel + API console page', async () => {
   for (const marker of [
     '/status',
     '/state',
-    '/dnd',
-    '/interruptible',
-    '/available',
+    '/state/on-air',
+    '/state/interruptible',
+    '/state/available',
     'btn-hold',
     'btn-release',
     '/message',

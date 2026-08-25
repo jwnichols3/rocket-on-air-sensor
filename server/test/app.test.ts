@@ -2,50 +2,56 @@ import assert from 'node:assert/strict';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import { createApp } from '../src/app.js';
 import type { LightDriver } from '../src/driver.js';
-import type { Confirmed, Level } from '../src/state.js';
+import { UNKNOWN_ID } from '../src/state.js';
 
 class StubDriver implements LightDriver {
-  calls: Level[] = [];
-  async set(level: Level): Promise<Confirmed> {
-    this.calls.push(level);
-    return level;
+  calls: string[] = [];
+  async set(stateId: string): Promise<string> {
+    this.calls.push(stateId);
+    return stateId;
   }
-  async read(): Promise<Confirmed> {
-    return this.calls.at(-1) ?? 'unknown';
+  async read(): Promise<string> {
+    return this.calls.at(-1) ?? UNKNOWN_ID;
   }
 }
 
-test('state survives a restart and boot re-applies intended to the driver', async () => {
+test('state survives a restart and boot re-applies it to the driver', async (t: TestContext) => {
   const stateFile = join(await mkdtemp(join(tmpdir(), 'onair-app-')), 'state.json');
 
   const driver1 = new StubDriver();
   const app1 = await createApp({ stateFile, port: 0, driver: driver1, log: () => {} });
-  assert.deepEqual(driver1.calls, ['dnd']); // boot re-applies the default, which is dnd
+  // Registered before the first assertion: a throw between here and close() would
+  // otherwise leak a listening server and hang the whole run for minutes.
+  t.after(() => app1.close().catch(() => {}));
+  assert.deepEqual(driver1.calls, [UNKNOWN_ID], 'boot re-applies the default, which is unknown');
   const res = await fetch(`http://127.0.0.1:${app1.port}/state`, {
     method: 'PUT',
-    body: JSON.stringify({ onAir: true, source: 'detector' }),
+    body: JSON.stringify({ state: 'on-air', source: 'auto:detector' }),
   });
   assert.equal(res.status, 200);
   await app1.close();
 
   const driver2 = new StubDriver();
   const app2 = await createApp({ stateFile, port: 0, driver: driver2, log: () => {} });
-  assert.deepEqual(driver2.calls, ['dnd']); // boot re-applies the persisted level
-  const body = await (await fetch(`http://127.0.0.1:${app2.port}/status`)).json();
+  t.after(() => app2.close().catch(() => {}));
+  assert.deepEqual(driver2.calls, ['on-air'], 'boot re-applies the persisted state');
+  const body = (await (await fetch(`http://127.0.0.1:${app2.port}/status`)).json()) as Record<string, unknown>;
+  assert.equal(body.state, 'on-air');
+  assert.equal(body.busy, true);
   assert.equal(body.intended, 'on');
-  assert.equal(body.confirmed, 'dnd');
-  assert.equal(body.source, 'detector');
+  assert.equal(body.confirmed, 'on-air');
+  assert.equal(body.source, 'auto:detector');
   await app2.close();
 });
 
 class FailingDriver implements LightDriver {
-  async set(): Promise<Confirmed> {
+  async set(): Promise<string> {
     throw new Error('light unreachable');
   }
-  async read(): Promise<Confirmed> {
+  async read(): Promise<string> {
     throw new Error('light unreachable');
   }
 }

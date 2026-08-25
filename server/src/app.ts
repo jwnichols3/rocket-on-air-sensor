@@ -4,7 +4,7 @@ import { EsphomeTextDriver } from './esphome-driver.js';
 import { loadState, saveState } from './persist.js';
 import { createApiServer, errorMessage } from './server.js';
 import { createSseHub } from './sse.js';
-import { defaultState, levelToOnOff, RANK, StateStore } from './state.js';
+import { defaultState, StateStore, StateTable, UNKNOWN_ID } from './state.js';
 import { startSupervisor } from './supervise.js';
 import { createWsBridge } from './ws.js';
 
@@ -27,8 +27,10 @@ export interface App {
 export async function createApp(opts: AppOptions): Promise<App> {
   const log = opts.log ?? console.log;
   const driver = opts.driver ?? new NoopDriver(log);
-  const loaded = await loadState(opts.stateFile);
-  const store = new StateStore(loaded ?? defaultState());
+  const loaded = await loadState(opts.stateFile, log);
+  // The seed table, hardcoded for this ticket. #39 loads it from the config document and
+  // hands it to store.setTable().
+  const store = new StateStore(loaded ?? defaultState(), new StateTable());
 
   // Startup config check. A wrong entity name is a deploy bug and must be loud, so
   // DriverConfigError propagates and stops the service. An unreachable device does not:
@@ -45,26 +47,28 @@ export async function createApp(opts: AppOptions): Promise<App> {
     }
   }
 
-  // Invariant: recover after restart - re-apply the level to the light on boot, subject
-  // to the ladder rule. A stale file must not push the device DOWN.
+  // Invariant: recover after restart - re-apply the state to the light on boot, subject to
+  // THE BUSY RULE. A stale file must not push the device from busy to calm.
   try {
+    const table = store.getTable();
     const cur = await driver.read();
-    const want = store.get().level;
-    const fresh = store.ageSeconds() <= 90;
-    if (cur !== 'unknown' && RANK[want] < RANK[cur] && !fresh) {
-      log(`[onair] boot: device says ${cur}, our stale ${want} is lower - adopting the device`);
-      // Adopt into `level`, not only `confirmed`. `level` is what every other renderer
-      // draws, so adopting halfway leaves the browser page green beside a red panel -
-      // the same lie in a different window. Raising is always ladder-legal, and a live
-      // device read is fresh evidence of the higher rung.
-      store.write(cur, 'device', new Date());
+    const want = store.get().state;
+    const stale = store.stale();
+    if (cur !== UNKNOWN_ID && table.has(cur) && table.busy(cur) && !table.busy(want) && stale) {
+      log(`[onair] boot: device says ${cur}, our stale ${want} is calm - adopting the device`);
+      // Adopt into `state`, not only `confirmed`. `state` is what every other renderer
+      // draws, so adopting halfway leaves the browser page green beside a red panel - the
+      // same lie in a different window. Moving to a busy row is always allowed, and a live
+      // device read is fresh evidence.
+      store.write(cur, { kind: 'auto', label: 'device', raw: 'auto:device' }, new Date());
       store.setConfirmed(cur);
     } else {
-      store.setConfirmed(await driver.set(want));
+      const got = await driver.set(want);
+      store.setConfirmed(table.has(got) ? got : UNKNOWN_ID);
     }
   } catch (err) {
     log(`[onair] boot driver re-apply failed: ${errorMessage(err)}`);
-    store.setConfirmed('unknown');
+    store.setConfirmed(UNKNOWN_ID);
   }
 
   // One write queue, shared by the HTTP routes and the supervisor, so a supervisor
@@ -100,8 +104,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
     driver,
     enqueue: enqueueWrite,
     log,
-    onChange: (s) => {
-      const body = { ...s, intended: levelToOnOff(s.level), ageSeconds: store.ageSeconds() };
+    onChange: () => {
+      const body = store.status();
       hub.broadcast(body);
       wsBridge.broadcast(body);
     },

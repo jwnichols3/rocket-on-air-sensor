@@ -4,14 +4,15 @@ import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import { NoopDriver } from '../src/driver.js';
 import { DriverConfigError, EsphomeTextDriver } from '../src/esphome-driver.js';
+import { UNKNOWN_ID } from '../src/state.js';
 
 test('noop driver logs the level and reports unknown', async () => {
   const lines: string[] = [];
   const driver = new NoopDriver((line) => lines.push(line));
-  assert.equal(await driver.set('dnd'), 'unknown');
-  assert.equal(await driver.set('available'), 'unknown');
-  assert.equal(await driver.read(), 'unknown');
-  assert.deepEqual(lines, ['[noop-driver] light -> DND', '[noop-driver] light -> AVAILABLE']);
+  assert.equal(await driver.set('on-air'), UNKNOWN_ID);
+  assert.equal(await driver.set('available'), UNKNOWN_ID);
+  assert.equal(await driver.read(), UNKNOWN_ID);
+  assert.deepEqual(lines, ['[noop-driver] light -> ON-AIR', '[noop-driver] light -> AVAILABLE']);
 });
 
 /**
@@ -39,7 +40,7 @@ interface FakeDevice {
 
 async function fakeDevice(): Promise<FakeDevice> {
   const d: Partial<FakeDevice> = {
-    posts: [], gets: [], auth: [], value: 'dnd', minLength: 1, maxLength: 64,
+    posts: [], gets: [], auth: [], value: 'on-air', minLength: 1, maxLength: 64,
     swallowWrites: false, applyDelayMs: 0, status: null, frames: 0,
   };
   const server: Server = createServer((req, res) => {
@@ -117,7 +118,7 @@ test('a 200 that did not apply is caught by the read-back, not trusted', async (
   const d = await fakeDevice();
   d.swallowWrites = true;
   const driver = driverFor(d);
-  assert.equal(await driver.set('available'), 'dnd', 'the read-back must win over the 200');
+  assert.equal(await driver.set('available'), 'on-air', 'the read-back must win over the 200');
   await d.close();
 });
 
@@ -125,7 +126,7 @@ test('an over-length value is answered 200 and dropped; only the read-back sees 
   const d = await fakeDevice();
   d.maxLength = 3; // "available" no longer fits, exactly as a too-long row id would not
   const driver = driverFor(d);
-  assert.equal(await driver.set('available'), 'dnd', 'a length violation must not be reported as applied');
+  assert.equal(await driver.set('available'), 'on-air', 'a length violation must not be reported as applied');
   await d.close();
 });
 
@@ -135,30 +136,43 @@ test('read reports the device state, and unknown when it is unreachable', async 
   d.value = 'available';
   assert.equal(await driver.read(), 'available');
   await d.close();
-  assert.equal(await driver.read(), 'unknown', 'a dead device is unknown, never a level');
+  assert.equal(await driver.read(), UNKNOWN_ID, 'a dead device is unknown, never a state');
 });
 
-test('read reports unknown for a key this server does not recognise', async () => {
+test('read reports the raw key, even one this build has never heard of', async () => {
   const d = await fakeDevice();
   const driver = driverFor(d);
-  // `text` accepts arbitrary keys (measured, D-44). The device no longer declares a valid
-  // set, so a key from outside this build must read as ignorance, never as a level.
+  // `text` accepts arbitrary keys (measured, D-44), and this driver deliberately does NOT
+  // hold the state table - it reports what the device has and the caller, which does hold
+  // the table, decides whether that is a row it knows. Two copies of the vocabulary is one
+  // more than can be kept in agreement.
   d.value = 'focus-block';
-  assert.equal(await driver.read(), 'unknown');
+  assert.equal(await driver.read(), 'focus-block');
   await d.close();
+});
+
+test('an empty or unreadable device value is unknown, never a bare empty string', async () => {
+  const d = await fakeDevice();
+  const driver = driverFor(d);
+  d.value = '';
+  // "" is not a state, and a renderer handed one draws nothing - which looks exactly like
+  // a calm panel. It must arrive as `unknown`, which is a real row and is never calm.
+  assert.equal(await driver.read(), UNKNOWN_ID);
+  await d.close();
+  assert.equal(await driver.read(), UNKNOWN_ID, 'and so is a dead device');
 });
 
 test('set never throws when the device is gone', async () => {
   const d = await fakeDevice();
   const driver = driverFor(d);
   await d.close();
-  assert.equal(await driver.set('dnd'), 'unknown');
+  assert.equal(await driver.set('on-air'), UNKNOWN_ID);
 });
 
 test('basic auth is sent pre-emptively on every request', async () => {
   const d = await fakeDevice();
   const driver = driverFor(d, { username: 'onair', password: 'hunter2' });
-  await driver.set('dnd');
+  await driver.set('on-air');
   const expected = `Basic ${Buffer.from('onair:hunter2').toString('base64')}`;
   assert.equal(d.auth.length >= 2, true, 'both the POST and the read-back are authenticated');
   assert.deepEqual([...new Set(d.auth)], [expected]);
@@ -247,6 +261,6 @@ test('set still reports the truth when the write genuinely never applies', async
   const d = await fakeDevice();
   d.swallowWrites = true;
   const driver = driverFor(d);
-  assert.equal(await driver.set('available'), 'dnd', 'a dropped value must not be papered over by retries');
+  assert.equal(await driver.set('available'), 'on-air', 'a dropped value must not be papered over by retries');
   await d.close();
 });

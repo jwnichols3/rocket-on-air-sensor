@@ -155,10 +155,10 @@ else (state, light control, API) lives on the receiver.
 >
 > | Decision | Fate |
 > |---|---|
-> | **D-5** contract v1 state model | **Amended** by D-31/D-32/D-33 and rewritten in `docs/api-contract.md` v2. `level`, `onAir`, `/on`, `/off` and the five hardcoded rung routes are gone. |
+> | **D-5** contract v1 state model | **Amended** by D-31/D-32/D-33, rewritten in `docs/api-contract.md` v2, and **shipped** by D-48. `level`, `onAir` and the rung routes are gone; `/on` and `/off` survive but resolve through shortcut rows. |
 > | **D-6** no TTL / staleness visible, never acted on | **Intact in principle; its rule is restated** by D-32's BUSY RULE. No TTL, no decay, no auto-raise - all confirmed. |
 > | **D-7** optional `ONAIR_TOKEN` | **Superseded** by D-35. Becomes the UI-configurable passphrase. |
-> | **D-9** `/display` browser tally | **Intact**, but its appearances are now table-driven rather than four hardcoded ones. |
+> | **D-9** `/display` browser tally | **Intact.** D-48 pointed it at `state`; its appearances become table-driven in #41. Its `intended` fallback is what keeps a row it has never heard of rendering ON AIR rather than nothing. |
 > | **D-10** `npx github:` distribution | **Amended** by D-15 then D-37, and **executed** by D-47: the root package is now `private` with no `bin`, so the `npx github:` path no longer resolves an executable. `deploy/get-onair` is the install path. |
 > | **D-11** hand-rolled WebSocket | **Intact and deployed.** The zero-dependency rule that justified it was never a rule (D-29); the code is not revisited. Its feedback wiring survives v2 because of D-33. |
 > | **D-12** light hardware on hold | Already superseded by D-16/D-18/D-21. |
@@ -166,7 +166,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-14** config-file-first install | **Amended** by D-36. `config.env` retires as the config source and survives as an env overlay; the plist still carries no `ONAIR_*`. |
 > | **D-16** firmware in a separate repo | **Reversed** by D-28, implemented by D-37 and **done** in D-47. Firmware lives in `firmware/`. The ESPHome `2026.8.0` pin and its warning survive. |
 > | **D-17** device transport over plain HTTP | **Intact**, **amended** by D-38: the device entity moves from `select` to `text`. Basic auth stays mandatory and stays separate from the passphrase. |
-> | **D-18** three-rung ladder | **Superseded** by D-31 (table), D-32 (busy rule), D-33 (`intended`). |
+> | **D-18** three-rung ladder | **Superseded** by D-31 (table), D-32 (busy rule), D-33 (`intended`), and **deleted from the code** by D-48. `level`, `onAir` and the rung routes no longer exist. |
 > | **D-19** hold as a floor | **Superseded** by D-32. Hold is a pin with one escalation carve-out. |
 > | **D-21.1** reconciliation merges only on contradiction | **Intact in spirit**, restated over `busy` rather than rungs. |
 > | **D-21.2** a manual write below the floor releases the floor | **Superseded** by D-32: a manual write naming a state other than the held one releases the pin. |
@@ -1292,3 +1292,64 @@ else (state, light control, API) lives on the receiver.
   **One thing corrected in passing.** `README.md` still claimed "zero production npm
   dependencies", which D-29 retired and `CLAUDE.md` already flags as never having been a rule.
   Left in place it would keep being cited. Now says what D-29 says.
+- **D-48 (2026-08-24)** **The ladder is gone from the server. The table is on the wire, and
+  the live light never stopped telling the truth.** Resolves
+  [#37](https://github.com/jwnichols3/rocket-on-air-sensor/issues/37). Implements D-31, D-33,
+  D-34, D-41, D-42 and contract §1, §2, §5.
+  **What the wire says now.** `state` (a row id), `busy`, `intended`, `confirmed`, `hold`,
+  `source`, `updatedAt`, `ageSeconds`, `stale`, `tableVersion`, `message`, and
+  `stateResolvedFrom` only when the live row was deleted. `level` and `onAir` are gone;
+  `POST /available|interruptible|dnd` are gone and `POST /state/{id}` replaces them; `/on` and
+  `/off` resolve through shortcut rows and are `409` when unset. Every derived field is
+  computed at serialisation, so none of them can drift from `state`. **No `label`, `color` or
+  `bgcolor` anywhere on the state payload** (D-42), enforced by a test that enumerates them.
+  **The ladder rule became the busy rule, and the substitution is exact.** "Never lower the
+  rung without fresh evidence" is now "never go calm without fresh evidence" -
+  `RANK[want] >= RANK[got] || fresh` became `table.busy(want) || !stale`. There is no rank left
+  and there does not need to be: `busy` was always the only thing rank encoded that mattered.
+  `StateTable.busy()` **defaults to `true` for an id it does not hold**, which is the safety
+  model in one line - an id nobody recognises must never read as calm.
+  **A one-time v1 migration, and why it is not D-34's fallback.** D-34 says an id that is not
+  in the table resolves to `unknown`. That is right for a row the owner *deleted* and wrong for
+  `level: "dnd"` in the live state file: that is the same meaning in the old vocabulary, not a
+  dangling reference, and resolving it to NO DATA would have flipped the panel to the fault
+  appearance on the upgrade restart. `dnd -> on-air`, both `busy`, meaning preserved, logged
+  out loud. Observed on the live host: `[onair] migrated v1 state file: dnd -> on-air`.
+  **Expand-then-contract on the device, again, and it paid for itself twice.** The firmware
+  learned the five seed rows **while still recognising `dnd`**, and was flashed before the
+  server restarted. The cutover was therefore invisible on the glass - the panel drew ON AIR
+  from `dnd` before, and ON AIR from `on-air` after, with no flash of `UNKNOWN KEY` in between.
+  The alias also **insures the rollback**: the v1 binary writes `dnd` again, and a rolled-back
+  server must not blind the panel. It goes with the rest of the hardcoded block in #43.
+  **The panel's branch is chosen by `busy`, not by a rung.** Every busy row gets the solid-block
+  appearance and is told apart by its **label**, which is the row's rather than the firmware's -
+  so `recording` needed no new appearance, only a new label. The false-calm guard is now
+  `stale && known && !row_busy`, deliberately restating the server's rule on the device so the
+  panel stays safe even if the server heartbeats something it should not.
+  **`intended` earned its keep, visibly.** `/display` has never heard of `recording`. Handed it,
+  the page fell back through `intended` to ON AIR on red - not to nothing, and not to calm.
+  That is RFC 3863's carry-along working exactly as D-33 argued it would, checked in a browser
+  rather than asserted. **A state that degrades to nothing looks exactly like a calm one**, and
+  this is the mechanism that prevents it.
+  **Two things done outside the ticket's letter, both to avoid breaking something quietly.**
+  (a) `/ui` was repointed at `POST /state/{id}` and taught to read `state`. Its buttons posted
+  to routes this ticket deletes, so leaving it alone would have handed Rocket a control panel
+  whose every button `404`s until #41 retires the page. It is still hardcoded to three seed
+  rows, and says so in a comment. (b) `/display` now reads `state` first. It would have
+  *worked* untouched - the `intended` fallback saw to that - but it would have silently
+  collapsed to two states, and the four-line fix is cheaper than the confusion.
+  **The pin rule is NOT here.** `StateStore.write` records and releases a pin (including "a
+  human write naming another state releases it"), and reports it. Deciding whether an `auto:`
+  write is *refused* while a pin is set is #38. Stated plainly because it is a real gap in the
+  meantime: **a pin currently does not refuse anything.** The escalation carve-out and the
+  `409` land with #38.
+  **Measured on the real light.** All five seed rows drove end to end - API -> device key ->
+  panel label - at 61-290 ms; an unknown id `400`s and lists the valid ids without ever
+  reaching the light; an unprefixed `source` on `PUT /state` `400`s; the three rung routes
+  `404`; `/on` and `/off` resolve to `on-air` and `available`; `?source=companion` becomes
+  `human:companion`. 170 server tests, 19 deploy tests, `esphome config`, all green.
+  **One operational note that will confuse the next reader.** The build is deployed to **both**
+  `server/dist/` and the repo-root `dist/`, because #36's plist migration has not been run yet
+  and the installed plist still launches `$APPDIR/dist/index.js`. That is the deploy target the
+  running system names, so building the current code into it is deploying, not shimming. Once
+  `sudo deploy/onair update` runs, the root `dist/` is garbage and should be deleted.

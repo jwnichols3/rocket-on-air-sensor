@@ -1,5 +1,5 @@
 import type { LightDriver } from './driver.js';
-import { isLevel, type Confirmed, type Level } from './state.js';
+import { UNKNOWN_ID } from './state.js';
 
 export interface EsphomeDriverOptions {
   /** "10.42.12.77" or "elegoo-esp32.local". No scheme. */
@@ -34,7 +34,11 @@ export class DriverConfigError extends Error {}
  * WHY `text` AND NOT `select` (D-38): a `select` asserts the FIRMWARE owns the set of valid
  * states. Here the server owns it and the panel is a renderer, which `text` encodes correctly.
  * The cost is that the device no longer rejects a key it does not know - validation is the
- * server's job now, and a key from outside this build reads back as `unknown`.
+ * server's job now.
+ *
+ * This driver deliberately does NOT hold the state table. It reports the raw key the device
+ * has, and the caller - which does hold the table - decides whether that is a row it knows.
+ * Putting the table in here would mean two copies of the vocabulary that could disagree.
  *
  * NAME COUPLING: the URL segment is the entity `name:` in the firmware YAML
  * (web_server.cpp:167). Renaming there breaks every URL here. verifyEntity() catches it.
@@ -99,8 +103,8 @@ export class EsphomeTextDriver implements LightDriver {
     }
   }
 
-  async set(level: Level): Promise<Confirmed> {
-    const url = `${this.base}/text/${this.entity}/set?value=${encodeURIComponent(level)}`;
+  async set(stateId: string): Promise<string> {
+    const url = `${this.base}/text/${this.entity}/set?value=${encodeURIComponent(stateId)}`;
     // fetch() with no body sends Content-Length: 0 and no Content-Type, which is what
     // the device requires - web_server_idf returns 411 if Content-Length is absent.
     const ok = await this.attempt(async () => {
@@ -114,7 +118,7 @@ export class EsphomeTextDriver implements LightDriver {
       await res.arrayBuffer();
       return true;
     });
-    if (!ok) return 'unknown';
+    if (!ok) return UNKNOWN_ID;
     // The 200 proves nothing: it is sent before the value is applied, and an invalid
     // value is dropped in silence. Only the read-back is evidence. Under `text` the
     // silent drop is a LENGTH violation rather than enum membership (measured, D-44:
@@ -126,21 +130,21 @@ export class EsphomeTextDriver implements LightDriver {
     // value. Re-read across that gap rather than reporting a state we just overwrote.
     // A write that genuinely never lands still reports the truth; it just costs a
     // couple of extra reads first.
-    let got: Confirmed = 'unknown';
+    let got: string = UNKNOWN_ID;
     for (let i = 0; i < this.confirmTries; i++) {
       got = await this.read();
-      if (got === level) return got;
+      if (got === stateId) return got;
       if (i < this.confirmTries - 1) await new Promise((r) => setTimeout(r, this.confirmGapMs));
     }
     return got;
   }
 
-  async read(): Promise<Confirmed> {
+  async read(): Promise<string> {
     const body = await this.getJson(`${this.base}/text/${this.entity}`);
     const state = (body as { state?: unknown } | null)?.state;
-    // Any string can come back now, including a key no build of this server knows. That
-    // is ignorance, not a level, and must never resolve to one.
-    return isLevel(state) ? state : 'unknown';
+    // An unreachable device, an unparseable body and a device holding an empty string are
+    // all the same thing here: no evidence. `unknown` is a real row, and it is never calm.
+    return typeof state === 'string' && state !== '' ? state : UNKNOWN_ID;
   }
 
   /**

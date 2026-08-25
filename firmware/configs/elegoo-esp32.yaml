@@ -156,10 +156,11 @@ text_sensor:
     update_interval: 2s
     lambda: |-
       switch (id(render_branch)) {
-        case 1: return {"BUSY"};
-        case 2: return {"FREE"};
+        case 1: return {"INTERRUPTIBLE"};
+        case 2: return {"AVAILABLE"};
         case 3: return {"NO DATA"};
         case 4: return {"UNKNOWN KEY"};
+        case 5: return {"RECORDING"};
         default: return {"ON AIR"};
       }
   - platform: wifi_info
@@ -189,25 +190,45 @@ display:
       //      absent state falls through to the UNKNOWN branch, which is never calm.
       std::string key = id(presence_key).has_state() ? id(presence_key).state : std::string();
 
-      // Until the table arrives over the config pull, the keys this build can draw are
-      // the three it was written against. Everything else is UNKNOWN, loudly.
-      bool k_dnd  = (key == "dnd");
-      bool k_int  = (key == "interruptible");
-      bool k_free = (key == "available");
+      // The v2 seed table (D-31), hardcoded until the config pull lands. Two things come
+      // from a row and only two matter here: the LABEL to draw, and BUSY - which is what
+      // the old three-rung ladder actually encoded and all that survives of it.
+      const char *label = "";
+      bool known = true;
+      bool row_busy = true;
+      if      (key == "available")     { label = "AVAILABLE";     row_busy = false; }
+      else if (key == "on-air")        { label = "ON AIR";        row_busy = true;  }
+      else if (key == "interruptible") { label = "INTERRUPTIBLE"; row_busy = false; }
+      else if (key == "recording")     { label = "RECORDING";     row_busy = true;  }
+      else if (key == "unknown")       { label = "NO DATA";       row_busy = true;  }
+      // EXPAND-BEFORE-CONTRACT, and rollback insurance. `dnd` is the v1 rung `on-air`
+      // replaced; keeping it means the cutover restart is invisible on the glass rather
+      // than a flash of UNKNOWN KEY, and it means rolling the server back to the v1
+      // binary - which writes `dnd` again - does not blind the panel. The v2 server can
+      // never send this, since it is not a row. Removed with #43, when the table arrives
+      // over the config pull and this whole block goes with it.
+      else if (key == "dnd")           { label = "ON AIR";        row_busy = true;  }
+      else                             { known = false; }
 
       // ---- staleness: 0 means "nothing written since boot" (see on_boot) ----
       const uint32_t STALE_MS = 90000;
       uint32_t lw = id(last_write_ms);
       bool stale = (lw == 0) || (millis() - lw > STALE_MS);
 
-      // "available" is the only claim that can be a false OFF. Stale => refuse to
-      // render it calm.
-      bool render_unknown = stale && k_free;
+      // THE BUSY RULE, on the glass. A calm row is the only claim that can be a false OFF,
+      // so a stale one is refused and drawn as NO DATA instead. Keyed on the row's busy
+      // flag rather than on rank, because there is no rank left - and this is the same
+      // rule the server enforces, deliberately restated here so the panel is safe even if
+      // the server heartbeats something it should not.
+      bool render_no_data = (key == "unknown") || (stale && known && !row_busy);
 
-      if (!(k_dnd || k_int || k_free)) {
+      // A long label will not fit at 30px. Pick the size from the label, not the row.
+      auto label_font = [&](const char *t) { return strlen(t) > 8 ? id(status_title) : id(status_huge); };
+
+      if (!known) {
         // UNKNOWN KEY - the server named a state this build cannot draw. Solid header so
-        // it cannot be mistaken for any of the three, and the key itself on the glass so
-        // a firmware/server skew is diagnosable without opening a laptop. Left-aligned
+        // it cannot be mistaken for any of the rows, and the key itself on the glass so a
+        // firmware/server skew is diagnosable without opening a laptop. Left-aligned
         // deliberately: a long key clips its tail, not its identifying head.
         it.filled_rectangle(0, 0, 128, 16, COLOR_ON);
         it.printf(64, 8, id(status_title), COLOR_OFF, TextAlign::CENTER, "UNKNOWN KEY");
@@ -215,28 +236,30 @@ display:
                   key.empty() ? "(no state)" : key.c_str());
         for (int x = 0; x < 128; x += 4) it.line(x, 40, x, 47, COLOR_ON);
         id(render_branch) = 4;
-      } else if (k_dnd) {
-        // DND - maximum ink. Words knocked out of a solid block, band left alone.
-        it.filled_rectangle(0, 0, 128, 48, COLOR_ON);
-        it.printf(64, 24, id(status_huge), COLOR_OFF, TextAlign::CENTER, "ON AIR");
-        if (stale) it.print(64, 44, id(status_text), COLOR_OFF, TextAlign::BASELINE_CENTER, "STALE");
-        id(render_branch) = 0;
-      } else if (render_unknown) {
-        // UNKNOWN - hatched band. Never blank, never calm.
+      } else if (render_no_data) {
+        // NO DATA - hatched band. Never blank, never calm.
         for (int x = 0; x < 128; x += 4) it.line(x, 0, x, 14, COLOR_ON);
         it.printf(64, 26, id(status_title), COLOR_ON, TextAlign::CENTER, "NO DATA");
         id(render_branch) = 3;
-      } else if (k_int) {
+      } else if (row_busy) {
+        // BUSY - maximum ink. Words knocked out of a solid block, band left alone. Every
+        // busy row shares this shape; the label is what tells them apart, which is the
+        // point of the label being the row's and not the firmware's.
+        it.filled_rectangle(0, 0, 128, 48, COLOR_ON);
+        it.printf(64, 24, label_font(label), COLOR_OFF, TextAlign::CENTER, "%s", label);
+        if (stale) it.print(64, 44, id(status_text), COLOR_OFF, TextAlign::BASELINE_CENTER, "STALE");
+        id(render_branch) = (key == "recording") ? 5 : 0;
+      } else if (key == "interruptible") {
         // INTERRUPTIBLE - double frame INSET above the band, mid ink.
         it.rectangle(0, 0, 128, 48, COLOR_ON);
         it.rectangle(2, 2, 124, 44, COLOR_ON);
-        it.printf(64, 24, id(status_huge), COLOR_ON, TextAlign::CENTER, "BUSY");
+        it.printf(64, 24, label_font(label), COLOR_ON, TextAlign::CENTER, "%s", label);
         id(render_branch) = 1;
       } else {
-        // AVAILABLE - a big open ring plus a word. Comparable ink, unmistakable shape.
+        // AVAILABLE - a big open ring plus the word. Comparable ink, unmistakable shape.
         it.filled_circle(64, 24, 22, COLOR_ON);
         it.filled_circle(64, 24, 15, COLOR_OFF);
-        it.printf(64, 24, id(status_text), COLOR_ON, TextAlign::CENTER, "FREE");
+        it.printf(64, 24, id(status_text), COLOR_ON, TextAlign::CENTER, "%s", label);
         id(render_branch) = 2;
       }
 
