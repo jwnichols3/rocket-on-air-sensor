@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { LightDriver } from '../src/driver.js';
 import { startSupervisor } from '../src/supervise.js';
-import { defaultState, StateStore, StateTable, UNKNOWN_ID, type OnAirState } from '../src/state.js';
+import { defaultState, STALE_AFTER_S, StateStore, StateTable, UNKNOWN_ID, type OnAirState } from '../src/state.js';
 
 class FakeLight implements LightDriver {
   sets: string[] = [];
@@ -169,4 +169,48 @@ test('supervisor: stop() is synchronous and takes effect immediately', async () 
   r.stop();
   await sleep(40);
   assert.equal(r.light.sets.length + r.light.reads <= before + 1, true, 'at most one in-flight tick finishes');
+});
+
+// --------------------------------------------- THE BUSY RULE, at its edges
+
+test('the staleness boundary is exactly 90s, and it lives in one place', async () => {
+  const at = (ageMs: number) => new StateStore({ ...defaultState(new Date(Date.now() - ageMs)), state: 'available' }, new StateTable());
+  assert.equal(at(90_000).stale(), false, '90s is not yet stale');
+  assert.equal(at(91_000).stale(), true);
+  // The device's own STALE_MS is the same 90s. If these ever disagree the panel and the
+  // server disagree about when to stop trusting a calm state, which is the one thing that
+  // must not happen quietly.
+  assert.equal(STALE_AFTER_S, 90);
+});
+
+test('a stale BUSY state IS still heartbeated - staying busy never needs fresh evidence', async () => {
+  const old = { ...defaultState(new Date(Date.now() - 3600_000)), state: 'on-air' };
+  const r = rig({}, old);
+  r.light.device = 'on-air';
+  await sleep(80);
+  r.stop();
+  assert.equal(r.light.sets.includes('on-air'), true, 'the withheld heartbeat is for CALM states only');
+});
+
+test('no auto-raise: a stale calm state is withheld, never escalated on its own', async () => {
+  const old = { ...defaultState(new Date(Date.now() - 3600_000)), state: 'available' };
+  const r = rig({}, old);
+  r.light.device = 'available';
+  await sleep(80);
+  r.stop();
+  // The server withdraws its liveness claim and lets the device watchdog trip to NO DATA.
+  // It does NOT invent a busy state to be safe - that would be a state change nobody asked
+  // for, and this system changes state only on an explicit write (D-6).
+  assert.deepEqual(r.light.sets, []);
+  assert.equal(r.store.get().state, 'available', 'staleness is visible, never acted on');
+});
+
+test('no TTL: the supervisor never rewrites state on a timer', async () => {
+  const old = { ...defaultState(new Date(Date.now() - 3600_000)), state: 'available' };
+  const r = rig({}, old);
+  r.light.device = 'available';
+  const before = r.store.get().updatedAt;
+  await sleep(80);
+  r.stop();
+  assert.equal(r.store.get().updatedAt, before, 'only an explicit write moves updatedAt');
 });

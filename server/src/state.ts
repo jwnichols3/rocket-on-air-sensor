@@ -150,6 +150,53 @@ export function coerceSource(raw: unknown): Source {
   return { kind: 'human', label, raw: `human:${label}` };
 }
 
+/**
+ * The answer to "may this write land?". `ok: false` carries the status the route sends and
+ * the sentence the client reads.
+ */
+export type WriteVerdict = { ok: true } | { ok: false; status: 403 | 409; error: string };
+
+/**
+ * THE PIN RULE, in code (contract §3, D-32).
+ *
+ * > While a hold is set, a write from an `auto:` source is applied only if it moves the
+ * > system from a `busy: false` state to a `busy: true` state. Every other automated write
+ * > is refused (409) and the held state stands. A `human:` write always applies.
+ *
+ * The single carve-out is the whole design. A naive pin is a documented production failure,
+ * not a hypothetical: Teams ships `user-preferred state > session-level states`, so someone
+ * who prefers Available and then joins a call shows **Available**. Teams can afford a
+ * wrong-but-chosen chat status; a light whose only job is to say whether a camera is live
+ * cannot. The carve-out means a pin can hold you calm against a detector that thinks the
+ * meeting ended, but never against one that thinks it started.
+ *
+ * A pin at a `busy: false` row is therefore a floor in the only sense that ever mattered,
+ * without any ordering: escalation in, no de-escalation out.
+ */
+export function judgeWrite(
+  current: OnAirState,
+  table: StateTable,
+  next: string,
+  source: Source,
+  hold?: boolean,
+): WriteVerdict {
+  // Authority first. An `auto:` source touching the pin at all is a 403 even when the pin
+  // would also have refused the state change - reporting THAT as a 409 would tell the
+  // client to back off and wait, when what it needs to do is fix its `source`.
+  if (hold !== undefined && source.kind !== 'human') {
+    return { ok: false, status: 403, error: 'only a human: source may set or clear a hold' };
+  }
+  if (current.hold === null || source.kind === 'human') return { ok: true };
+
+  const movingToBusy = !table.busy(current.state) && table.busy(next);
+  if (movingToBusy) return { ok: true };
+  return {
+    ok: false,
+    status: 409,
+    error: `state is held at '${current.hold}'; an automated write may only escalate to a busy state`,
+  };
+}
+
 /** The persisted, in-memory state object. Everything else in §2 is derived at read time. */
 export interface OnAirState {
   /** A REFERENCE to a row, never a copy of one. */

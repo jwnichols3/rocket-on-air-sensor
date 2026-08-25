@@ -271,3 +271,163 @@ test('a device holding a key outside the table never becomes confirmed', async (
   await put(h, { state: 'on-air', source: 'auto:vcrec' });
   assert.equal((await status(h)).confirmed, UNKNOWN_ID);
 });
+
+// ------------------------------------------------- THE PIN RULE, over HTTP
+
+async function pin(h: Harness, at: string): Promise<void> {
+  await put(h, { state: at, source: 'human:ui', hold: true });
+}
+
+test('while pinned, an auto write that would go calm is 409 - with the state that won', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'interruptible');
+  const res = await put(h, { state: 'available', source: 'auto:vcrec' });
+  assert.equal(res.status, 409);
+  const body = (await res.json()) as Record<string, unknown>;
+  assert.match(String(body.error), /held at 'interruptible'/);
+  // The refusal carries the current status, so the client can see what stands without a
+  // second round trip. This is the system working, not a fault to retry.
+  assert.equal(body.state, 'interruptible');
+  assert.equal(body.hold, 'interruptible');
+  assert.deepEqual(h.driver.calls, ['interruptible'], 'the refused write never reached the light');
+});
+
+test('while pinned calm, an auto ESCALATION to busy is allowed, and the pin survives it', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'interruptible');
+  const res = await put(h, { state: 'on-air', source: 'auto:vcrec' });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as Record<string, unknown>;
+  assert.equal(body.state, 'on-air');
+  assert.equal(body.hold, 'interruptible', 'the pin survives the escalation');
+});
+
+test('pinned to a busy row, nothing automated moves it', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'recording');
+  for (const target of ['available', 'interruptible', 'on-air']) {
+    assert.equal((await put(h, { state: target, source: 'auto:vcrec' })).status, 409, target);
+  }
+  assert.equal((await status(h)).state, 'recording');
+});
+
+test('a human write always applies while pinned, and one naming another state releases it', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'interruptible');
+  const res = await put(h, { state: 'available', source: 'human:menubar' });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as Record<string, unknown>;
+  assert.equal(body.state, 'available');
+  assert.equal(body.hold, null, 'a human naming another state releases the pin');
+});
+
+test('an auto source touching the hold at all is 403', async (t) => {
+  const h = await boot(t);
+  for (const hold of [true, false]) {
+    const res = await put(h, { state: 'on-air', source: 'auto:vcrec', hold });
+    assert.equal(res.status, 403);
+    assert.match(String(((await res.json()) as { error: string }).error), /only a human/);
+  }
+  assert.deepEqual(h.driver.calls, [], 'and it never reached the light');
+});
+
+test('?hold=1 from an auto source on the convenience route is 403 too', async (t) => {
+  const h = await boot(t);
+  const res = await fetch(`${h.base}/state/on-air?source=auto:vcrec&hold=1`, { method: 'POST' });
+  assert.equal(res.status, 403);
+});
+
+test('the convenience routes are subject to the pin rule as well', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'recording');
+  // `?source=detector` is the one bare legacy value that reads as auto: - so it is bound by
+  // the pin exactly like a prefixed automated writer, which is the point of mapping it.
+  assert.equal((await fetch(`${h.base}/state/available?source=detector`, { method: 'POST' })).status, 409);
+  // ...while an unprefixed source is a human and gets through.
+  assert.equal((await fetch(`${h.base}/state/available?source=menubar`, { method: 'POST' })).status, 200);
+});
+
+test('/off is refused by a pin, since it resolves to a calm row', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'recording');
+  assert.equal((await fetch(`${h.base}/off?source=auto:vcrec`, { method: 'POST' })).status, 409);
+});
+
+test('THE REGRESSION: "I am interruptible today" survives a meeting, over HTTP', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'interruptible');
+
+  // A call starts. calm -> busy, so the carve-out lets the detector through.
+  assert.equal((await put(h, { state: 'on-air', source: 'auto:vcrec' })).status, 200);
+  assert.equal((await status(h)).state, 'on-air');
+  assert.equal((await status(h)).hold, 'interruptible');
+
+  // The call ends and the detector writes calm. Refused.
+  assert.equal((await put(h, { state: 'available', source: 'auto:vcrec' })).status, 409);
+
+  // The light did not go calm, and the pin still stands.
+  const s = await status(h);
+  assert.equal(s.hold, 'interruptible');
+  assert.equal(h.driver.calls.includes('available'), false, 'the light was never driven calm');
+});
+
+test('with no pin, an auto write goes calm freely - the pin is the only thing that refuses', async (t) => {
+  const h = await boot(t);
+  await put(h, { state: 'on-air', source: 'auto:vcrec' });
+  assert.equal((await put(h, { state: 'available', source: 'auto:vcrec' })).status, 200);
+  assert.equal((await status(h)).state, 'available');
+});
+
+test('a pin does not decay: an aged store still refuses', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'interruptible');
+  // Age the write without touching the hold. No TTL, no decay, no auto-anything (D-6).
+  h.store.write('interruptible', { kind: 'human', label: 'ui', raw: 'human:ui' }, new Date(Date.now() - 3600_000), true);
+  assert.equal((await status(h)).stale, true, 'staleness is VISIBLE...');
+  assert.equal((await put(h, { state: 'available', source: 'auto:vcrec' })).status, 409, '...and never acted on');
+  assert.equal((await status(h)).hold, 'interruptible');
+});
+
+test('a refused auto write SETTLES BACK to the held row - it does not strand the escalation', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'interruptible');
+  await put(h, { state: 'on-air', source: 'auto:vcrec' });        // call starts, allowed
+  assert.equal((await status(h)).state, 'on-air');
+
+  const res = await put(h, { state: 'available', source: 'auto:vcrec' }); // call ends
+  assert.equal(res.status, 409, 'the requested state was not applied');
+  const body = (await res.json()) as Record<string, unknown>;
+  // "...and the held state stands" (D-32). Leaving `on-air` standing would be a false ON
+  // that never clears - the meeting is over and nothing will ever move the light again
+  // until a human does. The pin is what the system falls back TO, not merely a veto.
+  assert.equal(body.state, 'interruptible');
+  assert.equal(body.hold, 'interruptible');
+  assert.equal((await status(h)).state, 'interruptible');
+  assert.equal(h.driver.calls.at(-1), 'interruptible', 'and the light was driven there');
+});
+
+test('the settle-back is attributed to the pin, not to the refused writer', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'interruptible');
+  await put(h, { state: 'on-air', source: 'auto:vcrec' });
+  await put(h, { state: 'available', source: 'auto:vcrec' });
+  assert.equal((await status(h)).source, 'human:hold', 'the pin decided this, and says so');
+});
+
+test('a refusal that is already at the held row changes nothing', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'recording');
+  const before = h.driver.calls.length;
+  assert.equal((await put(h, { state: 'available', source: 'auto:vcrec' })).status, 409);
+  assert.equal((await status(h)).state, 'recording');
+  assert.equal(h.driver.calls.length, before, 'no pointless re-drive of the light');
+});
+
+test('a 403 changes nothing at all - it is an authority fault, not a pin decision', async (t) => {
+  const h = await boot(t);
+  await pin(h, 'interruptible');
+  await put(h, { state: 'on-air', source: 'auto:vcrec' });
+  assert.equal((await put(h, { state: 'available', source: 'auto:vcrec', hold: false })).status, 403);
+  assert.equal((await status(h)).state, 'on-air', 'no settle-back on a 403');
+  assert.equal((await status(h)).hold, 'interruptible');
+});

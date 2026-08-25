@@ -167,9 +167,9 @@ else (state, light control, API) lives on the receiver.
 > | **D-16** firmware in a separate repo | **Reversed** by D-28, implemented by D-37 and **done** in D-47. Firmware lives in `firmware/`. The ESPHome `2026.8.0` pin and its warning survive. |
 > | **D-17** device transport over plain HTTP | **Intact**, **amended** by D-38: the device entity moves from `select` to `text`. Basic auth stays mandatory and stays separate from the passphrase. |
 > | **D-18** three-rung ladder | **Superseded** by D-31 (table), D-32 (busy rule), D-33 (`intended`), and **deleted from the code** by D-48. `level`, `onAir` and the rung routes no longer exist. |
-> | **D-19** hold as a floor | **Superseded** by D-32. Hold is a pin with one escalation carve-out. |
+> | **D-19** hold as a floor | **Superseded** by D-32, **shipped** by D-49. Hold is a pin with one escalation carve-out, and a refusal settles back to the held row. |
 > | **D-21.1** reconciliation merges only on contradiction | **Intact in spirit**, restated over `busy` rather than rungs. |
-> | **D-21.2** a manual write below the floor releases the floor | **Superseded** by D-32: a manual write naming a state other than the held one releases the pin. |
+> | **D-21.2** a manual write below the floor releases the floor | **Superseded** by D-32, shipped in D-48/D-49: a `human:` write naming a state other than the held one releases the pin. |
 > | **D-22** ESP32 integration live and accepted | **Intact.** All three sub-findings survive; D-22.3 (a write is not confirmed by the next read) is re-verified against `text` in D-38. D-22.1's `Render` sensor gains a fifth branch in D-46. |
 > | **D-23** `ONAIR_TOKEN` set on this host | **Superseded** by D-35. |
 > | **D-24** loopback alone does not authenticate; `Origin` does | **Survives, unweakened**, and is cited verbatim by D-35. The two measured attacks stay as regression tests. |
@@ -1353,3 +1353,42 @@ else (state, light control, API) lives on the receiver.
   and the installed plist still launches `$APPDIR/dist/index.js`. That is the deploy target the
   running system names, so building the current code into it is deploying, not shimming. Once
   `sudo deploy/onair update` runs, the root `dist/` is garbage and should be deleted.
+- **D-49 (2026-08-24)** **The pin refuses, and the held state stands - the second half of that
+  sentence was nearly missed.** Resolves
+  [#38](https://github.com/jwnichols3/rocket-on-air-sensor/issues/38). Implements D-32 and
+  contract §3.
+  **What shipped.** `judgeWrite()` is the pin rule as one pure function: an `auto:` write while
+  pinned applies only when it moves `busy: false -> busy: true`; everything else is `409`; a
+  `human:` write always applies; any source that is not `human:` touching `hold` at all is
+  `403`. **The `403` is checked first**, deliberately - an `auto:` source trying to *release* a
+  pin has an authority problem, and answering `409` would tell it to back off and wait when
+  what it needs to do is fix its `source`. The busy rule was already in the supervisor from
+  D-48; this ticket added the edges - the 90 s boundary, "a stale BUSY state IS still
+  heartbeated", "no auto-raise", "no TTL" - as tests rather than as new code.
+  **The bug worth recording, and how it surfaced.** The first implementation refused the write
+  and stopped there. The live transcript then read: pin `interruptible`, detector escalates to
+  `on-air`, call ends, detector's `available` is refused - **and the light stayed ON AIR.**
+  Every unit test passed. D-32's sentence is *"refused (`409`) and the held state stands"*, and
+  the contract spells out *"the light settles back to `interruptible`"*; the code implemented
+  the first clause and not the second. Left alone that is a **false ON that never clears**: the
+  meeting is over, and nothing will move the light again until a human notices - which is the
+  precise failure this system exists to prevent, arriving through the mechanism meant to
+  prevent it. **The pin is what the system falls back TO, not merely a veto.**
+  It was caught by reading a real transcript against the spec sentence, not by a test - the
+  tests asserted what the code did. That is the argument for running the thing and reading the
+  output even when the suite is green.
+  **So a `409` now settles the system at the held row**, drives the light there, and records
+  `source: human:hold` - the pin decided this, and says so. A `403` does none of that and
+  leaves the world exactly as it found it. A refusal already at the held row re-drives nothing.
+  **Attribution is a taste call.** `human:hold` rather than keeping the refused writer's source
+  or the source that set the pin. The settle-back is a human instruction being carried out, so
+  it is `human:`; naming it `hold` makes the event log read *"INTERRUPTIBLE human:hold"*, which
+  is what actually happened.
+  **One small correction in passing.** `/display`'s staleness check was
+  `source === 'detector' && age > 300`. Every detector source has been prefixed `auto:` since
+  D-41, so that condition had **stopped matching anything at all** - the page could never go
+  stale. It now trusts the server's `stale` field and only extends it forward between events,
+  which is the only thing a page with no clock of its own can usefully add.
+  **Measured on the real light**, end to end: pin -> escalate -> refuse -> settle back, with
+  the panel following each step (INTERRUPTIBLE, ON AIR, INTERRUPTIBLE), then release and a
+  clean automated `available`. 199 server tests, 19 deploy tests, `esphome config`, all green.

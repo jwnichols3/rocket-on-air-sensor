@@ -141,6 +141,13 @@ costume. It also means:
   `on-air`, and the pin **survives** that escalation - so when the call ends and the
   detector writes `available`, that write is refused and the light settles back to
   `interruptible`. *"I am interruptible today"* survives a meeting.
+- **"Settles back" is literal, and it is the half of the rule that is easy to miss.** A
+  refusal does not merely decline the write and leave the escalation standing - that would
+  be a false ON that never clears, since the meeting is over and nothing will move the light
+  again until a human notices. The `409` response body therefore reports the **held** row,
+  the light is driven there, and `source` reads `human:hold`: the pin decided this, and says
+  so. A `403` does none of that - an authority fault in the caller is not the pin reaching a
+  decision, and it leaves the world exactly as it found it.
 - Pinning to a `busy: true` row freezes it against everything automated.
 - Pinning to `available` is legal. It cannot force calm against a live camera, so there is
   nothing to prohibit.

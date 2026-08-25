@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   coerceSource,
   defaultState,
+  judgeWrite,
   ID_PATTERN,
   parseSource,
   SEED_ROWS,
@@ -249,4 +250,106 @@ test('persisted() carries intended and tableVersion, and never a live confirmed'
   assert.equal(p.intended, 'on');
   assert.equal(p.tableVersion, 1);
   assert.equal(p.confirmed, UNKNOWN_ID, 'a file records intent, never evidence about the device');
+});
+
+// ------------------------------------------------- THE PIN RULE (§3, D-32)
+
+const TABLE = new StateTable();
+
+function pinned(at: string) {
+  const store = new StateStore(defaultState(), new StateTable());
+  store.write(at, HUMAN, new Date(), true);
+  return store;
+}
+
+test('an auto write is REFUSED while pinned, unless it moves calm -> busy', () => {
+  const store = pinned('interruptible'); // busy: false
+  // The one carve-out. A detector escalation to a busy row is allowed...
+  assert.deepEqual(judgeWrite(store.get(), TABLE, 'on-air', AUTO), { ok: true });
+  // ...and nothing else automated is.
+  assert.equal(judgeWrite(store.get(), TABLE, 'available', AUTO).ok, false);
+  assert.equal(judgeWrite(store.get(), TABLE, 'interruptible', AUTO).ok, false);
+});
+
+test('a refused auto write is 409, not an error to retry', () => {
+  const store = pinned('interruptible');
+  const v = judgeWrite(store.get(), TABLE, 'available', AUTO);
+  assert.equal(v.ok, false);
+  if (!v.ok) {
+    assert.equal(v.status, 409, 'this is the system working, not a fault');
+    assert.match(v.error, /held/);
+  }
+});
+
+test('pinned to a busy row, NOTHING automated moves it', () => {
+  const store = pinned('recording'); // busy: true - there is no calm -> busy move available
+  for (const target of ['available', 'interruptible', 'on-air', 'unknown']) {
+    assert.equal(judgeWrite(store.get(), TABLE, target, AUTO).ok, false, `${target} must be refused`);
+  }
+});
+
+test('a human write always applies while pinned', () => {
+  const store = pinned('interruptible');
+  for (const target of ['available', 'on-air', 'recording', 'interruptible']) {
+    assert.deepEqual(judgeWrite(store.get(), TABLE, target, HUMAN), { ok: true });
+  }
+});
+
+test('only a human source may set, move or clear a pin - an auto attempt is 403', () => {
+  const store = new StateStore(defaultState(), new StateTable());
+  for (const hold of [true, false]) {
+    const v = judgeWrite(store.get(), TABLE, 'on-air', AUTO, hold);
+    assert.equal(v.ok, false);
+    if (!v.ok) assert.equal(v.status, 403);
+  }
+  // And a human may.
+  assert.deepEqual(judgeWrite(store.get(), TABLE, 'on-air', HUMAN, true), { ok: true });
+});
+
+test('the 403 is checked BEFORE the pin refusal: a wrong-authority write is not a 409', () => {
+  const store = pinned('recording');
+  const v = judgeWrite(store.get(), TABLE, 'on-air', AUTO, false);
+  assert.equal(v.ok, false);
+  // An auto: source trying to RELEASE a pin is an authority problem, and reporting it as
+  // "the pin refused you" would tell the client to back off rather than to fix its source.
+  if (!v.ok) assert.equal(v.status, 403);
+});
+
+test('with no pin set, an auto write is never refused', () => {
+  const store = new StateStore(defaultState(), new StateTable());
+  store.write('on-air', HUMAN);
+  assert.deepEqual(judgeWrite(store.get(), TABLE, 'available', AUTO), { ok: true });
+});
+
+test("THE REGRESSION: 'I am interruptible today' survives a meeting", () => {
+  const store = pinned('interruptible');
+  const table = store.getTable();
+
+  // The detector sees a call start. calm -> busy, so the carve-out lets it through.
+  assert.deepEqual(judgeWrite(store.get(), table, 'on-air', AUTO), { ok: true });
+  store.write('on-air', AUTO);
+  assert.equal(store.get().hold, 'interruptible', 'the pin SURVIVES the escalation');
+
+  // The call ends and the detector writes calm. Refused - and this is the whole point.
+  assert.equal(judgeWrite(store.get(), table, 'available', AUTO).ok, false);
+
+  // Nothing applied it, so the state the human pinned is what stands once they put it back.
+  store.write('interruptible', HUMAN);
+  assert.equal(store.get().state, 'interruptible');
+});
+
+test('no TTL: a pin an hour old is still in force', () => {
+  const store = new StateStore(defaultState(), new StateTable());
+  store.write('interruptible', HUMAN, new Date(Date.now() - 3600_000), true);
+  assert.equal(store.get().hold, 'interruptible');
+  assert.equal(store.stale(), true, 'stale is VISIBLE...');
+  assert.equal(judgeWrite(store.get(), TABLE, 'available', AUTO).ok, false, '...and never acted on');
+});
+
+test('a pin at available is legal and still refuses automated calm', () => {
+  const store = pinned('available');
+  assert.equal(store.get().hold, 'available');
+  // It cannot force calm against a live camera - the carve-out sees to that.
+  assert.deepEqual(judgeWrite(store.get(), TABLE, 'on-air', AUTO), { ok: true });
+  assert.equal(judgeWrite(store.get(), TABLE, 'interruptible', AUTO).ok, false);
 });

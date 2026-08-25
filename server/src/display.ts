@@ -98,7 +98,12 @@ export const DISPLAY_HTML = `<!doctype html>
     }
 
     function refreshStale() {
-      var stale = last !== null && last.source === 'detector' && effectiveAgeSeconds() > STALE_AFTER_SECONDS;
+      // The server computes 'stale' now (ageSeconds > 90) and puts it on the wire, so this
+      // page no longer second-guesses it - it only extends the last value forward between
+      // events, which is what a page with no clock of its own can add. The old local rule
+      // also tested source === 'detector', and every detector source is prefixed 'auto:'
+      // since D-41, so it had stopped matching anything at all.
+      var stale = last !== null && (last.stale === true || effectiveAgeSeconds() > STALE_AFTER_SECONDS);
       document.body.classList.toggle('stale', stale);
     }
 

@@ -8,6 +8,7 @@ import { DISPLAY_HTML } from './display.js';
 import { createSseHub, type SseHub } from './sse.js';
 import {
   coerceSource,
+  judgeWrite,
   parseSource,
   SEED_SHORTCUTS,
   UNKNOWN_ID,
@@ -392,6 +393,11 @@ async function handle(
       return;
     }
     if (!checkState(res, deps, state)) return;
+    const verdict = judgeWrite(deps.store.get(), deps.store.getTable(), state, parsed, hold as boolean | undefined);
+    if (!verdict.ok) {
+      await refuseWrite(res, deps, verdict, enqueueWrite, hub, ws, log);
+      return;
+    }
     await enqueueWrite(() => doWrite(deps, state, parsed, log, hold as boolean | undefined));
     broadcastAndSend(res, deps, hub, ws);
     return;
@@ -404,6 +410,11 @@ async function handle(
     if (!checkState(res, deps, id)) return;
     const source = coerceSource(url.searchParams.get('source'));
     const hold = holdFromQuery(url.searchParams.get('hold'));
+    const verdict = judgeWrite(deps.store.get(), deps.store.getTable(), id, source, hold);
+    if (!verdict.ok) {
+      await refuseWrite(res, deps, verdict, enqueueWrite, hub, ws, log);
+      return;
+    }
     await enqueueWrite(() => doWrite(deps, id, source, log, hold));
     broadcastAndSend(res, deps, hub, ws);
     return;
@@ -421,8 +432,58 @@ async function handle(
   if (!checkState(res, deps, target)) return;
   const source = coerceSource(url.searchParams.get('source'));
   const hold = holdFromQuery(url.searchParams.get('hold'));
+  const verdict = judgeWrite(deps.store.get(), deps.store.getTable(), target, source, hold);
+  if (!verdict.ok) {
+    await refuseWrite(res, deps, verdict, enqueueWrite, hub, ws, log);
+    return;
+  }
   await enqueueWrite(() => doWrite(deps, target, source, log, hold));
   broadcastAndSend(res, deps, hub, ws);
+}
+
+/**
+ * The source recorded when THE PIN decides the state rather than a client. It is a
+ * `human:` source because a pin is a human instruction and the row it names is a human's
+ * choice - the settle-back is that instruction being carried out, not a new decision.
+ */
+const PIN_SOURCE: Source = { kind: 'human', label: 'hold', raw: 'human:hold' };
+
+/**
+ * THE PIN RULE at the door (§3), including the half that is easy to miss: **"and the held
+ * state stands"**.
+ *
+ * Refusing the write is not enough. Pinned at `interruptible`, the carve-out lets a
+ * detector escalate to `on-air` when a call starts; when the call ends and the detector's
+ * `available` is refused, leaving `on-air` standing would be a **false ON that never
+ * clears** - the meeting is over and nothing will move the light again until a human
+ * notices. So a refusal settles the system back at the held row. The pin is what the
+ * system falls back TO, not merely a veto.
+ *
+ * A `403` does no such thing: that is an authority fault in the caller, not the pin
+ * reaching a decision, and it must leave the world exactly as it found it.
+ *
+ * Either way the response carries the CURRENT status body alongside the error, so the
+ * client sees what stands without a second round trip.
+ */
+async function refuseWrite(
+  res: ServerResponse,
+  deps: ServerDeps,
+  verdict: { status: 403 | 409; error: string },
+  enqueueWrite: EnqueueWrite,
+  hub: SseHub,
+  ws: WsBridge,
+  log: (line: string) => void,
+): Promise<void> {
+  const cur = deps.store.get();
+  if (verdict.status === 409 && cur.hold !== null && cur.state !== cur.hold) {
+    log(`[onair] pin refused an automated write; settling back to ${cur.hold}`);
+    const held = cur.hold;
+    await enqueueWrite(() => doWrite(deps, held, PIN_SOURCE, log));
+    const settled = statusBody(deps);
+    hub.broadcast(settled);
+    ws.broadcast(settled);
+  }
+  sendJson(res, verdict.status, { error: verdict.error, ...statusBody(deps) });
 }
 
 /**
