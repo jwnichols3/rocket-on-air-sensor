@@ -124,18 +124,36 @@ precedence, to talk to the running API and manage it (health checks,
 real environment variable always wins over the file; override the file's
 path with `ONAIR_CONFIG`.
 
-Change values with `onair setup` (asks port/token/state file, shows the
-current value as the default, restarts the daemon if it's running) or by
-hand-editing the file and running `onair restart`. `onair setup` writes the
-file atomically, owned by your user, mode `0600` (it can hold the token).
+**This file is an OVERLAY, not the config source.** Since D-50 the config
+document is `~/.onair/config.json`; `config.env` overrides it from the
+environment, for the host whose service will not boot.
+
+Change the port or the state file with `onair setup` (shows the current value
+as the default, restarts the daemon if it's running) or by hand-editing the file
+and running `onair restart`. `onair setup` writes the file atomically, owned by
+your user, mode `0600`.
+
+`setup` owns exactly two keys - `ONAIR_PORT` and `ONAIR_STATE_FILE` - between
+markers, and **carries every other line forward untouched**, comments included.
+It used to rewrite the file from scratch, which deleted keys it did not know
+about, including the `ONAIR_LIGHT_*` device credentials (#47).
+
+It does **not** ask about a token. `ONAIR_TOKEN` here overrides
+`auth.passphrase` in the config document, so writing one pinned the passphrase
+and quietly reverted any rotation done in the admin console at the next restart.
+The passphrase lives in the document and is rotated in the console (D-35, D-51);
+`setup` warns if it finds an `ONAIR_TOKEN` line rather than removing it, because
+somebody may have put it there on purpose.
 
 Format: `KEY="value"` lines, `#` comments allowed. Example
 `~/.onair/config.env`:
 
 ```sh
+# >>> managed by 'onair setup' - rerun it to change these
 ONAIR_PORT="8484"
-ONAIR_TOKEN="some-secret-value"
 ONAIR_STATE_FILE="/Users/john/.onair/state.json"
+# <<< end managed - everything below is yours and setup does not touch it
+ONAIR_LIGHT_HOST="10.42.12.77"
 ```
 
 ### Migration from `cli.env`

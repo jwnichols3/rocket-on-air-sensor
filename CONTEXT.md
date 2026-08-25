@@ -1825,3 +1825,45 @@ else (state, light control, API) lives on the receiver.
   rotation at the next restart, and its `[n]one` option promises an auth-off mode D-35
   removed.
 
+- **D-59 (2026-08-25)** **`onair setup` owns two keys and carries the rest of the overlay
+  forward untouched; it does not ask about a token any more.** Resolves
+  [#47](https://github.com/jwnichols3/rocket-on-air-sensor/issues/47), split out of D-58's
+  ticket.
+  **Two defects, and the second is the dangerous one.**
+  **1. The wizard could silently un-rotate the passphrase.** `ONAIR_TOKEN` in the env
+  overlay overrides `config.auth.passphrase` (`server/src/app.ts:149`) - which is D-14
+  working as designed, and is the SSH escape hatch. But it means `setup` writing a token
+  PINNED the passphrase: rotate it in the admin console afterwards (D-35, D-51) and the
+  rotation survived exactly until the next restart. Its `[n]one` option was worse than
+  useless - it promised an auth-off mode D-35 removed, and delivered the document's
+  passphrase instead. **The token question is gone.** An existing line is carried forward
+  verbatim and *warned about*, not deleted: somebody may have put it there on purpose, and
+  removing an escape hatch on their behalf is its own bug.
+  **2. `setup` deleted every key it did not know about.** It rewrote `config.env` from
+  scratch. Measured against a copy of this host's real overlay: one run dropped
+  `ONAIR_LIGHT_HOST`, `ONAIR_LIGHT_ENTITY`, `ONAIR_LIGHT_USER` and `ONAIR_LIGHT_PASS` -
+  the four lines D-56's migration note names as what actually hold the device credential
+  here. A verb advertised as *"re-runnable any time to reconfigure"* must not do that.
+  **This was already known.** `docs/superpowers/plans/2026-08-23-local-admin-and-menubar.md`
+  lists it as phase 1 item 1, *"Fix `onair setup` so it preserves keys it does not manage.
+  This is a live trap."* It sat in a plan for two days while the plan's later phases
+  shipped. Worth naming: a hazard recorded in a plan is not a hazard that is tracked.
+  **The fix, and why not the alternative.** #45 framed this as a choice - `setup` learns
+  to edit the document, or `setup` is retired in favour of the admin console.
+  **Neither.** `setup` stays and is narrowed to what an env overlay is legitimately for:
+  the port and the state file, written between markers, with everything outside them left
+  alone. Those two are exactly what you need to change when the service will not start,
+  which is precisely when the admin console is unreachable - so retiring the verb would
+  remove the only sudo-free repair path for the case the escape hatch exists to cover.
+  Taste call, flagged: this is a smaller change than either option #45 offered, and it
+  leaves the "should `setup` exist at all" question open rather than answering it.
+  **The file now says what it is.** A header explains that the document is
+  `config.json`, that this file overrides it, and that an `ONAIR_TOKEN` line here keeps
+  reverting a console rotation. The help text stops calling `setup` the way to reconfigure
+  the service.
+  New: `deploy/test-setup.sh`, 22 cases, no sudo and `$HOME` untouched - including the
+  env-leak guard (`read_config` prefers a real environment variable, so carrying the token
+  forward through it would promote a per-invocation override to a stored one) and
+  idempotence across two runs. `npm run verify`: 308 node, 19 update, 12 status, 22 setup,
+  firmware config valid.
+

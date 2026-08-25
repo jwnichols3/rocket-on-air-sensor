@@ -108,10 +108,20 @@ change configuration.
 | `ONAIR_STATE_FILE` | `~/.onair/state.json` | Where the call state persists |
 | `ONAIR_TOKEN` | unset | Bearer token; also enables `POST /admin/restart` |
 
-On the Mac, run `onair setup` to change values. It asks the same three questions
-as the install wizard, shows the current value as the default, and restarts the
-service if it is running. Re-run it any time. You can also edit
-`~/.onair/config.env` directly, then run `onair restart`.
+**These are OVERLAY values, not the service's configuration.** `~/.onair/config.json`
+is the config document (D-50) - it holds the state table, the bind mode, the
+passphrase and the device credentials, and the admin console edits it.
+`~/.onair/config.env` exists to override that document from the environment,
+which is how you unbrick a host whose service will not boot (D-14).
+
+`ONAIR_TOKEN` overrides `auth.passphrase`, so a line left in `config.env` keeps
+reverting a rotation done in the console. `onair setup` never writes one, and
+warns if it finds one.
+
+On the Mac, run `onair setup` to change the port or the state file. It owns those
+two keys and **carries every other line in the file forward untouched**, comments
+included. Re-run it any time. You can also edit `~/.onair/config.env` directly,
+then run `onair restart`.
 
 On the Pi, there is no CLI. Edit `~/.onair/config.env` directly, then run
 `sudo systemctl restart onair`.

@@ -70,6 +70,25 @@ read_config() {
   printf '%s' "$value"
 }
 
+# read_config_file KEY - like read_config, but reads ONLY the file, never the environment.
+#
+# Needed by `setup`, which REWRITES config.env from scratch. read_config prefers a real
+# environment variable, so using it to carry an existing line forward would bake whatever
+# happened to be exported in the invoking shell into the file on disk - turning a
+# per-invocation override into a permanent one, silently. (#47)
+read_config_file() {
+  local key="$1" line value
+  [[ -f "$CONFIG_FILE" ]] || return 0
+  line="$(grep "^${key}=" "$CONFIG_FILE" 2>/dev/null | tail -n 1)"
+  [[ -n "$line" ]] || return 0
+  value="$(printf '%s\n' "$line" | cut -d'=' -f2-)"
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s' "$value"
+}
+
 # valid_port ARG - true if ARG is an integer in 1-65535.
 valid_port() {
   local p="$1"
@@ -92,9 +111,13 @@ verbs:
   install [--sudoers]  render plist, install to launchd, bootstrap (runs
                         setup first if $CONFIG_FILE doesn't exist yet)
   setup [--non-interactive]
-                        interactive Q&A for port/token/state file; writes
+                        interactive Q&A for port/state file; writes
                         $CONFIG_FILE (0600); restarts if the daemon is up.
-                        Re-runnable any time to reconfigure.
+                        This edits the ENV OVERLAY, which is the escape hatch
+                        for a host whose service will not boot - not the
+                        service's configuration. Everything else (state table,
+                        bind mode, passphrase, device credentials) lives in
+                        ~/.onair/config.json and is edited in the admin console.
   uninstall            bootout, remove plist/newsyslog/symlink/sudoers
   start                bootstrap if not loaded, else kickstart
   stop                 bootout (returns at next boot; see 'disable')
@@ -116,7 +139,10 @@ verbs:
                         checkout with no upstream branch.
 
 Reads ONAIR_PORT (default 8484) and ONAIR_TOKEN from the environment or
-$CONFIG_FILE.
+$CONFIG_FILE. Both are OVERLAY values: a real environment variable wins over the
+file, and the file wins over ~/.onair/config.json - which is the config document
+the service actually reads. ONAIR_TOKEN overrides the passphrase, so a line left
+in $CONFIG_FILE will keep reverting a rotation done in the admin console.
 EOF
 }
 
@@ -441,12 +467,24 @@ cmd_setup() {
 
   # Current effective values (env > config file > built-in default). Read
   # fresh here since migrate_cli_env may have just created config.env.
-  local cur_port cur_token cur_state
+  local cur_port cur_state
   cur_port="$(read_config ONAIR_PORT)"; cur_port="${cur_port:-8484}"
-  cur_token="$(read_config ONAIR_TOKEN)"
   cur_state="$(read_config ONAIR_STATE_FILE)"; cur_state="${cur_state:-$TARGET_HOME/.onair/state.json}"
 
-  local new_port="$cur_port" new_token="$cur_token" new_state="$cur_state"
+  # THE TOKEN IS NOT ASKED ABOUT ANY MORE (#47). It is the passphrase now (D-35), it lives
+  # in ~/.onair/config.json, and it is rotated in the admin console with a grace window
+  # (D-51). Writing it here PINNED it: ONAIR_TOKEN in this overlay overrides
+  # config.auth.passphrase at boot (D-14, server/src/app.ts), so a rotation in the console
+  # survived exactly until the next restart and nothing said so.
+  #
+  # Only to decide whether to WARN. The line itself is carried forward by the rewrite
+  # below, along with every other key setup does not own. Read from the FILE, not through
+  # read_config: a token merely exported in the invoking shell is not one on disk, and
+  # confusing the two is how a per-run override becomes a permanent one.
+  local existing_token
+  existing_token="$(read_config_file ONAIR_TOKEN)"
+
+  local new_port="$cur_port" new_state="$cur_state"
 
   local interactive=false
   if [[ -t 0 && "$non_interactive" != "true" ]]; then
@@ -468,35 +506,6 @@ cmd_setup() {
         break
       fi
       echo "onair: invalid port '$ans' - must be an integer 1-65535" >&2
-    done
-
-    local default_choice="k"
-    [[ -z "$cur_token" ]] && default_choice="n"
-    while true; do
-      read -r -p "Token [k]eep/[g]enerate/[e]nter/[n]one ($default_choice): " ans || true
-      ans="${ans:-$default_choice}"
-      case "$ans" in
-        k|K) new_token="$cur_token"; break ;;
-        g|G) new_token="$(uuidgen | tr 'A-Z' 'a-z')"; break ;;
-        e|E)
-          while true; do
-            read -r -s -p "Enter token: " new_token || true
-            printf '\n'
-            if [[ "$new_token" == *'"'* ]]; then
-              echo "onair: token cannot contain a double-quote character - try again" >&2
-              continue
-            fi
-            if [[ -z "$new_token" ]]; then
-              echo "onair: token cannot be empty - try again (or choose [n]one)" >&2
-              continue
-            fi
-            break
-          done
-          break
-          ;;
-        n|N) new_token=""; break ;;
-        *) echo "onair: invalid choice '$ans' - enter k, g, e, or n" >&2 ;;
-      esac
     done
 
     read -r -p "State file [$cur_state]: " ans || true
@@ -522,35 +531,71 @@ cmd_setup() {
     daemon_was_up=true
   fi
 
-  local tmp_config
+  # SETUP OWNS TWO KEYS AND CARRIES EVERYTHING ELSE FORWARD VERBATIM (#47).
+  #
+  # It used to rewrite this file from scratch, which silently DELETED every key it did not
+  # know about. Measured against a copy of this host's real overlay: one run dropped
+  # ONAIR_LIGHT_HOST, ONAIR_LIGHT_ENTITY, ONAIR_LIGHT_USER and ONAIR_LIGHT_PASS - the four
+  # lines D-56's migration note says are what actually hold the device credential on this
+  # machine. A verb advertised as "re-runnable any time" must not do that.
+  #
+  # So the managed keys live between markers and everything outside them is the operator's,
+  # comments included. Re-running strips the old block by marker and writes a fresh one,
+  # which makes this idempotent rather than accumulating.
+  local tmp_config carried
   tmp_config="$(mktemp /tmp/onair.config.XXXXXX)"
-  cat > "$tmp_config" <<EOF
-# $CONFIG_FILE - onair service configuration.
-# Managed by 'onair setup' (rerun any time to change these values). Real
-# environment variables override the values below.
-ONAIR_PORT="$new_port"
-EOF
-  # An empty ONAIR_TOKEN="" line would be written as set-but-empty, which the
-  # service treats as a fatal misconfiguration (fail-closed empty-token
-  # guard, by design - see src/index.ts) and crash-loops on. A fresh
-  # no-token install must instead get no ONAIR_TOKEN= assignment at all.
-  if [[ -n "$new_token" ]]; then
-    printf 'ONAIR_TOKEN="%s"\n' "$new_token" >> "$tmp_config"
-  else
-    printf '%s\n' "# ONAIR_TOKEN is not set - no auth. Run 'onair setup' to add one." >> "$tmp_config"
+  carried="$(mktemp /tmp/onair.carried.XXXXXX)"
+  : > "$carried"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    # Drop the previous managed block, then any stray assignment to a managed key left
+    # over from before the markers existed. Nothing else is touched.
+    awk '
+      /^# >>> managed by .onair setup./ { skip = 1; next }
+      /^# <<< end managed/             { skip = 0; next }
+      skip                              { next }
+      /^ONAIR_PORT=/                    { next }
+      /^ONAIR_STATE_FILE=/              { next }
+      { print }
+    ' "$CONFIG_FILE" > "$carried"
   fi
-  cat >> "$tmp_config" <<EOF
-ONAIR_STATE_FILE="$new_state"
-EOF
+
+  {
+    echo "# $CONFIG_FILE - the onair ENV OVERLAY."
+    echo "#"
+    echo "# NOT the service's configuration. The config document is ~/.onair/config.json"
+    echo "# (D-50) and holds the state table, the bind mode, the passphrase and the device"
+    echo "# credentials; the admin console edits it. This file exists to OVERRIDE that"
+    echo "# document from the environment, which is how you unbrick a host whose service"
+    echo "# will not boot (D-14). A real environment variable still wins over this file."
+    echo "#"
+    echo "# ONAIR_TOKEN here overrides auth.passphrase, so a line left in this file will"
+    echo "# keep reverting a rotation done in the console. 'onair setup' never writes one."
+    echo "# >>> managed by 'onair setup' - rerun it to change these"
+    printf 'ONAIR_PORT="%s"\n' "$new_port"
+    printf 'ONAIR_STATE_FILE="%s"\n' "$new_state"
+    echo "# <<< end managed - everything below is yours and setup does not touch it"
+    cat "$carried"
+  } > "$tmp_config"
+
   install -o "$TARGET_USER" -m 0600 "$tmp_config" "$CONFIG_FILE"
-  rm -f "$tmp_config"
+  rm -f "$tmp_config" "$carried"
   echo "onair: wrote $CONFIG_FILE"
 
   # The rest of this run (restart/health-poll below, or cmd_install's own
   # flow if we were called from there) should see the values just written.
+  # ONAIR_TOKEN is deliberately NOT reassigned - this function no longer changes it, and
+  # the value read at startup is still the one the daemon is authenticating with.
   ONAIR_PORT="$new_port"
-  ONAIR_TOKEN="$new_token"
   STATE_FILE="$new_state"
+
+  if [[ -n "$existing_token" ]]; then
+    echo "onair: NOTE - $CONFIG_FILE sets ONAIR_TOKEN, which overrides auth.passphrase in" >&2
+    echo "onair: ~/.onair/config.json. Rotating the passphrase in the admin console will be" >&2
+    echo "onair: reverted at the next restart until you remove that line. Kept as you left it." >&2
+  else
+    echo "onair: the passphrase is not configured here - it lives in ~/.onair/config.json"
+    echo "onair: and is rotated in the admin console at http://localhost:$new_port/"
+  fi
 
   if [[ "$from_install" == "true" ]]; then
     return 0
