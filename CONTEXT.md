@@ -1161,3 +1161,24 @@ else (state, light control, API) lives on the receiver.
   **not** exercised in this run.
   Firmware change committed locally in `~/code/esp32` and **not pushed**; it moves into
   `firmware/` with D-37.
+- **D-45 (2026-08-24)** **The Companion module is the next push, gated on a tested v2 API.**
+  Rocket's scope call: *"Companion module - next push, once the API is well defined and
+  tested."* It is therefore **not** in the v2 build backlog (#35..#43), and the map already had
+  building it out of scope.
+  **The gate is concrete, not a feeling.** "Well defined" is done - `docs/api-contract.md` is
+  v2 and `GET /config/states` is specified. "Tested" means the server tickets have shipped and
+  soaked, so the gate is **#40 closed** (the last server ticket; the config store and auth it
+  depends on are its own blockers). The module's ticket carries that as a real blocking edge so
+  it cannot reach the frontier early.
+  **Phase 1 is finished and is not waiting on this.** D-11 built `GET /events/ws`, it is live
+  (D-22), and the #21 research confirmed the transport survives v2 intact - so the existing
+  zero-code generic-websocket wiring keeps working, which D-33 preserved deliberately. What was
+  never exercised is the **Companion side**: the research machine has 4.1.4 and it has never
+  been launched. That untested half is absorbed into the module ticket rather than left as a
+  separate open thread.
+  **One thing must not silently rot in the meantime.** `docs/companion-setup.md` documents a
+  `level == "interruptible"` feedback, and `level` ceases to exist the moment the state table
+  lands. That doc is now an acceptance criterion on the server ticket that deletes the field,
+  so the wiring Rocket may be running is not quietly falsified by a merge. The `?source=`
+  values in it survive untouched: an unprefixed `source` on a convenience route reads as
+  `human:` (D-41), and a Stream Deck press is a human.
