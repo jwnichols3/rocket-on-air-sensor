@@ -603,11 +603,22 @@ cmd_reload() {
 }
 
 cmd_status() {
-  local supervised=no state="unknown" pid="unknown" last_exit="unknown" disabled="unknown"
-  local print_out=""
+  # THREE states, not two (#45). `no` is a CLAIM - this daemon is not supervised - and it
+  # can only be made once the question has actually been asked. Without a cached sudo
+  # ticket or the `--sudoers` rule we cannot ask, and the old code reported that as `no`:
+  # a live, launchd-supervised service read as unsupervised, and the exit rule at the
+  # bottom acted on it. The comment below already described the intended behaviour; the
+  # code disagreed with it, and the code was the one that was wrong.
+  local supervised=unknown state="unknown" pid="unknown" last_exit="unknown" disabled="unknown"
+  local print_out="" sudo_err=""
+  sudo_err="$(mktemp /tmp/onair.status.XXXXXX)"
   # -n: never prompt for a password. Without a cached/NOPASSWD sudo ticket,
   # status degrades to "supervised: unknown" instead of hanging or exiting 1.
-  if print_out="$(sudo -n "$LAUNCHCTL" print "$T" 2>/dev/null)"; then
+  #
+  # Telling the two failures apart: sudo prefixes its OWN diagnostics with `sudo: ` and
+  # launchctl does not. That prefix is not localised, so this does not depend on the
+  # locale the way matching "a password is required" would.
+  if print_out="$(sudo -n "$LAUNCHCTL" print "$T" 2>"$sudo_err")"; then
     supervised=yes
     state="$(printf '%s\n' "$print_out" | awk -F' = ' '/^[[:space:]]*state = /{print $2; exit}')"
     pid="$(printf '%s\n' "$print_out" | awk -F' = ' '/^[[:space:]]*pid = /{print $2; exit}')"
@@ -620,19 +631,33 @@ cmd_status() {
     [[ -z "$state" ]] && state="unknown" || true
     [[ -z "$pid" ]] && pid="unknown" || true
     [[ -z "$last_exit" ]] && last_exit="unknown" || true
+  elif grep -q 'sudo:' "$sudo_err"; then
+    supervised=unknown
+  else
+    # sudo ran and launchctl answered no. That is a real answer.
+    supervised=no
   fi
+  rm -f "$sudo_err"
 
   local responding=no
   if health_check_once; then
     responding=yes
   fi
 
-  echo "supervised: $supervised (state=$state pid=$pid last-exit=$last_exit disabled=$disabled)"
+  if [[ "$supervised" == unknown ]]; then
+    # The detail fields are meaningless here - nothing was read - so they are not
+    # printed. A line of `unknown`s reads like an answer and this is not one.
+    echo "supervised: unknown - could not ask (needs a sudo ticket, or 'onair install --sudoers')"
+  else
+    echo "supervised: $supervised (state=$state pid=$pid last-exit=$last_exit disabled=$disabled)"
+  fi
   echo "responding: $responding"
 
-  # Only both layers down counts as failure - a not-yet-installed/unauthorized
-  # daemon that's still answering on the port (e.g. run by hand) is healthy.
-  if [[ "$supervised" == no && "$responding" == no ]]; then
+  # "Nothing proves this is up" is the failure, not "supervised == no". A not-yet-
+  # installed/unauthorized daemon that's still answering on the port (e.g. run by hand)
+  # is healthy - and a daemon that is NOT answering still fails when supervision could
+  # not be checked, which is the one behaviour worth keeping from the two-state version.
+  if [[ "$supervised" != yes && "$responding" == no ]]; then
     return 1
   fi
   return 0

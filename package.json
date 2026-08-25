@@ -20,7 +20,7 @@
     "firmware:setup": "make -C firmware setup",
     "firmware:compile": "make -C firmware compile",
     "verify": "npm run build --workspaces --if-present && npm run check --workspaces --if-present && npm run test --workspaces --if-present && npm run test:deploy && npm run firmware:config",
-    "test:deploy": "bash deploy/test-update.sh"
+    "test:deploy": "bash deploy/test-update.sh && bash deploy/test-status.sh"
   },
   "devDependencies": {
     "@types/node": "^22",

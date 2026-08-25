@@ -1794,3 +1794,34 @@ else (state, light control, API) lives on the receiver.
   wrong one; a temporary server row was added, overridden, removed, and the override
   reported itself dormant; Clear all restored `AVAILABLE` / `#0b6e2e` / `CALM LIGHT`
   exactly. The server config was left byte-identical apart from its version (9 -> 11).
+
+- **D-58 (2026-08-25)** **`onair status` has three supervision states, because "no" is a
+  claim and "I could not ask" is not.** Resolves
+  [#45](https://github.com/jwnichols3/rocket-on-air-sensor/issues/45).
+  `cmd_status` initialised `supervised=no` and only ever raised it to `yes`, so every
+  failure of `sudo -n launchctl print` - including the ordinary one, no cached ticket -
+  reported a live, launchd-supervised daemon as unsupervised. Measured on this host: the
+  listener on 8484 has **ppid 1**, and `status` said `supervised: no`.
+  **Not cosmetic.** `supervised == no` was half the exit-code rule, so a wrong string was
+  feeding a wrong exit status to anything scripting this.
+  **How the two failures are told apart:** sudo prefixes its own diagnostics with `sudo: `
+  and launchctl does not. That prefix is not localised, which matching *"a password is
+  required"* would have been.
+  **The exit rule is now "nothing proves this is up"** - `supervised != yes && responding
+  == no` - rather than "supervised == no && responding == no". That deliberately preserves
+  both established behaviours: unsupervised-but-responding is still healthy (something ran
+  it by hand), and not-responding-without-proof-of-supervision still fails, which is what
+  the old code did for the right answer by the wrong route. The one case that changes is
+  the one the ticket is about.
+  **`unknown` prints no detail fields.** A line of `state=unknown pid=unknown
+  last-exit=unknown` reads like an answer and is not one; it prints the fix instead.
+  New: `deploy/test-status.sh`, 12 cases, no sudo and nothing installed, wired into
+  `npm run test:deploy` alongside the update tests. The distinction this draws is exactly
+  the kind that rots silently, so it is pinned rather than trusted.
+  **The other half of #45 - `onair setup` writing the retired overlay - is
+  [#47](https://github.com/jwnichols3/rocket-on-air-sensor/issues/47).** Re-measuring it
+  found more than the wrong surface: `ONAIR_TOKEN` in the overlay overrides
+  `config.auth.passphrase` (`app.ts:149`), so the wizard can silently revert a console
+  rotation at the next restart, and its `[n]one` option promises an auth-off mode D-35
+  removed.
+
