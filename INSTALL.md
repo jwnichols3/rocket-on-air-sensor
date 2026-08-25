@@ -153,7 +153,10 @@ If `ONAIR_TOKEN` is set, add the token to the URL:
 
 ### The control panel
 
-Open `http://<host>:8484/ui`. The page has ON and OFF buttons, message controls, a
+Open `http://<host>:8484/display` for the tally page. The browser control panel is the
+admin UI (#42); until it lands, drive the state with `curl` - see `docs/api-contract.md`.
+
+The retired `/ui` page had ON and OFF buttons, message controls, a
 live event log, an API console, and an Admin card with a Restart button. If
 `ONAIR_TOKEN` is set, enter the token in the header field.
 
@@ -193,6 +196,6 @@ Follow `docs/companion-setup.md` for the exact settings. The outline:
 
 - [ ] Host: `curl http://<host>:8484/status` returns JSON from another machine.
 - [ ] On-air light: `/display` turns red on `POST /on` and dark on `POST /off`.
-- [ ] Control panel: `/ui` buttons change the call state.
+- [ ] Control panel: the admin UI changes the call state (`/ui` is retired - D-35).
 - [ ] Companion: the Stream Deck button changes the call state, and the button
       color follows it.

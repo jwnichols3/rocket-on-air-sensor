@@ -111,7 +111,9 @@ const REPAIR_HTML = `<!doctype html>
     }).then(function (r) {
       return r.json().then(function (b) { return { status: r.status, body: b }; });
     }).then(function (out) {
-      if (out.status === 200) { say('saved - reloading', true); setTimeout(function () { location.href = '/ui'; }, 600); }
+      // No redirect: /ui is retired (D-35) and this page stops being served the moment the
+      // save succeeds, so sending the browser anywhere would land it on a 404.
+      if (out.status === 200) { say('saved - the service has picked it up, and this page is done', true); }
       else say(out.status + ': ' + (out.body.error || '') + ' ' + ((out.body.problems || []).join('; ')), false);
     }).catch(function (e) { say('save failed: ' + e.message, false); });
   });

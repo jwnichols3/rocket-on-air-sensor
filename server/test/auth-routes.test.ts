@@ -300,11 +300,13 @@ test('GET /public/status is thin, resolved for rendering, and leaks nothing', as
   const h = await boot(t);
   await fetch(`${h.base}/state/on-air`, { method: 'POST' });
   const body = await json(await fetch(`${h.base}/public/status`, { headers: REMOTE }));
-  assert.deepEqual(Object.keys(body).sort(), ['ageSeconds', 'bgcolor', 'busy', 'color', 'label', 'stale', 'state', 'tableVersion']);
+  assert.deepEqual(Object.keys(body).sort(), ['ageSeconds', 'bgcolor', 'busy', 'color', 'label', 'message', 'stale', 'state', 'tableVersion']);
   assert.equal(body.state, 'on-air');
   assert.equal(body.label, 'ON AIR');
   assert.equal(body.bgcolor, '#c1121f');
   // No passphrase, no config, no hold, no source, no device detail.
+  // `message` is present because /display needs it and cannot read the gated stream. It
+  // discloses nothing the panel on the wall does not already show.
   for (const forbidden of ['hold', 'source', 'confirmed', 'passphrase', 'auth', 'light']) {
     assert.equal(forbidden in body, false, forbidden);
   }

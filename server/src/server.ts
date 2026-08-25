@@ -27,7 +27,6 @@ import {
   type StateStore,
   type StatusBody,
 } from './state.js';
-import { UI_HTML } from './ui.js';
 import { createWsBridge, type WsBridge } from './ws.js';
 
 export interface ServerDeps {
@@ -72,7 +71,6 @@ const ROUTES: Record<string, string[]> = {
   '/message': ['PUT', 'DELETE'],
   '/events': ['GET'],
   '/display': ['GET'],
-  '/ui': ['GET'],
   '/admin/health': ['GET'],
   '/admin/restart': ['POST'],
   '/config/states': ['GET'],
@@ -233,13 +231,21 @@ function statusBody(deps: ServerDeps): StatusBody {
  */
 function publicBody(deps: ServerDeps): Record<string, unknown> {
   const s = deps.store.status();
-  const row = deps.store.getTable().row(s.state);
+  const table = deps.store.getTable();
+  // A state with no row resolves to the RESERVED row's look, not to a hardcoded colour:
+  // `unknown` cannot be deleted (D-34) and the owner may have restyled it, so borrowing it
+  // is both always possible and always what they chose to mean "something is wrong".
+  const row = table.row(s.state) ?? table.row(UNKNOWN_ID)!;
   return {
     state: s.state,
-    label: row?.label ?? s.state.toUpperCase(),
-    color: row?.color ?? '#ff00ff',
-    bgcolor: row?.bgcolor ?? '#1a1a1a',
+    label: row.label,
+    color: row.color,
+    bgcolor: row.bgcolor,
     busy: s.busy,
+    // D-9: a message may never replace or obscure the state word, but /display is served
+    // unauthenticated and therefore cannot read the gated stream - so it has to arrive
+    // here. It discloses nothing the panel on the wall does not already show.
+    message: s.message,
     ageSeconds: s.ageSeconds,
     stale: s.stale,
     tableVersion: s.tableVersion,
@@ -565,12 +571,6 @@ async function handle(
   if (path === '/display') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(DISPLAY_HTML);
-    return;
-  }
-
-  if (path === '/ui') {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(UI_HTML);
     return;
   }
 

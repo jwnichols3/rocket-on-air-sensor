@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { LightDriver } from '../src/driver.js';
 import { createApiServer, type ServerDeps } from '../src/server.js';
@@ -43,6 +43,20 @@ interface BootExtras {
   exitFn?: () => void;
 }
 
+/**
+ * Every harness this file opens, so none can outlive the run.
+ *
+ * A test that throws before its `await h.close()` leaks a listening server, and the file
+ * then sits for the whole test-runner timeout with nothing to show for it - a five-second
+ * assertion failure reported after seventeen minutes. This has bitten twice. The sweep
+ * below is the cheap structural fix; `close()` is idempotent enough that a second call
+ * just rejects, so swallow it.
+ */
+const opened: Array<() => Promise<void>> = [];
+after(async () => {
+  await Promise.all(opened.map((close) => close().catch(() => {})));
+});
+
 async function boot(token?: string, log?: (line: string) => void, extras?: BootExtras): Promise<Harness> {
   const driver = new StubDriver();
   const persisted: PersistedState[] = [];
@@ -61,12 +75,13 @@ async function boot(token?: string, log?: (line: string) => void, extras?: BootE
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (typeof address !== 'object' || address === null) throw new Error('no address');
-  return {
-    base: `http://127.0.0.1:${address.port}`,
-    driver,
-    persisted,
-    close: () => new Promise((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
-  };
+  const close = (): Promise<void> =>
+    new Promise((resolve, reject) => {
+      server.closeIdleConnections();
+      server.close((e) => (e ? reject(e) : resolve()));
+    });
+  opened.push(close);
+  return { base: `http://127.0.0.1:${address.port}`, driver, persisted, close };
 }
 
 test('GET /status returns state plus ageSeconds', async () => {
@@ -342,7 +357,9 @@ test('GET /display serves the self-contained page', async () => {
   assert.match(res.headers.get('content-type') ?? '', /text\/html/);
   const html = await res.text();
   assert.match(html, /EventSource/);
-  assert.match(html, /ON AIR/);
+  // NOT a state word: the page holds no vocabulary since D-42/D-48 - the label arrives at
+  // runtime, resolved from the table. Asserting one here would re-bake one in.
+  assert.match(html, /public\/events/);
   assert.match(html, /WATCHDOG_SILENT_MS/);
   await h.close();
 });
@@ -357,37 +374,12 @@ test('token via query works on GETs only - a write must never put it in the logs
   await h.close();
 });
 
-test('GET /ui serves the control panel + API console page', async () => {
+test('GET /ui is GONE - it is retired, not moved', async () => {
   const h = await boot();
-  const res = await fetch(`${h.base}/ui`);
-  assert.equal(res.status, 200);
-  assert.match(res.headers.get('content-type') ?? '', /text\/html/);
-  const html = await res.text();
-  assert.match(html, /EventSource/);
-  assert.match(html, /WATCHDOG_SILENT_MS/);
-  for (const marker of [
-    '/status',
-    '/state',
-    '/state/on-air',
-    '/state/interruptible',
-    '/state/available',
-    'btn-hold',
-    'btn-release',
-    '/message',
-    'DELETE',
-    'btn-restart',
-    'admin-health',
-    '/admin/health',
-  ]) {
-    assert.ok(html.includes(marker), `expected UI_HTML to contain ${marker}`);
-  }
-  await h.close();
-});
-
-test('GET /ui is token-gated like other GETs', async () => {
-  const h = await boot('sekrit');
-  assert.equal((await fetch(`${h.base}/ui`)).status, 401);
-  assert.equal((await fetch(`${h.base}/ui?token=sekrit`)).status, 200);
+  // D-35 retired it into the admin UI. A 404 rather than a redirect: there is no
+  // equivalent page at another path, and pretending otherwise would send a bookmark
+  // somewhere that does not answer the same question.
+  assert.equal((await fetch(`${h.base}/ui`)).status, 404);
   await h.close();
 });
 

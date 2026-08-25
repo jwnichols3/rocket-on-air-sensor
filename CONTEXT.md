@@ -158,7 +158,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-5** contract v1 state model | **Amended** by D-31/D-32/D-33, rewritten in `docs/api-contract.md` v2, and **shipped** by D-48. `level`, `onAir` and the rung routes are gone; `/on` and `/off` survive but resolve through shortcut rows. |
 > | **D-6** no TTL / staleness visible, never acted on | **Intact in principle; its rule is restated** by D-32's BUSY RULE. No TTL, no decay, no auto-raise - all confirmed. |
 > | **D-7** optional `ONAIR_TOKEN` | **Superseded** by D-35, **shipped** by D-51. It is the passphrase now; the env var still works as an override. |
-> | **D-9** `/display` browser tally | **Intact.** D-48 pointed it at `state`; its appearances become table-driven in #41. Its `intended` fallback is what keeps a row it has never heard of rendering ON AIR rather than nothing. |
+> | **D-9** `/display` browser tally | **Intact**, and **rebuilt** by D-52: it holds no vocabulary at all now and renders any row from the table, off `GET /public/events`. Its message rule survives unchanged. |
 > | **D-10** `npx github:` distribution | **Amended** by D-15 then D-37, and **executed** by D-47: the root package is now `private` with no `bin`, so the `npx github:` path no longer resolves an executable. `deploy/get-onair` is the install path. |
 > | **D-11** hand-rolled WebSocket | **Intact and deployed.** The zero-dependency rule that justified it was never a rule (D-29); the code is not revisited. Its feedback wiring survives v2 because of D-33. |
 > | **D-12** light hardware on hold | Already superseded by D-16/D-18/D-21. |
@@ -173,7 +173,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-22** ESP32 integration live and accepted | **Intact.** All three sub-findings survive; D-22.3 (a write is not confirmed by the next read) is re-verified against `text` in D-38. D-22.1's `Render` sensor gains a fifth branch in D-46. |
 > | **D-23** `ONAIR_TOKEN` set on this host | **Superseded** by D-35 and D-51. The value now lives in `config.json`'s `auth` block; the env var overrides it. |
 > | **D-24** loopback alone does not authenticate; `Origin` does | **Survives, unweakened**, cited verbatim by D-35 and **implemented clause by clause** in D-51. Both measured attacks are regression tests, at the unit level and over HTTP. |
-> | **D-25** `/ui` and `/display` unauthenticated | **Amended** by D-35. `/ui` retires into the admin UI; the reasoning is restated as unauthenticated shell plus gated data. |
+> | **D-25** `/ui` and `/display` unauthenticated | **Amended** by D-35 and **executed** by D-52: `/ui` is a `404`, and `/display` is still unauthenticated with zero interpolation. |
 > | **D-26** SwiftBar, not a native app | **Survives**, confirmed. |
 > | **D-27** one credential, no read/write split | **Carried forward** onto the passphrase by D-35, shipped in D-51, and sharpened: the split that *does* exist is machine credential vs human admin credential, which is a different axis. |
 > | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
@@ -1503,3 +1503,42 @@ else (state, light control, API) lives on the receiver.
   broken one. It keeps working unauthenticated at the kiosk via `?token=`, and locally via the
   waiver. Moving it to `/public/events` belongs with #41, which rebuilds it.
   **272 server tests, 19 deploy tests, `esphome config`, green.** The light never went dark.
+- **D-52 (2026-08-25)** **`/display` holds no vocabulary, and `/ui` is gone.** Resolves
+  [#41](https://github.com/jwnichols3/rocket-on-air-sensor/issues/41). Implements D-42 and
+  D-25/D-35; D-9's rules are intact.
+  **The page no longer knows any states.** No hardcoded appearances, no list of ids, no CSS
+  class per rung - the server resolves the current row and sends `label`, `color` and
+  `bgcolor` already worked out. A test asserts that no row name appears anywhere in the page,
+  including in a comment, because anything it recognised by name would be a row it could draw
+  and another it could not. Proven in a browser with a row invented minutes earlier: `deep-work`
+  rendered `DEEP WORK` in the owner's `#0b0b0b` on `#7cc4ff`, with the message subordinate
+  underneath, then switched live to `ON AIR` on `#c1121f` with no reload.
+  **`message` was added to the public view, and that is a decision rather than an oversight.**
+  D-35 specified the thin payload without it, but `/display` is served unauthenticated and
+  therefore cannot read the gated stream, and D-9 requires the message. It discloses nothing
+  the panel on the wall does not already show. `hold` was **not** added: D-35 excluded it
+  deliberately, so the HELD badge is gone from `/display` and lives on the admin landing page
+  (#42), which reads gated data. A passer-by does not need to know whether a state was pinned.
+  **A state with no row borrows the RESERVED row's look**, rather than a colour compiled into
+  the page. `unknown` cannot be deleted (D-34), so it is always available, and the owner may
+  have restyled it - checked, by renaming it and watching the fallback follow.
+  **A silent bug only a browser could catch.** The rewritten page used `es.onmessage`. The SSE
+  hub sends `event: status`, a **named** event, and `onmessage` only receives unnamed ones. So
+  the page connected, the server streamed, and it sat on its opening `NO DATA` appearance
+  forever - **no error, nothing in the console, and every test passing**, because the tests
+  exercise the endpoint and not the page's script. This is exactly the class of failure the
+  live-Chrome check exists for, and it is the second time this repo has been saved by looking
+  at the thing. Now asserted structurally: the page must use `addEventListener('status')` and
+  must not use `onmessage`.
+  **A test-harness fix worth more than the ticket.** `server.test.ts` leaked a listening server
+  whenever an assertion threw before its `await h.close()`, so a five-second failure was
+  reported after seventeen minutes of hanging. It has bitten twice. The file now sweeps every
+  harness it opened in an `after()` hook; a deliberately-broken test that leaks now reports in
+  **0 s**, measured. The same shape as the note already in the ops memory, made structural.
+  **`/ui` is retired, not moved.** A `404`, deliberately: there is no equivalent page at another
+  path, and a redirect would send a bookmark somewhere that answers a different question. Its
+  Admin card and controls arrive in the admin UI (#42). **Between this ticket and that one
+  there is no browser control surface at all** - `curl` and the Stream Deck are the manual
+  paths. Stated plainly because it is a real gap, taken because #41 is specified to remove the
+  page and #42 was the next ticket in the same run.
+  283 server tests, 19 deploy tests, `esphome config`, green.

@@ -1,5 +1,14 @@
-// Self-contained tally page. No external resources - it must render on a kiosk
-// with no network beyond the API host. Served by GET /display.
+// Self-contained tally page. No external resources - it must render on a kiosk with no
+// network beyond the API host. Served by GET /display, unauthenticated (D-25).
+//
+// REBUILT AGAINST THE STATE TABLE (D-42, D-48). It no longer holds a vocabulary: there are
+// no hardcoded appearances and no list of known states. The server resolves the current row
+// and sends the label and the two colours already worked out, on `GET /public/events` -
+// which is unauthenticated precisely because this page is, and therefore cannot read the
+// gated stream.
+//
+// ZERO `${}` INTERPOLATION, deliberately (D-25): the page is byte-identical for every
+// caller and discloses nothing on its own. Everything it shows arrives at runtime.
 export const DISPLAY_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -8,136 +17,141 @@ export const DISPLAY_HTML = `<!doctype html>
 <meta name="referrer" content="no-referrer">
 <title>On Air</title>
 <style>
+  :root { --bg: #1a1a1a; --fg: #ff00ff; }
+  * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
-    display: flex; align-items: center; justify-content: center;
-    background: #111; cursor: none; overflow: hidden;
-    font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
-    transition: background 0.2s;
+    background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; overflow: hidden; user-select: none; -webkit-user-select: none;
+    transition: background-color 220ms ease, color 220ms ease;
   }
-  #word {
-    font-weight: 800; letter-spacing: 0.08em; text-align: center;
-    line-height: 1.1; padding: 0 4vw; overflow-wrap: anywhere;
-  }
-  body.on-air { background: #b30000; }
-  body.on-air #word { color: #fff; }
-  body.interruptible { background: #b38600; }
-  body.interruptible #word { color: #fff; }
-  body.available { background: #111; }
-  body.available #word { color: #3a3a3a; }
-  /* Ship UNKNOWN, never a state. The page must not claim "not on air" during exactly
-     the window when the server may be crash-looping. */
-  body.unknown { background: #4a0000; }
-  body.unknown #word { color: #ffb300; }
+  #word { font-weight: 800; letter-spacing: 0.01em; line-height: 1; padding: 0 3vw; }
   #sub {
-    position: fixed; bottom: 4vh; left: 0; right: 0; text-align: center;
-    font-size: 4vw; font-weight: 600; letter-spacing: 0.05em;
-    padding: 0 4vw; overflow-wrap: anywhere; display: none;
+    margin-top: 3vh; font-size: 4vw; font-weight: 500; line-height: 1.2;
+    max-width: 84vw; opacity: 0.85; overflow-wrap: anywhere;
   }
-  body.on-air #sub, body.interruptible #sub { color: rgba(255,255,255,0.85); }
-  body.available #sub, body.unknown #sub { color: #7a7a7a; }
-  #held {
-    position: fixed; top: 2vh; left: 2vw; display: none;
-    color: #ffb300; font-size: 3vw; font-weight: 600; letter-spacing: 0.08em;
+
+  /* The badges sit in the corners so they can never displace or cover the state word. */
+  #stale, #held {
+    position: fixed; top: 2vh; font-size: 2.4vw; font-weight: 700; letter-spacing: 0.12em;
+    padding: 0.6vh 1.4vw; border: 0.25vh solid currentColor; border-radius: 0.6vh;
+    display: none;
   }
-  body.held #held { display: block; }
+  #stale { right: 2vw; }
+  body.stale #stale { display: block; }
+
+  /* A hatched wash, so STALE is legible across a room without changing the state colour -
+     the colour is the state and nothing else is allowed to speak with it. */
+  body.stale::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none; opacity: 0.16;
+    background: repeating-linear-gradient(45deg, currentColor 0 2px, transparent 2px 14px);
+  }
+
   #overlay {
-    position: fixed; inset: 0; display: none;
-    align-items: center; justify-content: center;
-    background: rgba(0,0,0,0.85); color: #ffb300;
-    font-size: 8vw; font-weight: 700; letter-spacing: 0.1em;
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.82); color: #fff; font-size: 6vw; font-weight: 800;
+    letter-spacing: 0.08em;
   }
   body.disconnected #overlay { display: flex; }
-  #stale {
-    position: fixed; top: 2vh; right: 2vw; display: none;
-    color: #ffb300; font-size: 3vw; font-weight: 600;
-  }
-  body.stale #stale { display: block; }
 </style>
 </head>
-<body class="unknown">
-  <div id="word">NO DATA</div>
+<body>
+  <div id="word"></div>
   <div id="sub"></div>
-  <div id="held">HELD</div>
   <div id="stale">STALE</div>
   <div id="overlay">DISCONNECTED</div>
   <script>
-    var STALE_AFTER_SECONDS = 300;
+    // If the stream says nothing at all for this long, assume the connection is dead rather
+    // than that the world stopped changing. An SSE connection can sit open and silent.
     var WATCHDOG_SILENT_MS = 45000;
-    var token = new URLSearchParams(location.search).get('token');
+    // Extends the server's own 'stale' forward between events. The server is the authority
+    // on the threshold; this only ages the last value we were given.
+    var STALE_AFTER_SECONDS = 90;
+
     var word = document.getElementById('word');
     var sub = document.getElementById('sub');
-    // INTERIM. Hardcoded seed rows; #41 rebuilds this page against the real table, at
-    // which point the look comes from the row rather than from a stylesheet in here.
-    var LEVELS = ['available', 'interruptible', 'on-air', 'unknown'];
-    var WORDS = { available: 'AVAILABLE', interruptible: 'INTERRUPTIBLE', 'on-air': 'ON AIR', unknown: 'NO DATA' };
     var last = null;
     var lastAt = 0;
     var es;
 
-    function connect() {
-      if (es) {
-        try { es.close(); } catch (e) {}
-      }
-      es = new EventSource('/events' + (token ? '?token=' + encodeURIComponent(token) : ''));
-      es.addEventListener('status', function (e) {
-        document.body.classList.remove('disconnected');
-        last = JSON.parse(e.data);
-        lastAt = Date.now();
-        render(last);
-      });
-      es.onerror = function () {
-        document.body.classList.add('disconnected');
-      };
-      lastAt = Date.now();
+    // The reserved row's look is the fallback for "we have nothing" - never blank, and
+    // never calm. It is replaced by the server's own 'unknown' row the moment one arrives.
+    function unknownLook() {
+      return { label: 'NO DATA', color: '#ff00ff', bgcolor: '#1a1a1a', message: null, stale: false };
     }
 
     function effectiveAgeSeconds() {
-      if (last === null) return 0;
+      if (last === null) return Infinity;
       return last.ageSeconds + (Date.now() - lastAt) / 1000;
     }
 
     function refreshStale() {
-      // The server computes 'stale' now (ageSeconds > 90) and puts it on the wire, so this
-      // page no longer second-guesses it - it only extends the last value forward between
-      // events, which is what a page with no clock of its own can add. The old local rule
-      // also tested source === 'detector', and every detector source is prefixed 'auto:'
-      // since D-41, so it had stopped matching anything at all.
       var stale = last !== null && (last.stale === true || effectiveAgeSeconds() > STALE_AFTER_SECONDS);
       document.body.classList.toggle('stale', stale);
     }
 
     function render(s) {
-      // A kiosk tab can be running week-old JS, and a row invented this morning is one
-      // this page has never heard of - so fall back to the derived 'intended'. That is
-      // exactly RFC 3863's carry-along: a consumer that does not know the row still does
-      // something correct, and 'busy' means the fallback is ON AIR, never calm.
-      var level = s.state;
-      if (LEVELS.indexOf(level) === -1) level = s.intended === 'on' ? 'on-air' : 'available';
-      for (var i = 0; i < LEVELS.length; i++) {
-        document.body.classList.toggle(LEVELS[i], LEVELS[i] === level);
-      }
-      document.body.classList.toggle('held', s.hold !== null && s.hold !== undefined);
+      // No vocabulary here: whatever row the server resolved is what gets drawn, including
+      // one invented this morning. A page that only knew four appearances could not do that
+      // and would have to drop the state - and a state that degrades to nothing looks
+      // exactly like a calm one.
+      var label = typeof s.label === 'string' && s.label !== '' ? s.label : String(s.state || '').toUpperCase();
+      if (label === '') label = 'NO DATA';
+      document.documentElement.style.setProperty('--bg', s.bgcolor || '#1a1a1a');
+      document.documentElement.style.setProperty('--fg', s.color || '#ff00ff');
 
-      // D-9: a message may never replace or obscure the state word. It renders as a
-      // subordinate line underneath it.
-      var text = WORDS[level];
-      word.textContent = text;
-      word.style.fontSize = text.length > 12 ? '9vw' : '18vw';
+      word.textContent = label;
+      // Long labels shrink rather than wrap or overflow - a thirteen-character label has to
+      // fit the same glass as a six-character one. Naming an example here would put a row
+      // name back into a page whose whole point is that it holds none.
+      var size = label.length > 16 ? 7 : label.length > 12 ? 9 : label.length > 8 ? 12 : 18;
+      word.style.fontSize = size + 'vw';
+
+      // D-9, unchanged: a message renders as a subordinate line UNDER the state word and
+      // may never replace it or the colour.
       var msg = (s.message !== null && s.message !== undefined) ? String(s.message) : '';
       sub.textContent = msg;
       sub.style.display = msg === '' ? 'none' : 'block';
+
       refreshStale();
     }
 
+    function connect() {
+      if (es) { try { es.close(); } catch (e) {} }
+      // Unauthenticated by design: this page is served without a credential, so it cannot
+      // present one either. A ?token= left in a bookmarked URL is simply ignored.
+      es = new EventSource('/public/events');
+      es.onopen = function () { document.body.classList.remove('disconnected'); };
+      // A NAMED event, so onmessage would never fire - onmessage only receives unnamed
+      // ones. Getting this wrong is silent: the page connects, the server streams, and the
+      // page sits on its opening appearance forever with nothing in the console.
+      es.addEventListener('status', function (ev) {
+        var data;
+        try { data = JSON.parse(ev.data); } catch (e) { return; }
+        document.body.classList.remove('disconnected');
+        last = data;
+        lastAt = Date.now();
+        render(data);
+      });
+      es.onerror = function () { document.body.classList.add('disconnected'); };
+    }
+
+    // Ship as the unknown appearance rather than asserting anything before data arrives.
+    render(unknownLook());
     connect();
-    setInterval(refreshStale, 30000);
+
+    setInterval(refreshStale, 5000);
     setInterval(function () {
-      if (Date.now() - lastAt > WATCHDOG_SILENT_MS) {
+      if (lastAt !== 0 && Date.now() - lastAt > WATCHDOG_SILENT_MS) {
         document.body.classList.add('disconnected');
         connect();
       }
     }, 10000);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) connect();
+    });
   </script>
 </body>
 </html>

@@ -17,7 +17,7 @@ curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/mai
 ```
 [work Mac] --detector--> [On-air API on the Receiver] --> [on-air light]
                               ^
-                              | manual control: /ui, curl, Stream Deck (Companion)
+                              | manual control: admin UI, curl, Stream Deck (Companion)
 ```
 
 - The **Detector** runs on the work Mac. It senses the call state. It is not built
@@ -53,8 +53,8 @@ docs/  deploy/     repo-wide by nature, and stay at the root
 | `GET /status`, `PUT /state`, `POST /available`, `POST /interruptible`, `POST /dnd` | Read and write the call state (three rungs; `POST /on` and `/off` still work and map to `dnd`/`available`) |
 | `PUT /message`, `DELETE /message` | Set or clear the display message |
 | `GET /events` (SSE), `GET /events/ws` (WebSocket) | Push status to clients |
-| `GET /display` | The on-air light: a fullscreen tally page |
-| `GET /ui` | Control panel and API console |
+| `GET /display` | The on-air light: a fullscreen tally page, rendered from the state table |
+| `GET /public/status`, `GET /public/events` | Unauthenticated, deliberately thin - the current row resolved for rendering |
 | `GET /admin/health`, `POST /admin/restart` | Service health and remote restart |
 | `deploy/onair` | CLI that installs, configures (`setup`), updates, and controls the Mac service |
 | `deploy/bootstrap` | Builds and installs the host on either machine: `deploy/onair install` on the Mac, a rendered systemd unit on the Pi |
@@ -74,7 +74,7 @@ npm run build               # builds server/ into server/dist/
 npm start -w server         # or: npm run dev -w server
 ```
 
-Then open `http://localhost:8484/ui`.
+Then open `http://localhost:8484/display`.
 
 Configuration comes from environment variables: `ONAIR_PORT` (default 8484),
 `ONAIR_STATE_FILE` (default `~/.onair/state.json`), and `ONAIR_TOKEN` (optional

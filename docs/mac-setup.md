@@ -10,7 +10,7 @@ server/dist/index.js` from a local checkout. `RunAtLoad` brings it up on boot be
 any user logs in; `KeepAlive` restarts it if the process ever crashes or
 exits unexpectedly. It's administered through the `onair` CLI (wraps
 `launchctl`), the `GET /admin/health` / `POST /admin/restart` HTTP routes
-(`docs/api-contract.md`), and an Admin card on `/ui`.
+(`docs/api-contract.md`). `/ui` is retired (D-35); its Admin card moves into the admin UI.
 
 ## Install
 
@@ -194,9 +194,9 @@ it back: launchd's `KeepAlive` here, systemd's `Restart=always` on the Pi
 either machine - "restart" is universally "exit and let the supervisor
 notice."
 
-## `/ui` Admin card
+## The Admin card (retired with `/ui`)
 
-`http://<host>:8484/ui` has an Admin card showing health fields (pid, uptime,
+`/ui` is **retired** (D-35) and its Admin card moves into the admin UI (#42). It showed health fields (pid, uptime,
 node version, state file writable) polled from `/admin/health` every 10s and
 on SSE reconnect, plus a Restart button. The button is always enabled once
 the first health poll succeeds, regardless of whether `ONAIR_TOKEN` is
