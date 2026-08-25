@@ -324,6 +324,14 @@ async function doWrite(
   }
   // The device can hold any string. Only a row this server knows is evidence of anything.
   deps.store.setConfirmed(deps.store.getTable().has(confirmed) ? confirmed : UNKNOWN_ID);
+  // D-42's version nudge, on the path that already writes to the device. A no-op unless
+  // the version moved, and never a reason for the write to fail - the write already
+  // succeeded, and a device that missed the nudge re-pulls on its own interval.
+  try {
+    await deps.driver.setTableVersion?.(deps.store.getTable().version);
+  } catch (err) {
+    log(`[onair] version nudge failed: ${errorMessage(err)}`);
+  }
 }
 
 /** `?hold=1|true` pins, `?hold=0|false` releases, absent leaves it alone. */

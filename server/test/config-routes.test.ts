@@ -143,7 +143,16 @@ test('an invalid document is 400 listing every problem, and changes nothing', as
 
 test('the admin UI gets no privileged route - GET /admin/config is the same document', async (t) => {
   const h = await boot(t);
-  const body = await json(await fetch(`${h.base}/admin/config`));
+  const res = await fetch(`${h.base}/admin/config`);
+  const body = await json(res);
+  // Status and whole body first. This assertion failed exactly once in a full run on
+  // 2026-08-25 and has not reproduced in fifteen since; reading `.port` off an undefined
+  // `config` reported it as "Cannot read properties of undefined", which says nothing
+  // about WHICH wrong answer came back. The three candidates - 501 (no config store
+  // wired), 401 (the D-24 waiver refused) and the repair payload - are told apart by
+  // exactly this line. Left in deliberately: an unreproduced flake is not a fixed one.
+  assert.equal(res.status, 200, `expected the config document, got ${res.status}: ${JSON.stringify(body)}`);
+  assert.notEqual(body.config, undefined, `no config in the body: ${JSON.stringify(body)}`);
   assert.equal((body.config as OnAirConfig).port, 8484);
   assert.equal(body.problem, undefined);
 });
@@ -277,4 +286,83 @@ test('A FILE THAT FAILED TO LOAD IS NEVER OVERWRITTEN', async (t) => {
   const h = await boot(t, {}, broken);
   // Clobbering it would destroy the very thing the owner needs to read in the repair view.
   assert.equal(await readFile(h.configFile, 'utf8'), broken);
+});
+
+// ------------------------------------------------- D-42's version nudge, end to end
+
+class NudgeDriver implements LightDriver {
+  calls: string[] = [];
+  versions: number[] = [];
+  async set(id: string): Promise<string> {
+    this.calls.push(id);
+    return id;
+  }
+  async read(): Promise<string> {
+    return this.calls.at(-1) ?? UNKNOWN_ID;
+  }
+  async setTableVersion(version: number): Promise<void> {
+    this.versions.push(version);
+  }
+}
+
+test('a state write nudges the device with the current table version', async (t) => {
+  const driver = new NudgeDriver();
+  const h = await boot(t, { driver });
+  driver.versions.length = 0; // boot re-apply already wrote one
+  await fetch(`${h.base}/state/on-air`, { method: 'POST' });
+  assert.deepEqual(driver.versions, [1], 'the nudge rides along with the state write');
+});
+
+test('a table edit nudges immediately, without waiting for the next state write', async (t) => {
+  const driver = new NudgeDriver();
+  const h = await boot(t, { driver });
+  const before = driver.calls.length;
+  driver.versions.length = 0;
+
+  const cfg = defaultConfig();
+  await fetch(`${h.base}/admin/config`, {
+    method: 'PUT',
+    // A pure PRESENTATION edit: same rows, same ids, one different colour. Nothing about
+    // the state changes, so nothing would otherwise reach the device for up to 300s.
+    body: JSON.stringify({
+      ...cfg,
+      states: cfg.states.map((r) => (r.id === 'on-air' ? { ...r, bgcolor: '#00ff00' } : r)),
+    }),
+  });
+
+  assert.deepEqual(driver.versions, [2], 'the save nudges at the version it just wrote');
+  assert.equal(driver.calls.length, before, 'and it is not a state write');
+});
+
+test('a driver that cannot be nudged does not break a save or a write', async (t) => {
+  // StubDriver has no setTableVersion at all. The optional call must be exactly that.
+  const driver = new StubDriver();
+  const h = await boot(t, { driver });
+  const cfg = defaultConfig();
+  // Deliberately NOT a bind change: that rebinds, and with `port: 0` the service comes
+  // back on a different ephemeral port, which fails this test for a reason that has
+  // nothing to do with the nudge.
+  const put = await fetch(`${h.base}/admin/config`, {
+    method: 'PUT',
+    body: JSON.stringify({ ...cfg, states: cfg.states.map((r) => ({ ...r, description: 'edited' })) }),
+  });
+  assert.equal(put.status, 200);
+  const write = await fetch(`${h.base}/state/on-air`, { method: 'POST' });
+  assert.equal(write.status, 200);
+});
+
+test('a nudge that throws is logged and does not fail the write', async (t) => {
+  class ThrowingNudge extends NudgeDriver {
+    override async setTableVersion(): Promise<void> {
+      throw new Error('device fell over');
+    }
+  }
+  const lines: string[] = [];
+  const h = await boot(t, { driver: new ThrowingNudge(), log: (l: string) => lines.push(l) });
+  const res = await fetch(`${h.base}/state/on-air`, { method: 'POST' });
+  // The write ALREADY SUCCEEDED by the time the nudge runs. Reporting a failure here
+  // would tell the caller to retry a write that landed.
+  assert.equal(res.status, 200);
+  assert.equal((await json(res)).state, 'on-air');
+  assert.equal(lines.some((l) => l.includes('version nudge failed')), true, lines.join('\n'));
 });

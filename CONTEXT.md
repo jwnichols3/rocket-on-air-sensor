@@ -178,8 +178,9 @@ else (state, light control, API) lives on the receiver.
 > | **D-27** one credential, no read/write split | **Carried forward** onto the passphrase by D-35, shipped in D-51, and sharpened: the split that *does* exist is machine credential vs human admin credential, which is a different axis. |
 > | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
 > | **D-32** unprefixed `source` reads as `human:` | **Amended** by D-41: required and prefixed on `PUT /state`, optional on the convenience routes. |
-> | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. Its `select`->`text` half is proven by D-44 and **shipped** by D-46; the `select` no longer exists. |
+> | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. Its `select`->`text` half is proven by D-44 and **shipped** by D-46; the `select` no longer exists. Its **config-pull half is shipped by D-54**, which also removes the last hardcoded row list from the firmware. Its claim that `mode: password` keeps a value out of the device's REST API is **factually wrong and corrected by D-55** - a second feasibility-shaped error in the same decision. |
 > | **D-31** "colour is on the wire" | **Narrowed** by D-42: colour is in the profile (`GET /config/states`), never on a state change. Presentation travels with the profile, semantics with the state. |
+> | **D-42** presentation travels with the profile; the version nudge | **Shipped** by D-53 (server payload) and D-54 (the nudge, and the device end of the pull). The nudge fires on a state write *and* on a config save. |
 
 - **D-1 (2026-08-05)** Receiver is a Raspberry Pi hosting a REST API; the work Mac runs
   only a thin detector that calls that API. Rationale: light-control logic must not
@@ -1594,3 +1595,102 @@ else (state, light control, API) lives on the receiver.
   passphrase is shown in plaintext (D-39's call, unchanged): it has to be read to be typed into
   the ESP32 and Companion, and a reveal control would only add a click to that.
   300 server tests, 19 deploy tests, `esphome config`, green.
+
+- **D-54 (2026-08-25)** **The panel holds no vocabulary: the table is pulled, and colour
+  reaches a 1-bit display through shape.** Resolves
+  [#43](https://github.com/jwnichols3/rocket-on-air-sensor/issues/43). Implements D-38's
+  config pull and D-42's version nudge; **removes the last hardcoded row list from the
+  firmware.**
+  The device pulls `GET /config/states` on Wi-Fi connect, every 300 s, immediately on a key
+  its table does not contain, and immediately on a `tableVersion` it does not hold. Steady
+  state is a `304` on `If-None-Match`, echoing the server's own ETag bytes back rather than
+  re-deriving them. The buffer is D-38's 8 kB, and the number now has a measurement under
+  it: the seeded five-row table is **645 bytes on the wire**, so a row costs ~129 bytes and
+  8 kB covers ~60 rows. It is not free headroom - `HttpRequestSendAction::play` allocates
+  the whole buffer on every request, so sizing it for a hypothetical maximum table would
+  churn it every 300 s for nothing. A body that exactly fills the buffer is reported as
+  truncated rather than as a parse failure, because those have different fixes.
+  **Parsing is all-or-nothing and an empty `states` array is a failure, not an empty table.**
+  A bad pull leaves the previous table untouched; the server always seeds at least the
+  reserved `unknown` row, so zero rows means we misread the body. `NO CONFIG` is its own
+  branch on the glass, distinct from `NO DATA`: `NO DATA` means the server stopped talking
+  about *state*, `NO CONFIG` means we have never heard the *vocabulary*. Different cause,
+  different fix, different picture.
+  **The table is deliberately RAM-only.** ESPHome's restoring globals cap at 254 bytes,
+  which a table exceeds - but persisting it would be wrong anyway, since a table the device
+  cannot vouch for is exactly what `NO CONFIG` exists for. A reboot re-pulls, and a **15 s
+  retry runs until the first success and then stops**: without it a board that booted while
+  the server was down would sit on a blank-looking panel for up to five minutes after the
+  server came back. Measured: the `on_connect` pull sometimes fails, because association is
+  not a usable route - DHCP may not have finished - and delaying by a fixed amount would be
+  guessing at someone else's DHCP server.
+  **Colour, on a 1-bit panel, picks the CALM shape.** Two calm rows are identical in
+  semantics and differ only in presentation, so the shape has to come from presentation.
+  Lit pixels are what this display has instead of colour, so a brighter background gets more
+  of them: `luminance(bgcolor) >= 128` draws the ink-heavy double frame, below it the open
+  ring. On the seeded table this is **byte-identical to the old hardcoded look** -
+  `interruptible` (#e8a317, luma 167) heavy, `available` (#0b6e2e, luma 73) light - which is
+  the point: it reproduces the design without the firmware knowing either row's name.
+  **Colour gets no vote near a busy row.** Shape there stays keyed on `busy`, because a dark
+  red and a dark green have near-identical luma and a false OFF is the one error that
+  matters. That is the same reason an unknown key is assumed busy.
+  **Freeze means freeze.** `AutoProfile: off` gates the 300 s interval, the version nudge and
+  the unknown-key self-heal. It does **not** gate the boot pull (a frozen board has no table
+  to freeze - the table is not persisted - so gating it would strand the panel on `NO
+  CONFIG`), and it does not gate the Refresh button or a passphrase change, which are people
+  asking rather than the server asking. A freeze **survives a reboot**: `RESTORE_DEFAULT_ON`
+  restores the stored value and only defaults on when nothing is stored. Kept that way
+  deliberately - freezing is a decision and a power cut does not change the operator's mind,
+  and it is not a safety question, because state still pushes while frozen.
+  **A plain header, not an external component.** `firmware/configs/onair_table.h` is a
+  struct, a lookup and a parser. Forced detail worth recording: ESPHome emits an `includes:`
+  file **after** the block that instantiates `GlobalsComponent<T>`, so a `globals:` entry
+  whose C++ type comes from the include does not compile. The held table therefore lives in
+  a function-local static behind an inline accessor, which needs no declaration order at all.
+  What an external component would buy - a device-served config page, an NVS-persisted table
+  - is D-40's ground and stays [#33](https://github.com/jwnichols3/rocket-on-air-sensor/issues/33).
+  **Also gone with the hardcoded rows:** the `dnd` alias that carried the v1->v2 cutover, and
+  `PresenceKey`'s `initial_value: "dnd"`, which now lands on the reserved `unknown` row so a
+  restored value is a row this panel recognises.
+  **The version nudge, server side.** `LightDriver.setTableVersion?` is optional, is not read
+  back (it is advisory; the pull carries the table, and paying three extra reads on every
+  state write for it is the wrong trade), stops after one `404` (firmware older than this
+  has no such entity and would otherwise log on every write), and never caches a version it
+  failed to send. It fires on a state write **and on a config save** - without the second, a
+  pure presentation edit reaches the panel only when something else happens to write state,
+  which on a quiet afternoon is hours.
+  Live: a colour edit with no state write reached the glass in about three seconds; a key
+  the table lacked drew `UNKNOWN KEY`, triggered a pull, and the supervisor healed it;
+  frozen, the device ignored a nudge to v8 and stayed on v7 until the button was pressed.
+
+- **D-55 (2026-08-25)** **Correction: `mode: password` does not keep a value out of the
+  device's REST API. D-38 asserted that it does, and it does not.**
+  D-38 said *"`mode: password` masks the value in the JSON, so a passphrase entered on the
+  device is not readable from its own REST API"*, and #43's acceptance criteria were written
+  from that. **Measured on the pinned ESPHome 2026.8.0, on the live board:**
+  ```
+  GET /text/ServerPassphrase
+  {"id":"text/ServerPassphrase","value":"<the real passphrase>","state":"********"}
+  ```
+  `web_server.cpp:1421` picks a masked string for `state`; `set_json_value` then assigns the
+  **raw** `value` unconditionally, on every read and every SSE event. There is no detail
+  level or mode that suppresses it.
+  **Why this is not cosmetic.** The device's basic auth is the DEVICE credential (D-17). The
+  passphrase is the SERVER credential (D-35). Serving the second from behind the first
+  collapses the separation those two decisions exist to maintain: anyone who can read the
+  panel's own API gets the credential for every gated route on the server.
+  **The fix: no entity holds the secret.** `ServerPassphrase` is write-only - a `lambda:`
+  makes its value the constant `********` and a `set_action` is the only way in. Persistence
+  moves to an NVS preference blob in `onair_table.h`, where a stored value beats the
+  compiled-in `!secret` so a rotation survives a reflash. Verified after: `value` and
+  `state` both read `********`, at `?detail=all` too.
+  **The general lesson, and it is the same one D-40 recorded:** a component's YAML surface
+  was taken for a guarantee about its behaviour. `mode: password` is a UI hint about how to
+  render an input; reading it as an access-control property was the error. Check what the
+  component *serialises*, not what its option is called.
+  **Operational note for Rocket, not a code change:** the live passphrase was readable from
+  the device between the first flash of #43 and this fix, and it appeared in plaintext in
+  the session log that found it. Rotating it in the admin console is cheap - D-35's 60-minute
+  grace window exists exactly so the detector, Companion and the panel do not all break at
+  once - and it is on the review list rather than done, because it is a live-credential
+  change that is Rocket's to make.

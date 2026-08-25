@@ -37,5 +37,46 @@ changed in that release, and every URL in the server's driver
 The panel's state entity is a **`text`** named `PresenceKey`, not a `select` (D-38, proven
 on hardware in D-44, shipped in D-46). The device declares no set of valid states: it
 renders the key it is handed and draws a conspicuous `UNKNOWN KEY` branch for one it does
-not recognise. The recognised triple is still hardcoded until
-[#43](https://github.com/jwnichols3/rocket-on-air-sensor/issues/43) swaps in the pulled table.
+not recognise.
+
+**The panel now holds no vocabulary at all** (D-54). It pulls `GET /config/states` into RAM
+and renders whatever rows that returns - there is no hardcoded row list and no `dnd` alias
+left. The table is not persisted, so a fresh boot shows `NO CONFIG` until the first pull
+succeeds, which is correct: a table the device cannot vouch for is exactly what that branch
+is for.
+
+## The device's own entities
+
+All of these are at the device's IP on port 80, behind the `web_server` basic auth (D-17).
+
+| Entity | What it is |
+|---|---|
+| `text/PresenceKey` | the state key, written by the server |
+| `text/TableVersion` | the version nudge, written by the server (D-42) |
+| `text/ServerHost`, `number/ServerPort` | where to pull the table from |
+| `text/ServerPassphrase` | **write-only.** Reads back `********` - see below |
+| `switch/AutoProfile` | on = follow the server, off = freeze the table last pulled |
+| `button/RefreshProfile` | "Refresh profile from server". Pulls even when frozen |
+| `text_sensor/ConfigPull` | `version:rows:ok:failed`, for checking the pull from a shell |
+| `text_sensor/RowLabel`, `text_sensor/RowColor` | the current row as pulled |
+| `text_sensor/Render` | which SHAPE the display lambda drew |
+
+`ServerHost`, `ServerPort` and the passphrase persist across reboots and across a reflash;
+the `!secret` values in `secrets.yaml` are first-boot defaults only.
+
+### The passphrase is write-only, and that is not caution
+
+`mode: password` masks only the `state` field in ESPHome's JSON - `value` carries the raw
+string on every read. D-38 claimed otherwise; D-55 corrects it. So the passphrase is not
+held in an entity at all: it lives in a preference blob (`onair_table.h`) and the entity
+exists only to set it.
+
+Change it with:
+
+```sh
+curl -u onair:<web_server_password> -d '' \
+  "http://<device>/text/ServerPassphrase/set?value=<new passphrase>"
+```
+
+A change takes effect at once and triggers a pull, so `text_sensor/ConfigPull` tells you
+within a few seconds whether the new value works.

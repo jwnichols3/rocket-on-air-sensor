@@ -1,10 +1,19 @@
 substitutions:
   device_name: elegoo-esp32
   friendly_name: Elegoo ESP32
+  # The first-boot passphrase, compiled in. It reaches a lambda as a string literal, so a
+  # value containing a double quote or a backslash breaks the BUILD rather than doing
+  # anything subtle - which is the failure mode to want here.
+  onair_default_passphrase: !secret onair_passphrase
 
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
+  # The state table, its lookup and its parser. A header rather than an external
+  # component because that is the whole of it - see the file, and D-40 for what a real
+  # component would buy (#33).
+  includes:
+    - onair_table.h
   on_boot:
     # setup_priority::LATE - runs strictly after every component setup(). The template
     # text's setup() ends in publish_state(), which fires on_value unconditionally, so
@@ -12,7 +21,11 @@ esphome:
     # a calm restored state for 90s with nobody behind it.
     priority: -100
     then:
-      - lambda: 'id(last_write_ms) = 0;'
+      - lambda: |-
+          id(last_write_ms) = 0;
+          // Before anything can pull. The stored value wins over the compiled-in one, so
+          // a rotation typed at the panel survives a reflash.
+          onair::load_passphrase("${onair_default_passphrase}");
 
 esp32:
   board: esp32dev
@@ -41,11 +54,42 @@ wifi:
   # stack, and restore_value means a reboot preserves the level anyway.
   reboot_timeout: 10min
 
+  # The boot pull. NOT on_boot: at on_boot priority there is no network yet. on_connect
+  # also covers a reconnect after an outage, which is exactly when the table is most
+  # likely to have moved.
+  #
+  # UNGATED by auto_profile, unlike every other automatic trigger. The table is not
+  # persisted (see onair_table.h), so a frozen board that reboots has nothing to freeze -
+  # gating this would strand it on NO CONFIG until someone walked over and pressed
+  # Refresh. Freezing means "stop following CHANGES", and a board with no table at all is
+  # not being asked to follow a change.
+  on_connect:
+    then:
+      - script.execute: pull_table
+
   ap:
     ssid: "${friendly_name} Setup"
     password: !secret fallback_ap_password
 
 captive_portal:
+
+# Needed by the config pull, and declared rather than left to web_server's auto-load so
+# the dependency is visible where it is used.
+json:
+
+http_request:
+  id: http_client
+  useragent: onair-panel
+  # Longer than the server's own handlers need, short enough that a wedged link does not
+  # hold the loop through a display refresh.
+  timeout: 5s
+  # The request runs in the main loop. Without this a server that accepts the connection
+  # and then stalls trips the task watchdog before the request times out, and the board
+  # reboots for a reason that looks nothing like its cause.
+  watchdog_timeout: 15s
+  # D-17 pinned this transport to plain HTTP on the LAN. Leaving verification on would
+  # compile in the certificate bundle for a scheme this device never speaks.
+  verify_ssl: false
 
 web_server:
   port: 80
@@ -108,8 +152,10 @@ text:
     optimistic: true
     restore_value: true
     # Index 0 of the old select was "dnd" so that every degenerate path landed on the
-    # safe state. Same reasoning, same landing place.
-    initial_value: "dnd"
+    # safe state. Same reasoning; the landing place is now the reserved `unknown` row,
+    # because `dnd` stopped being a key this panel recognises when the hardcoded table
+    # went (#43) and a restored `dnd` would come back as UNKNOWN KEY.
+    initial_value: "unknown"
     # A row id is <=32 chars (D-31); 64 leaves room without inviting prose.
     #
     # min_length 1 because an empty write is accepted otherwise, and "" is not a state -
@@ -123,6 +169,267 @@ text:
         - lambda: |-
             uint32_t t = millis();
             id(last_write_ms) = (t == 0) ? 1 : t;
+        # A key this table does not contain means the server moved and we are stale. Pull
+        # at once rather than waiting out the interval, so the panel self-heals in one
+        # round trip (D-38). The UNKNOWN KEY branch is what it looks like until then.
+        - if:
+            condition:
+              and:
+                # FROZEN MEANS FROZEN. Self-healing is still following the server, and
+                # `custom` is the operator saying stop following. The panel sits on
+                # UNKNOWN KEY until someone unfreezes it or presses Refresh, which is
+                # visible and honest - silently un-freezing would not be.
+                - switch.is_on: auto_profile
+                - lambda: 'return onair::held().have && onair::find(onair::held().table, x) == nullptr;'
+            then:
+              - logger.log: "unknown key for this table - re-pulling"
+              - script.execute: pull_table
+
+  # ---- the version nudge (D-42) ----------------------------------------------------
+  # The server writes the table's version here alongside the state it already writes. A
+  # version we do not hold triggers a pull. This is a TRIGGER for a pull, not a push of
+  # the table: no configuration travels on the state path, and the server still keeps no
+  # registry beyond the one host it already writes to. Cost is one integer.
+  #
+  # NOT restore_value: a restored version would match a table we no longer hold after a
+  # reboot, and the nudge would stay silent exactly when it is needed. It is cheap to
+  # re-learn and expensive to be wrong about.
+  - platform: template
+    name: "TableVersion"
+    id: table_version_entity
+    mode: text
+    optimistic: true
+    restore_value: false
+    initial_value: ""
+    min_length: 0
+    max_length: 16
+    on_value:
+      then:
+        - if:
+            condition:
+              and:
+                # Gated for the same reason as the interval: the nudge is the server
+                # asking to be followed, and that is exactly what `custom` declines.
+                - switch.is_on: auto_profile
+                - lambda: 'return !x.empty() && x != onair::held().version;'
+            then:
+              - logger.log: "server announced a table version we do not hold - pulling"
+              - script.execute: pull_table
+
+  # ---- connection settings (D-38) --------------------------------------------------
+  # Rocket's actual list - which server, which port, which passphrase - as entities at
+  # the device's own address, behind the basic auth web_server already enforces (D-17).
+  # `restore_value` puts them in NVS, so a reboot does not send the panel back to a
+  # factory host. What is NOT here is an editable table: that needs an external
+  # component and is #33 (D-40).
+  - platform: template
+    name: "ServerHost"
+    id: server_host
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: !secret onair_server_host
+    # 0, not 1: an empty host is a legitimate thing to type on the way to a new one, and
+    # the pull already refuses to run without one. Refusing the keystroke instead would
+    # mean the field could never be cleared.
+    min_length: 0
+    max_length: 64
+  - platform: template
+    name: "ServerPassphrase"
+    id: server_passphrase
+    # WRITE-ONLY, and that is a correction to D-38 rather than caution.
+    #
+    # D-38 said `mode: password` keeps the value out of the device's own REST API. It does
+    # not: web_server masks `state` and writes the raw string to `value` on every GET and
+    # every SSE event (measured on 2026.8.0 - see onair_table.h). So this entity does not
+    # HOLD the passphrase at all. `lambda:` makes its value a constant, and `set_action`
+    # is the only way in - which is what a credential field should have been anyway.
+    #
+    # `lambda:` also rules out `optimistic` and `restore_value`, which is why persistence
+    # moved to a preference blob in the header.
+    mode: password
+    lambda: 'return {std::string("********")};'
+    # It never changes. This exists only because a template text is a polling component.
+    update_interval: 60s
+    min_length: 0
+    max_length: 128
+    set_action:
+      then:
+        - lambda: 'onair::set_passphrase(x);'
+        - logger.log: "server passphrase updated"
+        # Ungated, like the Refresh button: typing a new passphrase is a person asking
+        # to find out whether it works, not the server asking to be followed.
+        - script.execute: pull_table
+
+number:
+  - platform: template
+    name: "ServerPort"
+    id: server_port
+    optimistic: true
+    restore_value: true
+    initial_value: 8484
+    min_value: 1
+    max_value: 65535
+    step: 1
+    mode: box
+
+switch:
+  # auto (on, the default) pulls and follows the server. custom (off) FREEZES the table
+  # last pulled and stops pulling - the honest one bit of D-38's custom mode, which is
+  # the answer to "the server changed and I do not want to follow it right now". It is
+  # not local editing; that needs an external component and is #33 (D-40).
+  #
+  # RESTORE_DEFAULT_ON restores the STORED value and only defaults to on when there is
+  # nothing stored - so a freeze SURVIVES a reboot. Measured, because the first version of
+  # this comment claimed the opposite.
+  #
+  # Kept that way on purpose. Freezing is deliberate and nothing about a power cut changes
+  # the operator's mind, and it is not a safety question: state still pushes while frozen,
+  # so the panel is still current about what is happening. Only the table is held, and a
+  # row the frozen table lacks draws as UNKNOWN KEY rather than as anything calm.
+  - platform: template
+    name: "AutoProfile"
+    id: auto_profile
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+  # A safe first output for most ESP32 DevKit boards. The blue onboard LED,
+  # when fitted, is commonly connected to GPIO2 and is active-high.
+  - platform: gpio
+    name: "${friendly_name} Onboard LED"
+    pin: GPIO2
+    restore_mode: ALWAYS_OFF
+
+button:
+  # "Refresh profile from server" is Rocket's phrase and a good button label (D-42) -
+  # note the entity is still the state TABLE everywhere else, deliberately.
+  #
+  # This pulls even when frozen. Freezing means "stop following automatically"; a press
+  # is not automatic, and a frozen panel with no way to ask for the current table would
+  # need a reboot to recover.
+  - platform: template
+    name: "RefreshProfile"
+    id: refresh_profile
+    on_press:
+      then:
+        - script.execute: pull_table
+
+script:
+  # `single`, not `restart`: the interval, the version nudge, an unknown key and the
+  # button can all fire within a second of each other, and re-entering an in-flight
+  # request buys nothing. Extra invocations are dropped, which is the correct answer.
+  - id: pull_table
+    mode: single
+    then:
+      - lambda: |-
+          onair::held().auth_header = "Bearer " + onair::held().passphrase;
+          onair::held().inm_header = onair::held().etag;
+      - if:
+          condition:
+            lambda: 'return id(server_host).state.empty();'
+          then:
+            - logger.log: "config pull skipped - no server host configured"
+          else:
+            - http_request.get:
+                url: !lambda |-
+                  return "http://" + id(server_host).state + ":" +
+                         std::to_string((int) id(server_port).state) + "/config/states";
+                capture_response: true
+                # D-38 said 8 kB and 8 kB it is - but the number now has a measurement
+                # behind it: the seeded five-row table is 645 bytes on the wire, so a row
+                # costs ~129 bytes and this covers ~60 of them. It is not free headroom:
+                # the action allocates this WHOLE buffer on every request (measured in
+                # 2026.8.0's HttpRequestSendAction::play), so raising it to cover a
+                # hypothetical maximum table would churn it every 300s for nothing.
+                max_response_buffer_size: 8kB
+                request_headers:
+                  authorization: !lambda 'return onair::held().auth_header.c_str();'
+                  # Makes the steady state a 304 - the difference between a poll that
+                  # costs a header and one that costs a table.
+                  if-none-match: !lambda 'return onair::held().inm_header.c_str();'
+                collect_headers:
+                  - etag
+                on_error:
+                  then:
+                    # NOT an error state on the glass. An unreachable server means the
+                    # table we hold is the best information available, and it is still
+                    # correct - the staleness watchdog is what catches a server that has
+                    # stopped talking, and it is already running.
+                    - lambda: 'onair::held().failures++;'
+                    - logger.log: "config pull failed - keeping the table we have"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 304) {
+                          onair::held().oks++;
+                          ESP_LOGD("onair", "config pull: 304, table v%s still current",
+                                   onair::held().version.c_str());
+                          return;
+                        }
+                        if (response->status_code != 200) {
+                          onair::held().failures++;
+                          ESP_LOGW("onair", "config pull: HTTP %d", response->status_code);
+                          return;
+                        }
+                        // A body that exactly fills the buffer is a body we probably
+                        // truncated. Say so, because the alternative is a parse failure
+                        // reported as if the server sent nonsense.
+                        if (body.size() >= 8192) {
+                          onair::held().failures++;
+                          ESP_LOGW("onair", "config pull: %u bytes filled the buffer - table too large",
+                                   (unsigned) body.size());
+                          return;
+                        }
+                        onair::Table next;
+                        std::string version;
+                        if (!onair::parse_table(body, next, version)) {
+                          onair::held().failures++;
+                          ESP_LOGW("onair", "config pull: could not parse %u bytes",
+                                   (unsigned) body.size());
+                          return;
+                        }
+                        onair::held().table = next;
+                        onair::held().version = version;
+                        onair::held().etag = response->get_response_header("etag");
+                        onair::held().have = true;
+                        onair::held().oks++;
+                        ESP_LOGI("onair", "config pull: table v%s, %u rows, etag %s",
+                                 version.c_str(), (unsigned) onair::held().table.size(),
+                                 onair::held().etag.c_str());
+
+interval:
+  # UNTIL THE FIRST SUCCESSFUL PULL, and then never again.
+  #
+  # MEASURED, every boot: the pull fired from `on_connect` fails once. on_connect means
+  # the association came up, not that there is a usable route - DHCP has not necessarily
+  # finished - so the first request goes out too early. Delaying on_connect by a fixed
+  # amount would be guessing at someone else's DHCP server.
+  #
+  # This matters more than one wasted request. Without it, a board that boots while the
+  # server is down sits on NO CONFIG for up to 300 seconds after the server comes back,
+  # and NO CONFIG is a blank-looking panel. The condition is `!have`, so this stops
+  # costing anything the moment it has worked once.
+  - interval: 15s
+    then:
+      - if:
+          condition:
+            and:
+              - switch.is_on: auto_profile
+              - lambda: 'return !onair::held().have;'
+          then:
+            - script.execute: pull_table
+
+  # 300s is D-38's number and a taste call it names as one: "if the server changes you
+  # change" at a cadence nobody notices, without polling a table that changes monthly.
+  # The version nudge is what makes an edit feel immediate; this is the safety net under
+  # it, and the only thing that recovers a device that missed a nudge.
+  - interval: 300s
+    then:
+      - if:
+          condition:
+            switch.is_on: auto_profile
+          then:
+            - script.execute: pull_table
 
 font:
   - file: "gfonts://Roboto"
@@ -155,14 +462,53 @@ text_sensor:
     id: render_sensor
     update_interval: 2s
     lambda: |-
+      // Branch 0/5 no longer name a row - a busy row is a busy row and the LABEL is
+      // what tells them apart now (D-31). They name the SHAPE that was drawn, which is
+      // what this sensor is for: proving what reached the glass, over HTTP.
       switch (id(render_branch)) {
-        case 1: return {"INTERRUPTIBLE"};
-        case 2: return {"AVAILABLE"};
+        case 1: return {"CALM HEAVY"};
+        case 2: return {"CALM LIGHT"};
         case 3: return {"NO DATA"};
         case 4: return {"UNKNOWN KEY"};
-        case 5: return {"RECORDING"};
-        default: return {"ON AIR"};
+        case 6: return {"NO CONFIG"};
+        default: return {"BUSY"};
       }
+  - platform: template
+    # The current row's LABEL, as drawn. Together with RowColor this is how a config pull
+    # is proven from a shell instead of by looking at the panel - which matters because
+    # the interesting states are the ones that only last a few seconds.
+    name: "RowLabel"
+    id: row_label_sensor
+    update_interval: 5s
+    lambda: |-
+      if (!onair::held().have) return {"(no table)"};
+      const onair::Row *row = onair::find(onair::held().table, id(presence_key).state);
+      return row == nullptr ? std::string("(unknown key)") : row->label;
+  - platform: template
+    # The row's background colour, as pulled. This panel is 1-bit and cannot draw it -
+    # what it CAN do with colour is choose between the two calm shapes by luminance, see
+    # the display lambda. Publishing the value is how "colour reached the device" stops
+    # being an assertion.
+    name: "RowColor"
+    id: row_color_sensor
+    update_interval: 5s
+    lambda: |-
+      if (!onair::held().have) return {""};
+      const onair::Row *row = onair::find(onair::held().table, id(presence_key).state);
+      return row == nullptr ? std::string("") : onair::format_hex_color(row->bgcolor);
+  - platform: template
+    # version:rows:ok:failed. One string because it is one question - "is the pull
+    # working" - and four sensors would be four things to correlate.
+    name: "ConfigPull"
+    id: config_pull_sensor
+    update_interval: 5s
+    lambda: |-
+      char buf[48];
+      snprintf(buf, sizeof(buf), "%s:%u:%u:%u",
+               onair::held().have ? onair::held().version.c_str() : "none",
+               (unsigned) onair::held().table.size(),
+               (unsigned) onair::held().oks, (unsigned) onair::held().failures);
+      return {std::string(buf)};
   - platform: wifi_info
     ip_address:
       name: "${friendly_name} IP Address"
@@ -190,25 +536,20 @@ display:
       //      absent state falls through to the UNKNOWN branch, which is never calm.
       std::string key = id(presence_key).has_state() ? id(presence_key).state : std::string();
 
-      // The v2 seed table (D-31), hardcoded until the config pull lands. Two things come
-      // from a row and only two matter here: the LABEL to draw, and BUSY - which is what
-      // the old three-rung ladder actually encoded and all that survives of it.
-      const char *label = "";
-      bool known = true;
-      bool row_busy = true;
-      if      (key == "available")     { label = "AVAILABLE";     row_busy = false; }
-      else if (key == "on-air")        { label = "ON AIR";        row_busy = true;  }
-      else if (key == "interruptible") { label = "INTERRUPTIBLE"; row_busy = false; }
-      else if (key == "recording")     { label = "RECORDING";     row_busy = true;  }
-      else if (key == "unknown")       { label = "NO DATA";       row_busy = true;  }
-      // EXPAND-BEFORE-CONTRACT, and rollback insurance. `dnd` is the v1 rung `on-air`
-      // replaced; keeping it means the cutover restart is invisible on the glass rather
-      // than a flash of UNKNOWN KEY, and it means rolling the server back to the v1
-      // binary - which writes `dnd` again - does not blind the panel. The v2 server can
-      // never send this, since it is not a row. Removed with #43, when the table arrives
-      // over the config pull and this whole block goes with it.
-      else if (key == "dnd")           { label = "ON AIR";        row_busy = true;  }
-      else                             { known = false; }
+      // The table is PULLED now (#43), not compiled in. Three cases, and they are three
+      // different pictures because they have three different causes:
+      //   no table  -> we have never reached the server. NO CONFIG.
+      //   no row    -> we reached it once and it has moved on. UNKNOWN KEY, and re-pull.
+      //   a row     -> render it.
+      // The `dnd` alias that carried the v1->v2 cutover is gone with the hardcoded rows;
+      // the pulled table is the vocabulary now, which is the whole point of the pull.
+      const onair::Row *row = onair::held().have ? onair::find(onair::held().table, key) : nullptr;
+      bool no_config = !onair::held().have;
+      bool known = row != nullptr;
+      const char *label = known ? row->label.c_str() : "";
+      // An unknown key is assumed BUSY, for the same reason the server's table defaults
+      // it that way: of the two guesses only the calm one can be a false OFF.
+      bool row_busy = known ? row->busy : true;
 
       // ---- staleness: 0 means "nothing written since boot" (see on_boot) ----
       const uint32_t STALE_MS = 90000;
@@ -225,7 +566,17 @@ display:
       // A long label will not fit at 30px. Pick the size from the label, not the row.
       auto label_font = [&](const char *t) { return strlen(t) > 8 ? id(status_title) : id(status_huge); };
 
-      if (!known) {
+      if (no_config) {
+        // NO CONFIG - the table has never arrived, so there is no row to render and no
+        // claim this panel is entitled to make. Distinct from NO DATA on purpose: NO DATA
+        // means the SERVER stopped talking about state, this means WE have never heard
+        // the vocabulary. Different fix, different picture.
+        for (int x = 0; x < 128; x += 4) it.line(x, 0, x, 14, COLOR_ON);
+        it.printf(64, 26, id(status_title), COLOR_ON, TextAlign::CENTER, "NO CONFIG");
+        it.printf(64, 42, id(status_text), COLOR_ON, TextAlign::CENTER, "%s",
+                  id(server_host).state.empty() ? "no server set" : id(server_host).state.c_str());
+        id(render_branch) = 6;
+      } else if (!known) {
         // UNKNOWN KEY - the server named a state this build cannot draw. Solid header so
         // it cannot be mistaken for any of the rows, and the key itself on the glass so a
         // firmware/server skew is diagnosable without opening a laptop. Left-aligned
@@ -248,15 +599,29 @@ display:
         it.filled_rectangle(0, 0, 128, 48, COLOR_ON);
         it.printf(64, 24, label_font(label), COLOR_OFF, TextAlign::CENTER, "%s", label);
         if (stale) it.print(64, 44, id(status_text), COLOR_OFF, TextAlign::BASELINE_CENTER, "STALE");
-        id(render_branch) = (key == "recording") ? 5 : 0;
-      } else if (key == "interruptible") {
-        // INTERRUPTIBLE - double frame INSET above the band, mid ink.
+        id(render_branch) = 0;
+      } else if (onair::luminance(row->bgcolor) >= 128) {
+        // CALM, HEAVY - double frame INSET above the band, mid ink.
+        //
+        // THIS is where colour reaches a 1-bit panel. Two calm rows are identical in
+        // semantics and differ only in presentation, so the shape has to come from
+        // presentation - and lit pixels are what this display has instead of colour, so
+        // a brighter background gets more of them. It is not decoration: without it the
+        // hardcoded `key == "interruptible"` was the last piece of server vocabulary
+        // left in the firmware, which is exactly what D-38 set out to remove.
+        //
+        // Colour is deliberately NOT allowed near the busy branches. Shape there is
+        // keyed on `busy` and stays that way: a dark-red row and a dark-green row have
+        // near-identical luminance, and a false OFF is the one error that matters.
+        //
+        // On the seeded table this draws exactly what it drew before - INTERRUPTIBLE
+        // (#e8a317, luminance 167) heavy, AVAILABLE (#0b6e2e, luminance 73) light.
         it.rectangle(0, 0, 128, 48, COLOR_ON);
         it.rectangle(2, 2, 124, 44, COLOR_ON);
         it.printf(64, 24, label_font(label), COLOR_ON, TextAlign::CENTER, "%s", label);
         id(render_branch) = 1;
       } else {
-        // AVAILABLE - a big open ring plus the word. Comparable ink, unmistakable shape.
+        // CALM, LIGHT - a big open ring plus the word. Comparable ink, unmistakable shape.
         it.filled_circle(64, 24, 22, COLOR_ON);
         it.filled_circle(64, 24, 15, COLOR_OFF);
         it.printf(64, 24, id(status_text), COLOR_ON, TextAlign::CENTER, "%s", label);
@@ -265,11 +630,3 @@ display:
 
       // Last statement on every path: proves the panel repainted.
       id(frames)++;
-
-# A safe first output for most ESP32 DevKit boards. The blue onboard LED,
-# when fitted, is commonly connected to GPIO2 and is active-high.
-switch:
-  - platform: gpio
-    name: "${friendly_name} Onboard LED"
-    pin: GPIO2
-    restore_mode: ALWAYS_OFF

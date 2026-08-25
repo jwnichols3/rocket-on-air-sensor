@@ -152,7 +152,10 @@ export async function createApp(opts: AppOptions): Promise<App> {
     for (const e of problem.errors) log(`[onair]   ${e}`);
   }
 
-  const driver =
+  // Annotated, not inferred: the inferred union includes NoopDriver, which has no
+  // `setTableVersion`, and TypeScript refuses `?.` on a union where one member lacks the
+  // property outright. The interface is what every caller here is entitled to assume.
+  const driver: LightDriver =
     opts.driver ?? opts.makeDriver?.(config) ?? driverFor(config, log) ?? new NoopDriver(log);
 
   const stateLoaded = await loadState(opts.stateFile, log);
@@ -281,6 +284,15 @@ export async function createApp(opts: AppOptions): Promise<App> {
     config = next;
     problem = undefined; // a successful save is the repair
     store.setTable(new StateTable(next.states, next.version));
+    // Nudge here as well as on a state write (D-42). Without this a pure presentation
+    // edit - renaming a row, changing a colour - reaches the panel only when the next
+    // state write happens, which on a quiet afternoon is hours. The nudge is what makes
+    // an edit in the console feel like it did something.
+    try {
+      await driver.setTableVersion?.(next.version);
+    } catch (err) {
+      log(`[onair] version nudge failed: ${errorMessage(err)}`);
+    }
 
     if (!rebinding) return { ok: true };
 

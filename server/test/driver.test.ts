@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
-import { NoopDriver } from '../src/driver.js';
+import { NoopDriver, type LightDriver } from '../src/driver.js';
 import { DriverConfigError, EsphomeTextDriver } from '../src/esphome-driver.js';
 import { UNKNOWN_ID } from '../src/state.js';
 
@@ -24,6 +24,10 @@ interface FakeDevice {
   base: string;
   host: string;
   posts: string[];
+  /** Every value written to the TableVersion entity - D-42's version nudge. */
+  versionPosts: string[];
+  /** When true the device has no TableVersion entity, i.e. firmware older than #43. */
+  noVersionEntity: boolean;
   gets: string[];
   auth: string[];
   value: string;
@@ -40,7 +44,7 @@ interface FakeDevice {
 
 async function fakeDevice(): Promise<FakeDevice> {
   const d: Partial<FakeDevice> = {
-    posts: [], gets: [], auth: [], value: 'on-air', minLength: 1, maxLength: 64,
+    posts: [], versionPosts: [], noVersionEntity: false, gets: [], auth: [], value: 'on-air', minLength: 1, maxLength: 64,
     swallowWrites: false, applyDelayMs: 0, status: null, frames: 0,
   };
   const server: Server = createServer((req, res) => {
@@ -67,6 +71,15 @@ async function fakeDevice(): Promise<FakeDevice> {
       };
       if (d.applyDelayMs! > 0) setTimeout(apply, d.applyDelayMs!).unref();
       else apply();
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/text/TableVersion/set') {
+      if (d.noVersionEntity) {
+        res.writeHead(404).end();
+        return;
+      }
+      d.versionPosts!.push(url.searchParams.get('value') ?? '');
+      res.writeHead(200, { 'content-length': '0' }).end();
       return;
     }
     if (req.method === 'GET' && url.pathname === '/text/PresenceKey') {
@@ -263,4 +276,54 @@ test('set still reports the truth when the write genuinely never applies', async
   const driver = driverFor(d);
   assert.equal(await driver.set('available'), 'on-air', 'a dropped value must not be papered over by retries');
   await d.close();
+});
+
+// ---- D-42's version nudge -------------------------------------------------------
+
+test('the version nudge writes the version to its own entity, and only when it moves', async (t) => {
+  const d = await fakeDevice();
+  t.after(() => d.close());
+  const driver = driverFor(d);
+  await driver.setTableVersion(6);
+  await driver.setTableVersion(6);
+  await driver.setTableVersion(6);
+  assert.deepEqual(d.versionPosts, ['6'], 'an unchanged version is not worth a request');
+  await driver.setTableVersion(7);
+  assert.deepEqual(d.versionPosts, ['6', '7']);
+  // It must not touch the state entity. Configuration does not travel on the state path.
+  assert.deepEqual(d.posts, [], 'the nudge is not a state write');
+});
+
+test('firmware with no TableVersion entity is written off after one 404, not once per write', async (t) => {
+  const d = await fakeDevice();
+  t.after(() => d.close());
+  d.noVersionEntity = true;
+  const lines: string[] = [];
+  const driver = driverFor(d, { log: (l: string) => lines.push(l) });
+  await driver.setTableVersion(6);
+  await driver.setTableVersion(7);
+  await driver.setTableVersion(8);
+  // One message, not three. A host running pre-#43 firmware would otherwise get a line
+  // in its log on every single state write, about a feature it does not have.
+  assert.equal(lines.filter((l) => l.includes('predates the version nudge')).length, 1);
+});
+
+test('a nudge that did not get through is retried on the next one', async (t) => {
+  const d = await fakeDevice();
+  t.after(() => d.close());
+  d.status = 503; // the device is up but not answering this
+  const driver = driverFor(d);
+  await driver.setTableVersion(6);
+  assert.deepEqual(d.versionPosts, [], 'nothing was recorded');
+  d.status = null;
+  await driver.setTableVersion(6);
+  // Caching a version that was never delivered would leave the device holding an old
+  // table until its next 300s poll, with the server believing it had been told.
+  assert.deepEqual(d.versionPosts, ['6'], 'the same version is sent again after a failure');
+});
+
+test('a driver with no device to nudge is not required to have the method', () => {
+  // The interface makes it optional so NoopDriver stays honest rather than pretending.
+  const noop: LightDriver = new NoopDriver(() => {});
+  assert.equal(noop.setTableVersion, undefined);
 });

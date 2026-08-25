@@ -6,6 +6,8 @@ export interface EsphomeDriverOptions {
   host: string;
   /** The ESPHome text NAME, not its object_id. Must match the YAML `name:`. */
   entity?: string;
+  /** The ESPHome text NAME carrying the table version (D-42's nudge). */
+  versionEntity?: string;
   username?: string;
   password?: string;
   timeoutMs?: number;
@@ -46,6 +48,7 @@ export class DriverConfigError extends Error {}
 export class EsphomeTextDriver implements LightDriver {
   private readonly base: string;
   private readonly entity: string;
+  private readonly versionEntity: string;
   private readonly headers: Record<string, string>;
   private readonly timeoutMs: number;
   private readonly retries: number;
@@ -56,10 +59,13 @@ export class EsphomeTextDriver implements LightDriver {
   private readonly log: (line: string) => void;
   private lastFrames: number | null = null;
   private lastFrameChangeAt = 0;
+  private lastVersionSent: number | null = null;
+  private versionEntityMissing = false;
 
   constructor(opts: EsphomeDriverOptions) {
     this.base = `http://${opts.host}`;
     this.entity = encodeURIComponent(opts.entity ?? 'PresenceKey');
+    this.versionEntity = encodeURIComponent(opts.versionEntity ?? 'TableVersion');
     this.timeoutMs = opts.timeoutMs ?? 2000;
     this.retries = opts.retries ?? 1;
     this.retryGapMs = opts.retryGapMs ?? 400;
@@ -137,6 +143,44 @@ export class EsphomeTextDriver implements LightDriver {
       if (i < this.confirmTries - 1) await new Promise((r) => setTimeout(r, this.confirmGapMs));
     }
     return got;
+  }
+
+  /**
+   * D-42's version nudge: writes the current table version to a small entity on the
+   * device. A device holding a version it does not recognise re-pulls `GET /config/states`
+   * at once, so an edit in the admin console reaches the panel in a round trip instead of
+   * up to 300 seconds later.
+   *
+   * Three things this deliberately does NOT do:
+   *   - It does not read back. The nudge is advisory; the pull is what carries the table,
+   *     and a nudge that silently failed costs at most one 300s interval. Paying three
+   *     extra reads for that on every state write is the wrong trade.
+   *   - It does not retry a MISSING entity. Firmware older than #43 has no TableVersion
+   *     and answers 404 forever. Logging that on every write would bury the log in a
+   *     message about a feature that host does not have yet.
+   *   - It does not cache a version it failed to send, so an unreachable device is nudged
+   *     again on the next write rather than being written off.
+   */
+  async setTableVersion(version: number): Promise<void> {
+    if (this.versionEntityMissing || this.lastVersionSent === version) return;
+    const url = `${this.base}/text/${this.versionEntity}/set?value=${encodeURIComponent(String(version))}`;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: this.headers,
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      await res.arrayBuffer();
+      if (res.status === 404) {
+        this.versionEntityMissing = true;
+        this.log(`[esphome-driver] no "${this.versionEntity}" entity - firmware predates the version nudge`);
+        return;
+      }
+      if (!res.ok) throw new Error(`POST ${res.status}`);
+      this.lastVersionSent = version;
+    } catch (err) {
+      this.log(`[esphome-driver] version nudge failed: ${errText(err)}`);
+    }
   }
 
   async read(): Promise<string> {

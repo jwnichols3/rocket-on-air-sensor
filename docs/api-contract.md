@@ -277,7 +277,9 @@ Self-describing so a client can ask what states exist rather than being compiled
 
 Send `If-None-Match: "<version>"` to get a `304` when nothing has changed. The ESP32 polls
 this every 300 s, on boot, immediately after being handed an `id` it does not know, and
-immediately when it notices `tableVersion` has moved (see below).
+immediately when it notices `tableVersion` has moved (see below). It also retries every 15 s
+until its **first** successful pull and then stops - a board that boots while the server is
+down would otherwise sit on `NO CONFIG` for up to five minutes after the server returns.
 
 **The version nudge.** Polling alone would leave a colour edit up to 5 minutes from the panel,
 which feels broken when you just made it in the admin UI. So the server also writes the current
@@ -300,6 +302,14 @@ recorded here because it is the one place a reader will look.
 - **An invalid value returns `200` and is silently dropped**, leaving the previous state in
   place. Measured for both over-length and empty writes. **Read-back after a write is
   mandatory**; the write's status code tells you nothing.
+- **`mode: password` does NOT keep a value out of the device's API.** It masks the `state`
+  field and writes the raw string to `value`, on every `GET` and every SSE event:
+  `{"id":"text/X","value":"<the real secret>","state":"********"}`. Unconditional -
+  `web_server.cpp:1421` picks the masked `state`, then `set_json_value` assigns `value`
+  regardless. **D-38 asserted the opposite and was wrong** (corrected in D-55). A credential
+  on the device must not live in a `text` entity's value at all; the panel keeps the server
+  passphrase in a preference blob and its `ServerPassphrase` entity is write-only, reading
+  back a constant. Measured 2026-08-25.
 - **A misspelt entity gets a `404`; a missing *component* gets no reply at all.**
   `GET /text/Nope` is a clean `404`, because the `text` handler exists and rejects the name.
   `GET /select/Presence` on current firmware yields an *empty reply* (curl exit 52) - the
