@@ -333,9 +333,15 @@ test('a browser gets a readable 401; everything else gets the JSON byte for byte
   // every 401 the service sends, and every existing client and test is on the other side
   // of it. A regression here is silent - a client parsing JSON would just start failing.
   const asClient = await fetch(`${h.base}/status`, { headers: REMOTE });
-  assert.equal(asClient.status, 401);
-  assert.equal(asClient.headers.get('content-type'), 'application/json');
-  assert.equal(await asClient.text(), '{"error":"missing or invalid passphrase"}\n');
+  const clientBody = await asClient.text();
+  // SELF-DIAGNOSING, because this assertion caught something once and could not be made to
+  // do it again: a `403` on `/status`, which no handler in this service can produce. That
+  // is a response belonging to a DIFFERENT request, so if it recurs the useful evidence is
+  // which one - the body names the route it came from. See the note in `boot`.
+  const why = `${asClient.status} ${asClient.headers.get('content-type')} from ${h.base}/status: ${clientBody}`;
+  assert.equal(asClient.status, 401, why);
+  assert.equal(asClient.headers.get('content-type'), 'application/json', why);
+  assert.equal(clientBody, '{"error":"missing or invalid passphrase"}\n', why);
 
   const asBrowser = await fetch(`${h.base}/status`, {
     headers: { ...REMOTE, accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
