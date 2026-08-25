@@ -323,3 +323,60 @@ test('GET /public/events streams the same thin view, unauthenticated', async (t)
   assert.equal(/"hold"|"source"/.test(first), false);
   await reader.cancel();
 });
+
+// ------------------------------------------------ the 401 a person sees (#48)
+
+test('a browser gets a readable 401; everything else gets the JSON byte for byte', async (t) => {
+  const h = await boot(t);
+
+  // The JSON path is pinned FIRST and deliberately: this change adds a branch in front of
+  // every 401 the service sends, and every existing client and test is on the other side
+  // of it. A regression here is silent - a client parsing JSON would just start failing.
+  const asClient = await fetch(`${h.base}/status`, { headers: REMOTE });
+  assert.equal(asClient.status, 401);
+  assert.equal(asClient.headers.get('content-type'), 'application/json');
+  assert.equal(await asClient.text(), '{"error":"missing or invalid passphrase"}\n');
+
+  const asBrowser = await fetch(`${h.base}/status`, {
+    headers: { ...REMOTE, accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
+  });
+  assert.equal(asBrowser.status, 401, 'still a 401 - the medium changed, not the answer');
+  assert.match(asBrowser.headers.get('content-type') ?? '', /^text\/html/);
+  const page = await asBrowser.text();
+  assert.match(page, /<!doctype html>/i);
+  assert.match(page, /401/);
+  // The thing the JSON could not say: where to go.
+  assert.match(page, /href="\/"/);
+  assert.match(page, /href="\/display"/);
+});
+
+test('the readable 401 says no more than the JSON does', async (t) => {
+  const h = await boot(t);
+  const html = { ...REMOTE, accept: 'text/html' };
+
+  // D-35's two audiences must stay indistinguishable to an unauthenticated caller. A page
+  // that helpfully said "you sent a passphrase but this needs an admin session" would be a
+  // credential oracle, which is exactly what the JSON is careful not to be.
+  const data = await (await fetch(`${h.base}/status`, { headers: html })).text();
+  const admin = await (await fetch(`${h.base}/admin/config`, { headers: html })).text();
+
+  for (const page of [data, admin]) {
+    assert.doesNotMatch(page, new RegExp(DEFAULT_PASSPHRASE), 'never echoes a credential');
+    assert.doesNotMatch(page, new RegExp(DEFAULT_ADMIN_PASSWORD), 'never echoes a credential');
+  }
+  // The only difference between them is the error string the JSON already returns.
+  assert.equal(
+    data.replace('missing or invalid passphrase', 'X'),
+    admin.replace('missing or invalid admin session', 'X'),
+    'the two pages differ only where the JSON already differs',
+  );
+});
+
+test('a presented-but-wrong credential gets the readable 401 too', async (t) => {
+  const h = await boot(t);
+  const res = await fetch(`${h.base}/status`, {
+    headers: { ...bearer('wrong'), accept: 'text/html' },
+  });
+  assert.equal(res.status, 401);
+  assert.match(res.headers.get('content-type') ?? '', /^text\/html/);
+});

@@ -7,7 +7,11 @@
  * instead of an SSH session away. Self-contained, like `/display`: no external resources,
  * because the thing that is broken might be the thing that would serve them.
  */
-function escapeHtml(text: string): string {
+/**
+ * Exported since #48: the browser-readable 401 in `server.ts` needs the same escaping, and
+ * two copies of an escaper is how one of them ends up missing a case.
+ */
+export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
 

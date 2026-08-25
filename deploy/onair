@@ -124,6 +124,9 @@ verbs:
   restart              kickstart -k
   reload               bootout+bootstrap (plist/env changes; kickstart -k
                         alone does not re-read the plist)
+  ui [--open]           print the URLs this system serves - admin console,
+                        public display, and the panel's own status page when a
+                        device is configured. --open launches the console.
   status                supervised + responding two-layer check
   logs [-f]             tail (or follow) $LOG_FILE
   reset-state            clear on-air state via API (or state file), restart
@@ -708,6 +711,55 @@ cmd_status() {
   return 0
 }
 
+cmd_ui() {
+  local open_it=false
+  case "${1:-}" in
+    "") ;;
+    --open) open_it=true ;;
+    *) echo "onair: ui: unknown argument: $1" >&2; exit 1 ;;
+  esac
+
+  local console="http://localhost:$ONAIR_PORT/"
+
+  echo "admin console:  $console"
+  echo "public display: http://localhost:$ONAIR_PORT/display"
+
+  # The panel's own pages (#33). Resolved from the env overlay first because that is what
+  # the service itself would honour (D-14); the config document is the fallback, not the
+  # other way round, so this cannot claim a host the daemon is not actually using.
+  local light_host
+  light_host="$(read_config ONAIR_LIGHT_HOST)"
+  if [[ -z "$light_host" ]]; then
+    # Read with node rather than grepped out of the JSON: `onair` already requires node
+    # (the plist launches it), and a regex over somebody's config document is the kind of
+    # shortcut that works until a value contains a brace. Failure here is not an error -
+    # no device configured is a normal state.
+    light_host="$(node -e '
+      const { readFileSync } = require("node:fs");
+      try { process.stdout.write(String(JSON.parse(readFileSync(process.argv[1], "utf8")).light?.host ?? "")); }
+      catch { }
+    ' "$TARGET_HOME/.onair/config.json" 2>/dev/null || true)"
+  fi
+  if [[ -n "$light_host" ]]; then
+    echo "panel status:   http://$light_host/onair"
+    echo "panel config:   http://$light_host/onair/config"
+  else
+    echo "panel:          no device configured (set it in the admin console)"
+  fi
+
+  if [[ "$open_it" == "true" ]]; then
+    if command -v open >/dev/null 2>&1; then
+      open "$console"
+    elif command -v xdg-open >/dev/null 2>&1; then
+      xdg-open "$console"
+    else
+      # Not an error. The URLs are printed above, which was the point of the verb; --open
+      # is a convenience and a missing opener is not a failed command.
+      echo "onair: no 'open' or 'xdg-open' on this host - the URL is above" >&2
+    fi
+  fi
+}
+
 cmd_logs() {
   local follow="${1:-}"
   if [[ ! -f "$LOG_FILE" ]]; then
@@ -910,6 +962,7 @@ case "$verb" in
   restart) cmd_restart ;;
   reload) cmd_reload ;;
   status) cmd_status ;;
+  ui) cmd_ui "${1:-}" ;;
   logs) cmd_logs "${1:-}" ;;
   reset-state) cmd_reset_state ;;
   disable) cmd_disable ;;

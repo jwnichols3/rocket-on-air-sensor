@@ -1867,3 +1867,38 @@ else (state, light control, API) lives on the receiver.
   idempotence across two runs. `npm run verify`: 308 node, 19 update, 12 status, 22 setup,
   firmware config valid.
 
+- **D-60 (2026-08-25)** **`onair ui` names the URLs, and a 401 is readable in a browser.**
+  Resolves [#48](https://github.com/jwnichols3/rocket-on-air-sensor/issues/48).
+  **Why this ticket exists at all is the point of it.**
+  `docs/superpowers/plans/2026-08-23-local-admin-and-menubar.md` listed four phase-1 items.
+  Items 1 and 3 became #47 and #45 - both found by grepping for something else, two days
+  later, after the plan's *later* phases had shipped. Items 2 and 4 were still sitting
+  there. **A hazard recorded in a plan is not a hazard that is tracked**, and the fix is
+  not better plans: it is that anything worth doing gets an issue number the moment it is
+  written down. The plan is where the reasoning lives; the tracker is where the work does.
+  **`onair ui`.** There are four URLs now - the console, the public display, and since D-57
+  the panel's two pages - and nothing named them anywhere. The one piece of logic in the
+  verb is the resolution order for the panel's host: **env overlay first, config document
+  second**, because the overlay is what the SERVICE honours (D-14) and resolving the
+  document first would print a confident URL for a box the daemon is not driving. Pinned in
+  `deploy/test-ui.sh`. A malformed `config.json` prints the console anyway and exits 0 - the
+  verb is what someone runs when they are lost, and it must not be the second thing that
+  breaks.
+  **A 401 a person can read.** A browser off loopback got
+  `{"error":"missing or invalid passphrase"}` and nothing else - correct and useless. The
+  D-24 waiver is why this went unnoticed: the only person who ever sees a 401 in a browser
+  is on another machine, which is the person with the least context. The HTML page now says
+  where the console is and that loopback is waived.
+  **It says nothing the JSON does not.** No credential is echoed, and the data and admin
+  pages are byte-identical apart from the error string the JSON already differs by - pinned
+  by a test, because a page that helpfully said *"you sent a passphrase but this needs an
+  admin session"* would be a credential oracle and would quietly undo half of D-35.
+  **The JSON path is pinned first and hardest.** This adds a branch in front of every 401
+  the service sends, and every existing client and test is on the other side of it. A test
+  asserts the exact body bytes for a request with no `Accept`.
+  `escapeHtml` moved from `repair.ts` to exported - two copies of an escaper is how one of
+  them ends up missing a case.
+  Live after a daemon cycle: machine client `401 application/json`, browser `401 text/html`,
+  `onair ui` printing all four URLs, and the panel back to `CALM LIGHT` - the restart
+  re-pushed state, which is also what proves the driver survived it.
+

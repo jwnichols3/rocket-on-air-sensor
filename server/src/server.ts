@@ -15,7 +15,7 @@ import {
 import { validateConfig, type OnAirConfig } from './config-store.js';
 import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
-import { repairHtml } from './repair.js';
+import { escapeHtml, repairHtml } from './repair.js';
 import { createSseHub, type SseHub } from './sse.js';
 import {
   coerceSource,
@@ -245,6 +245,42 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(`${JSON.stringify(body)}\n`);
 }
 
+/** Is this a browser asking for a page, rather than a client asking for data? */
+function wantsHtml(req: IncomingMessage): boolean {
+  const accept = req.headers.accept;
+  return typeof accept === 'string' && accept.includes('text/html');
+}
+
+/**
+ * The 401 a person sees, as opposed to the one a program sees.
+ *
+ * SAYS NOTHING THE JSON DOES NOT. It does not name which credential was missing, does not
+ * echo what was presented, and reads identically whether the caller got the audience wrong
+ * or had no credential at all - D-35's two audiences stay indistinguishable to an
+ * unauthenticated caller, and this page is not the place to start leaking that.
+ *
+ * What it adds is the thing the JSON cannot: where to go. The D-24 waiver makes this
+ * invisible from the machine itself, which is exactly why it went unnoticed for so long -
+ * the only person who ever sees a 401 in a browser is someone on another machine, i.e. the
+ * one with the least context.
+ */
+function unauthorizedPage(error: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>On-Air - 401</title>
+<style>body{margin:0;padding:2rem;background:#0f1113;color:#e8eaed;
+font:16px/1.6 system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:34rem;margin:0 auto}
+h1{font-size:1.4rem;margin:0 0 .3rem}p{color:#aab4bd}code{font-family:ui-monospace,Menlo,monospace}
+a{color:#8fd6a3}</style></head><body><main>
+<h1>401 &mdash; ${escapeHtml(error)}</h1>
+<p>This route needs a credential. Nothing here says which one you are missing, on purpose.</p>
+<p>The admin console is at <a href="/">/</a> and signs you in with the admin password.
+The public display at <a href="/display">/display</a> needs nothing.</p>
+<p>Machine clients send the passphrase as <code>Authorization: Bearer &lt;passphrase&gt;</code>.
+Requests from the machine running the service are waived and need neither.</p>
+</main></body></html>
+`;
+}
+
 // Every derived field - `busy`, `intended`, `ageSeconds`, `stale`, `tableVersion` - is
 // computed at serialisation, so none of them can drift from `state`. Presentation
 // (`label`, `color`, `bgcolor`) is deliberately NOT here: it travels with the profile
@@ -384,6 +420,13 @@ async function handle(
 
   const denied = authorize(req, url, deps, boundPort(server), audienceFor(path));
   if (denied) {
+    // Same status, same information, different medium. A client that did not ask for HTML
+    // - which is every existing one, and every test - gets the JSON body byte for byte.
+    if (wantsHtml(req)) {
+      res.writeHead(denied.status, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(unauthorizedPage(denied.error));
+      return;
+    }
     sendJson(res, denied.status, { error: denied.error });
     return;
   }
