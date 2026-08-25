@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import { NoopDriver } from '../src/driver.js';
-import { DriverConfigError, EsphomeSelectDriver } from '../src/esphome-driver.js';
+import { DriverConfigError, EsphomeTextDriver } from '../src/esphome-driver.js';
 
 test('noop driver logs the level and reports unknown', async () => {
   const lines: string[] = [];
@@ -14,14 +14,20 @@ test('noop driver logs the level and reports unknown', async () => {
   assert.deepEqual(lines, ['[noop-driver] light -> DND', '[noop-driver] light -> AVAILABLE']);
 });
 
-/** A stand-in for the device: same URL shapes, same "the POST 200 proves nothing" lie. */
+/**
+ * A stand-in for the device's `text` entity: same URL shapes, same "the POST 200 proves
+ * nothing" lie, and the same two silent-drop traps measured on the board (D-44) - a value
+ * outside [min_length, max_length] is answered 200 and discarded.
+ */
 interface FakeDevice {
   base: string;
   host: string;
   posts: string[];
   gets: string[];
   auth: string[];
-  option: string;
+  value: string;
+  minLength: number;
+  maxLength: number;
   /** When set, the POST is accepted with 200 but the value is NOT applied. */
   swallowWrites: boolean;
   /** The device answers the POST BEFORE applying the value. This models that gap. */
@@ -32,7 +38,10 @@ interface FakeDevice {
 }
 
 async function fakeDevice(): Promise<FakeDevice> {
-  const d: Partial<FakeDevice> = { posts: [], gets: [], auth: [], option: 'dnd', swallowWrites: false, applyDelayMs: 0, status: null, frames: 0 };
+  const d: Partial<FakeDevice> = {
+    posts: [], gets: [], auth: [], value: 'dnd', minLength: 1, maxLength: 64,
+    swallowWrites: false, applyDelayMs: 0, status: null, frames: 0,
+  };
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     d.auth!.push(req.headers.authorization ?? '');
@@ -40,23 +49,33 @@ async function fakeDevice(): Promise<FakeDevice> {
       res.writeHead(d.status).end();
       return;
     }
-    if (req.method === 'POST' && url.pathname === '/select/Presence/set') {
-      d.posts!.push(url.searchParams.get('option') ?? '');
-      // The device answers BEFORE applying, and silently drops an invalid option.
+    if (req.method === 'POST' && url.pathname === '/text/PresenceKey/set') {
+      // esp_http_server rejects a POST with no Content-Length before any handler runs.
+      if (req.headers['content-length'] === undefined) {
+        res.writeHead(411).end('Client must specify Content-Length');
+        return;
+      }
+      const v = url.searchParams.get('value') ?? '';
+      d.posts!.push(v);
+      // The device answers BEFORE applying, and silently drops an invalid value.
       res.writeHead(200, { 'content-length': '0' }).end();
-      const opt = url.searchParams.get('option');
       const apply = (): void => {
-        if (!d.swallowWrites && opt && ['dnd', 'interruptible', 'available'].includes(opt)) d.option = opt;
+        if (d.swallowWrites) return;
+        if (v.length < d.minLength! || v.length > d.maxLength!) return;
+        d.value = v;
       };
       if (d.applyDelayMs! > 0) setTimeout(apply, d.applyDelayMs!).unref();
       else apply();
       return;
     }
-    if (req.method === 'GET' && url.pathname === '/select/Presence') {
+    if (req.method === 'GET' && url.pathname === '/text/PresenceKey') {
       d.gets!.push(url.search);
-      const body: Record<string, unknown> = { id: 'select/Presence', value: d.option, state: d.option };
-      if (url.searchParams.get('detail') === 'all') body.option = ['dnd', 'interruptible', 'available'];
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+      res.writeHead(200, { 'content-type': 'application/json' }).end(
+        JSON.stringify({
+          id: 'text/PresenceKey', value: d.value, state: d.value,
+          min_length: d.minLength, max_length: d.maxLength, pattern: '',
+        }),
+      );
       return;
     }
     if (req.method === 'GET' && url.pathname === '/sensor/Frames') {
@@ -75,14 +94,22 @@ async function fakeDevice(): Promise<FakeDevice> {
 }
 
 function driverFor(d: FakeDevice, over: Record<string, unknown> = {}) {
-  return new EsphomeSelectDriver({ host: d.host, timeoutMs: 1000, retryGapMs: 1, log: () => {}, ...over });
+  return new EsphomeTextDriver({ host: d.host, timeoutMs: 1000, retryGapMs: 1, log: () => {}, ...over });
 }
 
-test('set writes the option and reports what the device read back', async () => {
+test('set writes ?value= to the text entity and reports what the device read back', async () => {
   const d = await fakeDevice();
   const driver = driverFor(d);
   assert.equal(await driver.set('interruptible'), 'interruptible');
   assert.deepEqual(d.posts, ['interruptible']);
+  await d.close();
+});
+
+test('the POST carries a Content-Length: the device answers 411 without one', async () => {
+  const d = await fakeDevice();
+  const driver = driverFor(d);
+  // A 411 would fail the write outright, so a successful set proves the header went out.
+  assert.equal(await driver.set('available'), 'available');
   await d.close();
 });
 
@@ -94,13 +121,31 @@ test('a 200 that did not apply is caught by the read-back, not trusted', async (
   await d.close();
 });
 
+test('an over-length value is answered 200 and dropped; only the read-back sees it', async () => {
+  const d = await fakeDevice();
+  d.maxLength = 3; // "available" no longer fits, exactly as a too-long row id would not
+  const driver = driverFor(d);
+  assert.equal(await driver.set('available'), 'dnd', 'a length violation must not be reported as applied');
+  await d.close();
+});
+
 test('read reports the device state, and unknown when it is unreachable', async () => {
   const d = await fakeDevice();
   const driver = driverFor(d);
-  d.option = 'available';
+  d.value = 'available';
   assert.equal(await driver.read(), 'available');
   await d.close();
   assert.equal(await driver.read(), 'unknown', 'a dead device is unknown, never a level');
+});
+
+test('read reports unknown for a key this server does not recognise', async () => {
+  const d = await fakeDevice();
+  const driver = driverFor(d);
+  // `text` accepts arbitrary keys (measured, D-44). The device no longer declares a valid
+  // set, so a key from outside this build must read as ignorance, never as a level.
+  d.value = 'focus-block';
+  assert.equal(await driver.read(), 'unknown');
+  await d.close();
 });
 
 test('set never throws when the device is gone', async () => {
@@ -120,33 +165,35 @@ test('basic auth is sent pre-emptively on every request', async () => {
   await d.close();
 });
 
-test('verifyOptions returns the device option list', async () => {
+test('verifyEntity confirms the entity is there, and asks it for nothing else', async () => {
   const d = await fakeDevice();
   const driver = driverFor(d);
-  assert.deepEqual(await driver.verifyOptions(), ['dnd', 'interruptible', 'available']);
+  assert.equal(await driver.verifyEntity(), true);
+  // The device no longer declares a set of valid states, so there is no option list to
+  // compare against and no stale-firmware warning to derive from one (D-38).
   await d.close();
 });
 
-test('verifyOptions throws DriverConfigError on 404: a wrong entity name is a deploy bug', async () => {
+test('verifyEntity throws DriverConfigError on 404: a wrong entity name is a deploy bug', async () => {
   const d = await fakeDevice();
   const driver = driverFor(d, { entity: 'Nope' });
-  await assert.rejects(() => driver.verifyOptions(), DriverConfigError);
+  await assert.rejects(() => driver.verifyEntity(), DriverConfigError);
   await d.close();
 });
 
-test('verifyOptions throws DriverConfigError on 401', async () => {
+test('verifyEntity throws DriverConfigError on 401', async () => {
   const d = await fakeDevice();
   d.status = 401;
   const driver = driverFor(d);
-  await assert.rejects(() => driver.verifyOptions(), DriverConfigError);
+  await assert.rejects(() => driver.verifyEntity(), DriverConfigError);
   await d.close();
 });
 
-test('verifyOptions returns null for an unreachable device: do not crash on a dead light', async () => {
+test('verifyEntity returns null for an unreachable device: do not crash on a dead light', async () => {
   const d = await fakeDevice();
   const driver = driverFor(d);
   await d.close();
-  assert.equal(await driver.verifyOptions(), null);
+  assert.equal(await driver.verifyEntity(), null);
 });
 
 test('repainted reports true as soon as the frame counter advances', async () => {
@@ -200,6 +247,6 @@ test('set still reports the truth when the write genuinely never applies', async
   const d = await fakeDevice();
   d.swallowWrites = true;
   const driver = driverFor(d);
-  assert.equal(await driver.set('available'), 'dnd', 'a dropped option must not be papered over by retries');
+  assert.equal(await driver.set('available'), 'dnd', 'a dropped value must not be papered over by retries');
   await d.close();
 });

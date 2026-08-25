@@ -11,6 +11,13 @@ been docs-only, so `git diff 2105e61..HEAD -- src test deploy` is still empty an
 src/test file:line below resolves.
 -->
 
+> **Superseded on the transport, 2026-08-24 (D-46).** This spec describes the device's
+> state entity as a `select` named `Presence`, driven by `EsphomeSelectDriver`. That is no
+> longer true: the entity is a `text` named `PresenceKey`, the driver is `EsphomeTextDriver`,
+> and the `select` has been removed from the firmware. Read `docs/api-contract.md` and
+> CONTEXT.md D-38/D-44/D-46 for the current transport. Everything else here - the false-green
+> invariant, the frame counter, the respond-before-apply gap - still holds.
+
 # ESP32 -> on-air API integration spec (2026-08-22)
 
 **Status:** final. Supersedes the draft of the same date and the three adversarial reviews.

@@ -170,7 +170,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-19** hold as a floor | **Superseded** by D-32. Hold is a pin with one escalation carve-out. |
 > | **D-21.1** reconciliation merges only on contradiction | **Intact in spirit**, restated over `busy` rather than rungs. |
 > | **D-21.2** a manual write below the floor releases the floor | **Superseded** by D-32: a manual write naming a state other than the held one releases the pin. |
-> | **D-22** ESP32 integration live and accepted | **Intact.** All three sub-findings survive; D-22.3 (a write is not confirmed by the next read) is re-verified against `text` in D-38. |
+> | **D-22** ESP32 integration live and accepted | **Intact.** All three sub-findings survive; D-22.3 (a write is not confirmed by the next read) is re-verified against `text` in D-38. D-22.1's `Render` sensor gains a fifth branch in D-46. |
 > | **D-23** `ONAIR_TOKEN` set on this host | **Superseded** by D-35. |
 > | **D-24** loopback alone does not authenticate; `Origin` does | **Survives, unweakened**, and is cited verbatim by D-35. The two measured attacks stay as regression tests. |
 > | **D-25** `/ui` and `/display` unauthenticated | **Amended** by D-35. `/ui` retires into the admin UI; the reasoning is restated as unauthenticated shell plus gated data. |
@@ -178,7 +178,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-27** one credential, no read/write split | **Carried forward** onto the passphrase by D-35, and sharpened: the split that *does* exist is machine credential vs human admin credential, which is a different axis. |
 > | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
 > | **D-32** unprefixed `source` reads as `human:` | **Amended** by D-41: required and prefixed on `PUT /state`, optional on the convenience routes. |
-> | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. |
+> | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. Its `select`->`text` half is proven by D-44 and **shipped** by D-46; the `select` no longer exists. |
 > | **D-31** "colour is on the wire" | **Narrowed** by D-42: colour is in the profile (`GET /config/states`), never on a state change. Presentation travels with the profile, semantics with the state. |
 
 - **D-1 (2026-08-05)** Receiver is a Raspberry Pi hosting a REST API; the work Mac runs
@@ -1182,3 +1182,53 @@ else (state, light control, API) lives on the receiver.
   so the wiring Rocket may be running is not quietly falsified by a merge. The `?source=`
   values in it survive untouched: an unprefixed `source` on a convenience route reads as
   `human:` (D-41), and a Stream Deck press is a human.
+- **D-46 (2026-08-24)** **The `select` is gone. The panel renders whatever key it is handed,
+  and says so when it cannot.** Resolves
+  [#35](https://github.com/jwnichols3/rocket-on-air-sensor/issues/35). This is the *contract*
+  half of D-38, whose expand half was D-44; both halves are now on the live board.
+  **What moved.** The driver writes `POST /text/PresenceKey/set?value=<key>` and reads back
+  `GET /text/PresenceKey`; `EsphomeSelectDriver` is `EsphomeTextDriver`; the display lambda
+  branches on the text value rather than a select index; the `select:` block is out of the
+  YAML. The device now declares no set of valid states at all, which is the point.
+  **The cutover kept the light lit, and the ordering is the reason.** Both entities were
+  already sitting at `dnd`, so: point `ONAIR_LIGHT_ENTITY` at `PresenceKey`, deploy the
+  server, *then* flash. In the window between the two, the server drove `text` while the old
+  firmware still rendered `select` - and because both held `dnd`, the glass never changed.
+  Measured mid-window: `text/PresenceKey` = `interruptible`, `select/Presence` = `dnd`, panel
+  `ON AIR`. Reversing the order would have pointed the server at an entity the panel was not
+  reading, which is the same false-calm risk this system exists to prevent.
+  **Three findings from doing it:**
+  1. **A removed component does not 404 - it answers nothing at all.** `GET /select/Presence`
+     now yields an *empty reply* (curl 52), not a `404`, because with no `select` component
+     compiled in there is no handler registered for that URI prefix. `GET /text/Nope` still
+     `404`s, since the `text` handler exists and rejects the name. So `verifyEntity()` still
+     catches the failure it was written for - a **misspelt entity name** - but a server
+     pointed at firmware missing the whole component sees "unreachable", not a config error.
+     Left as is: that skew now surfaces as `confirmed: unknown`, which is where D-38 put it.
+  2. **The startup option-list check is deleted, not replaced.** `select` could be asked for
+     its compiled options, and the service refused to start on a mismatch. `text` has no such
+     list by design, so firmware/server skew is no longer detectable at boot. It shows up as
+     a read-back that does not match. That is a real loss of a loud early failure, accepted
+     deliberately as the price D-38 already named.
+  3. **`restore_value` survives a reflash.** Not exercised in D-44, exercised here: the board
+     came back from OTA holding `interruptible` and drew `BUSY` without being written to.
+  **The UNKNOWN KEY branch, and one taste call.** A key the build cannot draw gets a solid
+  inverted header reading `UNKNOWN KEY`, the offending key printed underneath **left-aligned**
+  so a long key clips its tail rather than its identifying head, and a hatched footer. It is
+  deliberately *not* the `NO DATA` appearance: stale-and-therefore-untrusted and
+  server-said-something-I-cannot-draw are different faults and must not look alike from across
+  the room. `Render` gains a fifth value, `UNKNOWN KEY`, so the branch is readable over HTTP.
+  Measured: `POST value=focus-block` -> stored, panel drew `UNKNOWN KEY`.
+  **Soak, held against D-22's numbers.** 35 min at a 15 s cadence, which spans two of the
+  15-minute windows whose absence proved `api: reboot_timeout: 0s` works: **139/139 polls,
+  139/139 API-device agreement, 139/139 panel branch correct, zero frame-counter resets, zero
+  supervisor deferrals, zero new lines in the service log.** Median set->confirm **89 ms**
+  over 20 writes (min 51, max 543) against D-22's 120 ms on `select` - faster, though a
+  three-quarter-length soak on one evening's RF conditions is not grounds to claim `text` is
+  the reason. **No regression.** Shorter than D-22's 61 min, stated plainly: the reboot proof
+  needs whole 15-minute windows and two of them is the smallest honest number.
+  **The recognised set stays hardcoded until the config pull lands.** This build draws `dnd`,
+  `interruptible` and `available` and treats everything else as unknown. That is not the end
+  state - [#43](https://github.com/jwnichols3/rocket-on-air-sensor/issues/43) replaces the
+  hardcoded triple with the pulled table - but a firmware that recognised nothing would render
+  `UNKNOWN KEY` for every state the server can currently send, which is not shippable.

@@ -293,6 +293,11 @@ recorded here because it is the one place a reader will look.
 - **An invalid value returns `200` and is silently dropped**, leaving the previous state in
   place. Measured for both over-length and empty writes. **Read-back after a write is
   mandatory**; the write's status code tells you nothing.
+- **A misspelt entity gets a `404`; a missing *component* gets no reply at all.**
+  `GET /text/Nope` is a clean `404`, because the `text` handler exists and rejects the name.
+  `GET /select/Presence` on current firmware yields an *empty reply* (curl exit 52) - the
+  `select` component is no longer compiled in, so nothing is registered for that URI prefix.
+  A dropped connection here is a stale client, not a broken device. Measured 2026-08-24.
 
 ### `GET /public/status` and `GET /public/events`
 

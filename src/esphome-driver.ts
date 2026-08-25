@@ -4,7 +4,7 @@ import { isLevel, type Confirmed, type Level } from './state.js';
 export interface EsphomeDriverOptions {
   /** "10.42.12.77" or "elegoo-esp32.local". No scheme. */
   host: string;
-  /** The ESPHome select NAME, not its object_id. Must match the YAML `name:`. */
+  /** The ESPHome text NAME, not its object_id. Must match the YAML `name:`. */
   entity?: string;
   username?: string;
   password?: string;
@@ -24,17 +24,22 @@ export interface EsphomeDriverOptions {
 export class DriverConfigError extends Error {}
 
 /**
- * Drives an ESPHome `select` over web_server's REST API (ESPHome 2026.8.0, esp-idf).
+ * Drives an ESPHome `text` over web_server's REST API (ESPHome 2026.8.0, esp-idf).
  *
- *   POST /select/<Name>/set?option=<level>  -> 200, EMPTY body, applied AFTER the response.
- *                                              An invalid option is silently dropped, still 200.
- *   GET  /select/<Name>                     -> {"id":"select/<Name>","value":"..","state":".."}
- *   GET  /sensor/Frames                     -> {"id":"sensor/Frames","value":..,"state":".."}
+ *   POST /text/<Name>/set?value=<key>  -> 200, EMPTY body, applied AFTER the response.
+ *                                         An invalid value is silently dropped, still 200.
+ *   GET  /text/<Name>                  -> {"id","value","state","min_length","max_length","pattern"}
+ *   GET  /sensor/Frames                -> {"id":"sensor/Frames","value":..,"state":".."}
  *
- * NAME COUPLING: the URL segment is the entity `name:` in configs/elegoo-esp32.yaml
- * (web_server.cpp:167). Renaming there breaks every URL here. verifyOptions() catches it.
+ * WHY `text` AND NOT `select` (D-38): a `select` asserts the FIRMWARE owns the set of valid
+ * states. Here the server owns it and the panel is a renderer, which `text` encodes correctly.
+ * The cost is that the device no longer rejects a key it does not know - validation is the
+ * server's job now, and a key from outside this build reads back as `unknown`.
+ *
+ * NAME COUPLING: the URL segment is the entity `name:` in the firmware YAML
+ * (web_server.cpp:167). Renaming there breaks every URL here. verifyEntity() catches it.
  */
-export class EsphomeSelectDriver implements LightDriver {
+export class EsphomeTextDriver implements LightDriver {
   private readonly base: string;
   private readonly entity: string;
   private readonly headers: Record<string, string>;
@@ -50,7 +55,7 @@ export class EsphomeSelectDriver implements LightDriver {
 
   constructor(opts: EsphomeDriverOptions) {
     this.base = `http://${opts.host}`;
-    this.entity = encodeURIComponent(opts.entity ?? 'Presence');
+    this.entity = encodeURIComponent(opts.entity ?? 'PresenceKey');
     this.timeoutMs = opts.timeoutMs ?? 2000;
     this.retries = opts.retries ?? 1;
     this.retryGapMs = opts.retryGapMs ?? 400;
@@ -68,29 +73,34 @@ export class EsphomeSelectDriver implements LightDriver {
    * failures that must be told apart:
    *   throws DriverConfigError -> wrong entity name (404) or bad credentials (401). Loud.
    *   returns null             -> the device is unreachable. Not an error; do not crash.
+   *   returns true             -> the entity is there.
+   *
+   * It asks the entity for nothing beyond its own existence. `select` could be asked for
+   * its compiled option list, which let the service warn that firmware was stale; `text`
+   * has no such list and is not supposed to (D-38). That check is gone, not replaced.
    */
-  async verifyOptions(): Promise<string[] | null> {
+  async verifyEntity(): Promise<true | null> {
     try {
-      const res = await fetch(`${this.base}/select/${this.entity}?detail=all`, {
+      const res = await fetch(`${this.base}/text/${this.entity}`, {
         headers: this.headers,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
       if (res.status === 404) {
-        throw new DriverConfigError(`no select entity named "${this.entity}" on ${this.base}`);
+        throw new DriverConfigError(`no text entity named "${this.entity}" on ${this.base}`);
       }
       if (res.status === 401) throw new DriverConfigError(`web_server auth rejected by ${this.base}`);
       if (!res.ok) return null;
-      const body = (await res.json()) as { option?: unknown };
-      return Array.isArray(body.option) ? (body.option as string[]) : null;
+      await res.arrayBuffer();
+      return true;
     } catch (err) {
       if (err instanceof DriverConfigError) throw err;
-      this.log(`[esphome-driver] verifyOptions: device unreachable (${errText(err)})`);
+      this.log(`[esphome-driver] verifyEntity: device unreachable (${errText(err)})`);
       return null;
     }
   }
 
   async set(level: Level): Promise<Confirmed> {
-    const url = `${this.base}/select/${this.entity}/set?option=${level}`;
+    const url = `${this.base}/text/${this.entity}/set?value=${encodeURIComponent(level)}`;
     // fetch() with no body sends Content-Length: 0 and no Content-Type, which is what
     // the device requires - web_server_idf returns 411 if Content-Length is absent.
     const ok = await this.attempt(async () => {
@@ -106,7 +116,10 @@ export class EsphomeSelectDriver implements LightDriver {
     });
     if (!ok) return 'unknown';
     // The 200 proves nothing: it is sent before the value is applied, and an invalid
-    // option is dropped in silence. Only the read-back is evidence.
+    // value is dropped in silence. Only the read-back is evidence. Under `text` the
+    // silent drop is a LENGTH violation rather than enum membership (measured, D-44:
+    // an over-length write and an empty write both returned 200 and changed nothing),
+    // which is a different cause reaching the same conclusion.
     //
     // "Before the value is applied" is literal - web_server.cpp defers the action and
     // answers first - so a read-back issued immediately can still see the PREVIOUS
@@ -123,8 +136,10 @@ export class EsphomeSelectDriver implements LightDriver {
   }
 
   async read(): Promise<Confirmed> {
-    const body = await this.getJson(`${this.base}/select/${this.entity}`);
+    const body = await this.getJson(`${this.base}/text/${this.entity}`);
     const state = (body as { state?: unknown } | null)?.state;
+    // Any string can come back now, including a key no build of this server knows. That
+    // is ignorance, not a level, and must never resolve to one.
     return isLevel(state) ? state : 'unknown';
   }
 

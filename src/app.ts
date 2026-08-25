@@ -1,10 +1,10 @@
 import type { Server } from 'node:http';
 import { NoopDriver, type LightDriver } from './driver.js';
-import { EsphomeSelectDriver } from './esphome-driver.js';
+import { EsphomeTextDriver } from './esphome-driver.js';
 import { loadState, saveState } from './persist.js';
 import { createApiServer, errorMessage } from './server.js';
 import { createSseHub } from './sse.js';
-import { defaultState, levelToOnOff, LEVELS, RANK, StateStore } from './state.js';
+import { defaultState, levelToOnOff, RANK, StateStore } from './state.js';
 import { startSupervisor } from './supervise.js';
 import { createWsBridge } from './ws.js';
 
@@ -33,14 +33,14 @@ export async function createApp(opts: AppOptions): Promise<App> {
   // Startup config check. A wrong entity name is a deploy bug and must be loud, so
   // DriverConfigError propagates and stops the service. An unreachable device does not:
   // crash-looping on a dead light is the failure persist.ts was just fixed to avoid.
-  if (driver instanceof EsphomeSelectDriver) {
-    const options = await driver.verifyOptions();
-    if (options !== null) {
-      const want = [...LEVELS].sort().join(',');
-      if ([...options].sort().join(',') !== want) {
-        throw new Error(`device option list ${JSON.stringify(options)} != ${JSON.stringify(LEVELS)}`);
-      }
-    } else {
+  //
+  // It checks that the entity EXISTS and nothing more. The old check also compared the
+  // device's compiled option list against LEVELS and refused to start on a mismatch;
+  // under `text` there is no such list, by design (D-38), so a firmware/server skew is
+  // no longer detectable here. It shows up where it now belongs: as a read-back that
+  // does not match, i.e. `confirmed: unknown`.
+  if (driver instanceof EsphomeTextDriver) {
+    if ((await driver.verifyEntity()) === null) {
       log('[onair] light unreachable at boot; continuing with confirmed=unknown');
     }
   }

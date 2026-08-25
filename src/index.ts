@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
-import { EsphomeSelectDriver } from './esphome-driver.js';
+import { EsphomeTextDriver } from './esphome-driver.js';
 
 loadConfig();
 
@@ -27,9 +27,9 @@ if (token !== undefined && token.trim() === '') {
 // No ONAIR_LIGHT_HOST means the NoopDriver, i.e. unchanged behaviour.
 const lightHost = process.env.ONAIR_LIGHT_HOST;
 const driver = lightHost
-  ? new EsphomeSelectDriver({
+  ? new EsphomeTextDriver({
       host: lightHost,
-      entity: process.env.ONAIR_LIGHT_ENTITY ?? 'Presence',
+      entity: process.env.ONAIR_LIGHT_ENTITY ?? 'PresenceKey',
       username: process.env.ONAIR_LIGHT_USER,
       password: process.env.ONAIR_LIGHT_PASS,
     })
