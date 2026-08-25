@@ -31,3 +31,12 @@ firmware/.esphome/
 firmware/configs/.esphome/
 firmware/configs/secrets.yaml
 firmware/configs/.device-builder*
+
+# Built by `npm run build -w admin-ui` from admin-ui/src. Generated, never edited.
+server/public/admin/index.html
+
+# The same bundle, copied to where the PRE-MIGRATION plist resolves it. The installed
+# plist still runs $APPDIR/dist/index.js (see D-47), so the server looks for the console at
+# $APPDIR/public/admin/. `sudo deploy/onair update` moves the entry point under server/,
+# after which this copy is dead and can be deleted.
+/public/admin/

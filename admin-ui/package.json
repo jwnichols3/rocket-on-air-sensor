@@ -2,6 +2,9 @@
   "name": "onair-admin-ui",
   "version": "0.0.0",
   "private": true,
-  "description": "The admin SPA - the state table editor and settings console. Built by #42.",
-  "type": "module"
+  "description": "The admin console: the state table editor and settings console.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  }
 }

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>on-air</title>
+<style>/*STYLES*/</style>
+</head>
+<body>
+<!--
+  The unauthenticated shell (D-35). Byte-identical for every caller, zero interpolation,
+  and it discloses nothing on its own - every value below arrives at runtime from a gated
+  route. That is D-25's argument applied to an app instead of a page.
+-->
+<div id="boot" class="boot">connecting...</div>
+
+<!-- LOGGED OUT: the landing tally. Not a dashboard (D-39). -->
+<main id="landing" class="landing" hidden>
+  <div id="landing-card" class="landing-card">
+    <div id="landing-word" class="landing-word"></div>
+    <div id="landing-desc" class="landing-desc"></div>
+  </div>
+  <dl id="landing-facts" class="facts"></dl>
+  <form id="login" class="login" hidden>
+    <input id="login-user" type="text" autocomplete="username" placeholder="user" aria-label="user">
+    <input id="login-pass" type="password" autocomplete="current-password" placeholder="password" aria-label="password">
+    <button type="submit" class="btn primary">Log in</button>
+    <span id="login-err" class="err"></span>
+  </form>
+  <button id="login-open" class="btn">Log in</button>
+</main>
+
+<!-- LOGGED IN: the console. -->
+<div id="console" hidden>
+  <header class="bar">
+    <div class="bar-left">
+      <span class="brand">on-air</span>
+      <span id="live-pill" class="pill"></span>
+      <span id="live-age" class="muted"></span>
+    </div>
+    <div class="bar-right">
+      <span id="staged-count" class="staged"></span>
+      <button id="discard-all" class="btn" disabled>Discard all</button>
+      <button id="save-all" class="btn primary" disabled>Save configuration</button>
+      <button id="logout" class="btn">Log out</button>
+    </div>
+  </header>
+  <div id="save-err" class="banner err-banner" hidden></div>
+
+  <div class="body">
+    <nav class="rail">
+      <a href="#status" data-sec="status">Status</a>
+      <a href="#states" data-sec="states">States</a>
+      <a href="#admin" data-sec="admin">Admin settings</a>
+      <a href="#network" data-sec="network">Network</a>
+      <a href="#light" data-sec="light">Light</a>
+    </nav>
+    <main class="sections">
+      <section id="sec-status"><h2>Status</h2><dl id="status-facts" class="facts"></dl>
+        <div id="status-controls" class="controls"></div></section>
+      <section id="sec-states"><h2>States</h2>
+        <div id="rows"></div>
+        <button id="add-row" class="btn">Add a state</button></section>
+      <section id="sec-admin"><h2>Admin settings</h2><div id="admin-fields" class="fields"></div>
+        <div class="danger">
+          <button id="factory-reset" class="btn danger-btn">Factory reset</button>
+          <span class="muted">Asks for the admin password.</span>
+        </div></section>
+      <section id="sec-network"><h2>Network</h2><div id="network-fields" class="fields"></div></section>
+      <section id="sec-light"><h2>Light</h2><div id="light-fields" class="fields"></div></section>
+    </main>
+  </div>
+</div>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-card">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="btn">Cancel</button>
+      <button id="modal-ok" class="btn primary"></button>
+    </div>
+  </div>
+</div>
+
+<script>//SCRIPT</script>
+</body>
+</html>

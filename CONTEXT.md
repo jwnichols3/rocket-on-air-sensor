@@ -173,7 +173,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-22** ESP32 integration live and accepted | **Intact.** All three sub-findings survive; D-22.3 (a write is not confirmed by the next read) is re-verified against `text` in D-38. D-22.1's `Render` sensor gains a fifth branch in D-46. |
 > | **D-23** `ONAIR_TOKEN` set on this host | **Superseded** by D-35 and D-51. The value now lives in `config.json`'s `auth` block; the env var overrides it. |
 > | **D-24** loopback alone does not authenticate; `Origin` does | **Survives, unweakened**, cited verbatim by D-35 and **implemented clause by clause** in D-51. Both measured attacks are regression tests, at the unit level and over HTTP. |
-> | **D-25** `/ui` and `/display` unauthenticated | **Amended** by D-35 and **executed** by D-52: `/ui` is a `404`, and `/display` is still unauthenticated with zero interpolation. |
+> | **D-25** `/ui` and `/display` unauthenticated | **Amended** by D-35, **executed** by D-52 and **completed** by D-53: `/ui` is a `404`; `/display` and the admin console's shell are unauthenticated and byte-identical for every caller. |
 > | **D-26** SwiftBar, not a native app | **Survives**, confirmed. |
 > | **D-27** one credential, no read/write split | **Carried forward** onto the passphrase by D-35, shipped in D-51, and sharpened: the split that *does* exist is machine credential vs human admin credential, which is a different axis. |
 > | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
@@ -1542,3 +1542,55 @@ else (state, light control, API) lives on the receiver.
   paths. Stated plainly because it is a real gap, taken because #41 is specified to remove the
   page and #42 was the next ticket in the same run.
   283 server tests, 19 deploy tests, `esphome config`, green.
+- **D-53 (2026-08-25)** **The admin console, built and driven.** Resolves
+  [#42](https://github.com/jwnichols3/rocket-on-air-sensor/issues/42). Implements D-39, D-36
+  and D-35.
+  **`admin-ui/` has a real build, and it is thirty lines.** `src/index.html`, `src/app.css`,
+  `src/app.js` are inlined into one self-contained `server/public/admin/index.html`. A bundler
+  would be a dependency, a config file and a lockfile entry to serve one page with no imports
+  and no framework; the whole build is read three files, substitute two placeholders, write
+  one. The output is self-contained for the same reason `/display` is - the page has to render
+  when the thing it would fetch assets from is the thing that is broken.
+  **Served at `/` and `/admin`, unauthenticated and byte-identical for everyone.** Tested as
+  byte-identity rather than by grepping for credential strings, because that cannot work here:
+  the default passphrase is `onair`, a substring of the product's own name, and the default
+  admin password is `ESP32`, the name of the hardware. What matters is not which strings are
+  absent but that the bytes do not vary with who asked. Logged out, the page is D-39's landing
+  tally - a tally, not a dashboard.
+  **`onair update` rebuilds the console.** It is a static asset under `server/public`, not part
+  of `dist`, so it is rebuilt in place rather than staged. Skipping it would have left an
+  update serving yesterday's console with no symptom except that a fix did not appear.
+  **Two bugs that only a browser could find, both silent.**
+  1. **`var status` at top level binds `window.status`**, a legacy *string* property. So
+     `status = someObject` stored `"[object Object]"` - truthy, and with no fields. The page
+     rendered as `connecting...` forever with a single exception in the console and nothing
+     else. Renamed to `liveStatus`.
+  2. **The five-second status poll rebuilt every row node**, which swapped the DOM out from
+     under whatever the user was doing. Typing went into an input that no longer existed a
+     moment later; a click on `Edit` landed on a button detached between mousedown and click,
+     so the handler never ran. **Neither produced an error.** The page simply did not respond,
+     which is indistinguishable from a slow one. Rows are now rebuilt only when the LIVE badge
+     actually moves, and never while a row is open.
+  Both are now regression tests, and both are the same lesson as D-52's `onmessage`: **the
+  tests exercise the endpoints; only driving the page exercises the page.** Three times in this
+  run now.
+  **The commit model, and the distinction the prototype surfaced.** *Cancel* while editing
+  returns the row to its **last staged** value; *Revert* is a separate control that drops it to
+  **live**. Collapsing them loses the ability to abandon a typo without also throwing away a
+  change staged ten minutes ago. Verified by driving it: edit -> stage -> `1 staged` and the
+  save button enables -> Revert -> back to live and the count clears.
+  **Contrast is the most valuable thing on the page, and it earns that live.** Setting
+  `interruptible` to `#3a3a3a` dropped it to **1.53:1 fails AA** in red with a row banner, and
+  the panel mock went barely legible at the SH1106's proportions - before saving, and without a
+  firmware round trip.
+  **No rationale prose ships**, per Rocket's note on the prototype. A test greps the shipped
+  page (comments stripped) for the tells of explanatory writing. The reasoning lives in the
+  source comments and here.
+  **Deleting a live row says what will actually happen** - the state resolves to `unknown`,
+  `GET /status` reports where it fell back from, bound Companion buttons start getting `400` -
+  and the button reads **"Stage the delete"**, because it still only stages.
+  **A taste call, on the review list:** the section order is Status, States, Admin settings,
+  Network, Light, and the `busy` toggle reads "Busy - the camera may be live" / "Calm". The
+  passphrase is shown in plaintext (D-39's call, unchanged): it has to be read to be typed into
+  the ESP32 and Companion, and a reveal control would only add a click to that.
+  300 server tests, 19 deploy tests, `esphome config`, green.

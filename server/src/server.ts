@@ -1,6 +1,7 @@
-import { accessSync, constants as fsConstants } from 'node:fs';
+import { accessSync, constants as fsConstants, readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Duplex } from 'node:stream';
 import {
   changeMeNags,
@@ -80,7 +81,32 @@ const ROUTES: Record<string, string[]> = {
   '/admin/factory-reset': ['POST'],
   '/public/status': ['GET'],
   '/public/events': ['GET'],
+  '/': ['GET'],
+  '/admin': ['GET'],
 };
+
+/**
+ * The admin console's bundle, built by `npm run build -w admin-ui`.
+ *
+ * Read from disk on every request rather than cached at startup, deliberately: `onair
+ * update` rebuilds it in place, and a cached copy would leave the running service serving
+ * the previous console until someone restarted it - with no symptom except that a fix did
+ * not appear. It is one file and a handful of requests a day.
+ */
+const ADMIN_BUNDLE = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'admin', 'index.html');
+
+function serveAdminBundle(res: ServerResponse): void {
+  let html: string;
+  try {
+    html = readFileSync(ADMIN_BUNDLE, 'utf8');
+  } catch {
+    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('the admin console has not been built - run: npm run build -w admin-ui\n');
+    return;
+  }
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
+  res.end(html);
+}
 
 /**
  * Which credential a route wants. **Neither is ever accepted on the other's routes**
@@ -89,6 +115,10 @@ const ROUTES: Record<string, string[]> = {
  */
 function audienceFor(path: string): 'data' | 'admin' | 'public' {
   if (path === '/public/status' || path === '/public/events' || path === '/display') return 'public';
+  // The console's SHELL is unauthenticated and byte-identical for everyone; every value it
+  // renders comes from a gated route (D-35). `/admin` exactly - not `/admin/` - so it does
+  // not fall into the gated prefix below.
+  if (path === '/' || path === '/admin') return 'public';
   // `/admin/session` is where you GO to get an admin credential, so it cannot demand one.
   if (path === '/admin/session') return 'public';
   if (path.startsWith('/admin/')) return 'admin';
@@ -565,6 +595,11 @@ async function handle(
 
   if (path === '/events') {
     hub.attach(res, () => statusBody(deps));
+    return;
+  }
+
+  if (path === '/' || path === '/admin') {
+    serveAdminBundle(res);
     return;
   }
 

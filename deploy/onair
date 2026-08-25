@@ -790,6 +790,13 @@ cmd_update() {
   rm -rf "$DIST_NEXT"
   ( cd "$SERVER_DIR" && run_as_invoking_user npx tsc -p tsconfig.json --outDir .dist-next )
 
+  # The admin console is a static asset under server/public, not part of dist, so it is
+  # rebuilt in place rather than staged. It is regenerated wholly on every update and the
+  # server re-reads it per request, so a stale or half-written one cannot outlive this.
+  # Skipping it would leave `onair update` serving yesterday's console with no symptom
+  # except that a fix did not appear.
+  ( cd "$APPDIR" && run_as_invoking_user npm run build --workspace admin-ui )
+
   swap_dist_in
 
   # Steps 7-8: restart (or reload, if node moved) + health-poll.
