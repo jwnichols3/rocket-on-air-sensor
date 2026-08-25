@@ -157,7 +157,7 @@ else (state, light control, API) lives on the receiver.
 > |---|---|
 > | **D-5** contract v1 state model | **Amended** by D-31/D-32/D-33, rewritten in `docs/api-contract.md` v2, and **shipped** by D-48. `level`, `onAir` and the rung routes are gone; `/on` and `/off` survive but resolve through shortcut rows. |
 > | **D-6** no TTL / staleness visible, never acted on | **Intact in principle; its rule is restated** by D-32's BUSY RULE. No TTL, no decay, no auto-raise - all confirmed. |
-> | **D-7** optional `ONAIR_TOKEN` | **Superseded** by D-35. Becomes the UI-configurable passphrase. |
+> | **D-7** optional `ONAIR_TOKEN` | **Superseded** by D-35, **shipped** by D-51. It is the passphrase now; the env var still works as an override. |
 > | **D-9** `/display` browser tally | **Intact.** D-48 pointed it at `state`; its appearances become table-driven in #41. Its `intended` fallback is what keeps a row it has never heard of rendering ON AIR rather than nothing. |
 > | **D-10** `npx github:` distribution | **Amended** by D-15 then D-37, and **executed** by D-47: the root package is now `private` with no `bin`, so the `npx github:` path no longer resolves an executable. `deploy/get-onair` is the install path. |
 > | **D-11** hand-rolled WebSocket | **Intact and deployed.** The zero-dependency rule that justified it was never a rule (D-29); the code is not revisited. Its feedback wiring survives v2 because of D-33. |
@@ -171,11 +171,11 @@ else (state, light control, API) lives on the receiver.
 > | **D-21.1** reconciliation merges only on contradiction | **Intact in spirit**, restated over `busy` rather than rungs. |
 > | **D-21.2** a manual write below the floor releases the floor | **Superseded** by D-32, shipped in D-48/D-49: a `human:` write naming a state other than the held one releases the pin. |
 > | **D-22** ESP32 integration live and accepted | **Intact.** All three sub-findings survive; D-22.3 (a write is not confirmed by the next read) is re-verified against `text` in D-38. D-22.1's `Render` sensor gains a fifth branch in D-46. |
-> | **D-23** `ONAIR_TOKEN` set on this host | **Superseded** by D-35. |
-> | **D-24** loopback alone does not authenticate; `Origin` does | **Survives, unweakened**, and is cited verbatim by D-35. The two measured attacks stay as regression tests. |
+> | **D-23** `ONAIR_TOKEN` set on this host | **Superseded** by D-35 and D-51. The value now lives in `config.json`'s `auth` block; the env var overrides it. |
+> | **D-24** loopback alone does not authenticate; `Origin` does | **Survives, unweakened**, cited verbatim by D-35 and **implemented clause by clause** in D-51. Both measured attacks are regression tests, at the unit level and over HTTP. |
 > | **D-25** `/ui` and `/display` unauthenticated | **Amended** by D-35. `/ui` retires into the admin UI; the reasoning is restated as unauthenticated shell plus gated data. |
 > | **D-26** SwiftBar, not a native app | **Survives**, confirmed. |
-> | **D-27** one credential, no read/write split | **Carried forward** onto the passphrase by D-35, and sharpened: the split that *does* exist is machine credential vs human admin credential, which is a different axis. |
+> | **D-27** one credential, no read/write split | **Carried forward** onto the passphrase by D-35, shipped in D-51, and sharpened: the split that *does* exist is machine credential vs human admin credential, which is a different axis. |
 > | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
 > | **D-32** unprefixed `source` reads as `human:` | **Amended** by D-41: required and prefixed on `PUT /state`, optional on the convenience routes. |
 > | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. Its `select`->`text` half is proven by D-44 and **shipped** by D-46; the `select` no longer exists. |
@@ -1452,3 +1452,54 @@ else (state, light control, API) lives on the receiver.
   **Measured live**: `ETag "1"` -> `304`; a label edit -> version 2, `ETag "2"`, table live
   immediately; the same document resubmitted -> `409` naming both versions. 236 server tests,
   19 deploy tests, `esphome config`, green.
+- **D-51 (2026-08-24)** **Two credentials, two audiences, and the waiver that makes both
+  invisible at home.** Resolves
+  [#40](https://github.com/jwnichols3/rocket-on-air-sensor/issues/40). Implements D-35, D-43
+  and contract §8, and carries D-24 forward unweakened.
+  **What shipped.** The passphrase (default `onair`, D-43) gates every data route; the admin
+  user/password (`rocket`/`ESP32`, D-35) gate `/admin/*` through an in-memory bearer session
+  with **no cookie**. `POST /admin/session` takes either nothing (the waiver applies) or
+  `{user, password}`. **Neither credential is accepted on the other's routes**, tested in both
+  directions. `ONAIR_PASSPHRASE`/`ONAIR_TOKEN` in the real environment is folded in as the
+  passphrase rather than gating separately, so there is exactly one credential in play instead
+  of two gates that could disagree - and every client on the LAN kept working across the deploy.
+  **D-24 is implemented clause by clause, and both measured attacks are regression tests** at
+  the unit level and over HTTP. Verified on the live service: a foreign `Origin` from loopback
+  is `401`, and another port on the same host with `Sec-Fetch-Site: same-site` is `401`, while
+  a genuine local request needs no credential at all. Each clause is separately tested, so
+  none of them can be dropped as "redundant" later.
+  **Query credentials are GET-only.** `?passphrase=` exists for the three places a header is
+  impossible - `EventSource`, the WebSocket upgrade, a remote kiosk navigation - and all three
+  are GETs. Allowing it on a write would put the credential in server logs and browser history
+  for the sake of nothing that needs it. `?token=` survives as the deprecated alias.
+  **A bug that would have silently discarded credential changes.** `rotate()` first took the
+  new passphrase and returned `{...liveAuth, passphrase}`. That threw away any admin password
+  submitted in the same save: the request answered `200`, the file kept the old password, and
+  the sessions were not invalidated - a change you would believe had happened. It now takes and
+  returns whole blocks. **Anything that merges credentials has to merge all of them or none.**
+  Found because a test asserted that changing the admin password logs everyone out, and it did
+  not.
+  **A migration trap caught before deploying, not after.** The config document shipped one
+  release with `auth: { passphrase: null }` as a reserved field. The new validator rejected
+  `null` as an empty credential - which would have put the live host into the repair view,
+  **bound to loopback, taking the light off the LAN to complain about a field meaning "not
+  configured"**. Absent (`undefined` or `null`) now means "take the default"; empty (`""` or
+  whitespace) is still an error, because that is someone typing nothing into a credential
+  field. The distinction is the whole of it.
+  **Factory reset keeps the device credentials.** D-35 lists what a reset restores and does not
+  mention them. They were compiled into the firmware (D-17) and are not ours to forget: a reset
+  that silently dropped them would take the light offline with no error, which is the opposite
+  of what someone reaching for a factory reset wants. Everything else goes back - credentials,
+  the seed table, the hold, `unknown`, `bind: all`, port 8484 - and every session dies.
+  **The one carve-out holds:** the admin password is demanded from any origin, including
+  loopback, and the waiver does not cover it.
+  **The live document is now self-sufficient.** Its `auth` block was written out explicitly
+  rather than left implicit, because with it absent, removing `ONAIR_TOKEN` from `config.env`
+  would silently drop the passphrase to the shipped default - a security change with no visible
+  symptom. Same shape as the D-50 trap, caught the same way: **retiring an env var means the
+  file it falls back to had better be right first.**
+  **`/display` was deliberately left on `/events`.** It needs `message` and `hold`, which the
+  thin public view does not carry, and half-migrating it would trade a working page for a
+  broken one. It keeps working unauthenticated at the kiosk via `?token=`, and locally via the
+  waiver. Moving it to `/public/events` belongs with #41, which rebuilds it.
+  **272 server tests, 19 deploy tests, `esphome config`, green.** The light never went dark.

@@ -1,13 +1,17 @@
-import { timingSafeEqual } from 'node:crypto';
 import { accessSync, constants as fsConstants } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname } from 'node:path';
 import type { Duplex } from 'node:stream';
 import {
-  ConfigWriteError,
-  validateConfig,
-  type OnAirConfig,
-} from './config-store.js';
+  changeMeNags,
+  defaultAuth,
+  passphraseAccepted,
+  presentedCredential,
+  SessionStore,
+  timingSafeStringEqual,
+  waiverApplies,
+} from './auth.js';
+import { validateConfig, type OnAirConfig } from './config-store.js';
 import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
 import { repairHtml } from './repair.js';
@@ -52,6 +56,10 @@ export interface ServerDeps {
   applyConfig?: (next: OnAirConfig) => Promise<{ ok: true } | { ok: false; status: 409 | 507; error: string }>;
   /** Set when the config file on disk could not be used, so the repair view is served. */
   configProblem?: () => { errors: string[]; raw: string } | undefined;
+  /** Admin sessions. Shared across every listener, so which address you arrived on is invisible. */
+  sessions?: SessionStore;
+  /** Wipe everything back to shipped defaults. Supplied by app.ts. */
+  factoryReset?: () => Promise<void>;
 }
 
 // `POST /state/{id}` is matched separately - it is the one route with a variable segment.
@@ -70,7 +78,24 @@ const ROUTES: Record<string, string[]> = {
   '/config/states': ['GET'],
   '/admin/config': ['GET', 'PUT'],
   '/admin/repair': ['GET'],
+  '/admin/session': ['POST', 'DELETE'],
+  '/admin/factory-reset': ['POST'],
+  '/public/status': ['GET'],
+  '/public/events': ['GET'],
 };
+
+/**
+ * Which credential a route wants. **Neither is ever accepted on the other's routes**
+ * (D-35): the passphrase says "you may read and write state", the admin session says "you
+ * may reconfigure the system, including rotating the passphrase". Two different questions.
+ */
+function audienceFor(path: string): 'data' | 'admin' | 'public' {
+  if (path === '/public/status' || path === '/public/events' || path === '/display') return 'public';
+  // `/admin/session` is where you GO to get an admin credential, so it cannot demand one.
+  if (path === '/admin/session') return 'public';
+  if (path.startsWith('/admin/')) return 'admin';
+  return 'data';
+}
 const STATE_ID_PATH = /^\/state\/([^/]+)$/;
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -126,15 +151,11 @@ export function createApiServer(deps: ServerDeps): Server {
       return;
     }
 
-    if (deps.token !== undefined) {
-      const authHeader = req.headers.authorization;
-      const headerOk = typeof authHeader === 'string' && timingSafeStringEqual(authHeader, `Bearer ${deps.token}`);
-      const queryToken = url.searchParams.get('token');
-      const queryOk = queryToken !== null && timingSafeStringEqual(queryToken, deps.token);
-      if (!headerOk && !queryOk) {
-        socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n', () => socket.destroy());
-        return;
-      }
+    // The WS upgrade cannot carry an Authorization header from a browser, which is why
+    // `?passphrase=` exists at all - see presentedCredential.
+    if (authorize(req, url, deps, boundPort(server), 'data')) {
+      socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n', () => socket.destroy());
+      return;
     }
 
     ws.handleUpgrade(req, socket, () => statusBody(deps), head);
@@ -147,13 +168,48 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function timingSafeStringEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
-  // Early length-mismatch return leaks token length via timing — accepted for this LAN threat model.
-  // timingSafeEqual throws on length mismatch; unequal lengths are already not a match.
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
+/**
+ * The auth block in force. Falls back to the shipped defaults when no config store is
+ * wired up, which is what the older unit tests construct.
+ */
+function authOf(deps: ServerDeps) {
+  return deps.config?.().auth ?? defaultAuth();
+}
+
+/**
+ * May this request proceed? Returns null when it may, or the error to send.
+ *
+ * The order matters: the WAIVER is checked first, because at home it is what makes both
+ * credentials invisible, and it is a strictly narrower condition than either of them.
+ */
+function authorize(
+  req: IncomingMessage,
+  url: URL,
+  deps: ServerDeps,
+  ourPort: number,
+  audience: 'data' | 'admin' | 'public',
+): { status: 401; error: string } | null {
+  if (audience === 'public') return null;
+
+  // The deployment seam: a service started with an explicit token gates on that alone.
+  // This is what keeps the older tests, and any host still driven by ONAIR_TOKEN, working.
+  if (deps.config === undefined) {
+    if (deps.token === undefined) return null;
+    const presented = presentedCredential(req, url);
+    if (presented !== null && timingSafeStringEqual(presented, deps.token)) return null;
+    return { status: 401, error: 'missing or invalid bearer token' };
+  }
+
+  if (waiverApplies(req, ourPort)) return null;
+
+  const presented = presentedCredential(req, url);
+  if (audience === 'data') {
+    if (presented !== null && passphraseAccepted(authOf(deps), presented)) return null;
+    return { status: 401, error: 'missing or invalid passphrase' };
+  }
+  // Admin. ONLY a session token - the passphrase is not accepted here, and vice versa.
+  if (presented !== null && deps.sessions?.validate(presented)) return null;
+  return { status: 401, error: 'missing or invalid admin session' };
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -168,6 +224,26 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 // into the state protocol permanently.
 function statusBody(deps: ServerDeps): StatusBody {
   return deps.store.status();
+}
+
+/**
+ * The unauthenticated view: the current row already RESOLVED for rendering. It is not the
+ * state contract and no machine client should read it - it has no `hold`, no `source`, no
+ * `confirmed`, and it is free to change shape to suit the two pages it serves.
+ */
+function publicBody(deps: ServerDeps): Record<string, unknown> {
+  const s = deps.store.status();
+  const row = deps.store.getTable().row(s.state);
+  return {
+    state: s.state,
+    label: row?.label ?? s.state.toUpperCase(),
+    color: row?.color ?? '#ff00ff',
+    bgcolor: row?.bgcolor ?? '#1a1a1a',
+    busy: s.busy,
+    ageSeconds: s.ageSeconds,
+    stale: s.stale,
+    tableVersion: s.tableVersion,
+  };
 }
 
 function persistCurrent(deps: ServerDeps): Promise<void> {
@@ -262,15 +338,10 @@ async function handle(
   const path = url.pathname;
   const method = req.method ?? 'GET';
 
-  if (deps.token !== undefined) {
-    const authHeader = req.headers.authorization;
-    const headerOk = typeof authHeader === 'string' && timingSafeStringEqual(authHeader, `Bearer ${deps.token}`);
-    const queryToken = url.searchParams.get('token');
-    const queryOk = method === 'GET' && queryToken !== null && timingSafeStringEqual(queryToken, deps.token);
-    if (!headerOk && !queryOk) {
-      sendJson(res, 401, { error: 'missing or invalid bearer token' });
-      return;
-    }
+  const denied = authorize(req, url, deps, boundPort(server), audienceFor(path));
+  if (denied) {
+    sendJson(res, denied.status, { error: denied.error });
+    return;
   }
 
   // `/state/{id}` is the one route with a variable segment, so it is matched rather than
@@ -292,7 +363,9 @@ async function handle(
   // adding a body-reading route without updating it will cause req.resume() to eat the body first.
   const willReadBody =
     ((path === '/state' || path === '/message') && method === 'PUT') ||
-    (path === '/admin/config' && method === 'PUT');
+    (path === '/admin/config' && method === 'PUT') ||
+    (path === '/admin/session' && method === 'POST') ||
+    path === '/admin/factory-reset';
   if (!willReadBody) req.resume();
 
   if (path === '/status') {
@@ -343,6 +416,90 @@ async function handle(
     }
     res.writeHead(200, { 'content-type': 'application/json', etag, 'cache-control': 'no-cache' });
     res.end(`${JSON.stringify({ version: table.version, updatedAt: deps.store.get().updatedAt, states: table.rows() })}\n`);
+    return;
+  }
+
+  // ---- the two unauthenticated endpoints (D-35, §5) -------------------------------
+  //
+  // Deliberately THIN, and a rendering VIEW of the state rather than the state contract:
+  // no passphrase, no config, no hold, no source, no device detail. They exist because
+  // /display and the landing page are served unauthenticated and therefore cannot read the
+  // gated stream - and because colour lives in the table now, so the server has to resolve
+  // the row for a page that holds none. A renderer that DOES hold a table must not use
+  // these; it takes the key from the gated routes and the look from GET /config/states.
+  if (path === '/public/status') {
+    sendJson(res, 200, publicBody(deps));
+    return;
+  }
+  if (path === '/public/events') {
+    hub.attach(res, () => publicBody(deps));
+    return;
+  }
+
+  if (path === '/admin/session') {
+    if (method === 'DELETE') {
+      const presented = presentedCredential(req, url);
+      if (presented) deps.sessions?.destroy(presented);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (deps.sessions === undefined) {
+      sendJson(res, 501, { error: 'no session store is wired up' });
+      return;
+    }
+    // Either nothing (the waiver applies) or {user, password}. At home the SPA
+    // re-establishes silently on every page load, which is what pays for having no cookie.
+    let user: unknown;
+    let password: unknown;
+    const raw = await readBody(req);
+    if (raw.trim() !== '') {
+      try {
+        ({ user, password } = JSON.parse(raw) as { user?: unknown; password?: unknown });
+      } catch (err) {
+        sendJson(res, 400, { error: `malformed JSON body: ${errorMessage(err)}` });
+        return;
+      }
+    }
+    const auth = authOf(deps);
+    const byWaiver = raw.trim() === '' && waiverApplies(req, boundPort(server));
+    const byPassword =
+      typeof user === 'string' &&
+      typeof password === 'string' &&
+      timingSafeStringEqual(user, auth.adminUser) &&
+      timingSafeStringEqual(password, auth.adminPassword);
+    if (!byWaiver && !byPassword) {
+      sendJson(res, 401, { error: 'admin login failed' });
+      return;
+    }
+    const session = deps.sessions.create();
+    sendJson(res, 200, { ...session, via: byWaiver ? 'waiver' : 'password', nags: changeMeNags(auth) });
+    return;
+  }
+
+  if (path === '/admin/factory-reset') {
+    if (deps.factoryReset === undefined) {
+      sendJson(res, 501, { error: 'no config store is wired up' });
+      return;
+    }
+    // THE ONE CARVE-OUT (D-35): the admin password is always required here, from any
+    // origin, INCLUDING loopback. Everything else an admin session can do is recoverable;
+    // a factory reset on a box across the house is the lockout path, and one password
+    // prompt in its lifetime is a fair price. Revealing the passphrase is deliberately NOT
+    // carved out - Rocket has to read it to type it into the ESP32 and Companion.
+    let password: unknown;
+    try {
+      ({ password } = JSON.parse(await readBody(req)) as { password?: unknown });
+    } catch (err) {
+      sendJson(res, 400, { error: `malformed JSON body: ${errorMessage(err)}` });
+      return;
+    }
+    if (typeof password !== 'string' || !timingSafeStringEqual(password, authOf(deps).adminPassword)) {
+      sendJson(res, 403, { error: 'factory reset requires the admin password, from any origin' });
+      return;
+    }
+    await deps.factoryReset();
+    deps.sessions?.destroyAll();
+    sendJson(res, 200, { ok: true, config: deps.config?.() });
     return;
   }
 

@@ -199,3 +199,22 @@ test('A FAILED SAVE LEAVES THE RUNNING CONFIG BYTE-IDENTICAL', async () => {
   // wholly the new one, and a write that never completed never reached the rename.
   assert.equal(await readFile(file, 'utf8'), before);
 });
+
+test('an auth block from the reserved-field release upgrades cleanly, rather than to repair mode', () => {
+  // Shipped once as `auth: { passphrase: null }` before the credentials existed. Rejecting
+  // it would put an upgrading host into the repair view on loopback - which takes the light
+  // off the LAN to complain about a field that means "not configured".
+  const v = validateConfig({ ...defaultConfig(), auth: { passphrase: null } });
+  assert.equal(v.ok, true);
+  if (v.ok) {
+    assert.equal(v.config.auth.passphrase, 'onair');
+    assert.equal(v.config.auth.adminUser, 'rocket');
+  }
+});
+
+test('but an EMPTY credential is still an error - that is someone typing nothing', () => {
+  for (const key of ['passphrase', 'adminUser', 'adminPassword']) {
+    const v = validateConfig({ ...defaultConfig(), auth: { ...defaultConfig().auth, [key]: '  ' } });
+    assert.equal(v.ok, false, key);
+  }
+});

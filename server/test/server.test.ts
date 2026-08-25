@@ -347,7 +347,7 @@ test('GET /display serves the self-contained page', async () => {
   await h.close();
 });
 
-test('token via query works on GETs only', async () => {
+test('token via query works on GETs only - a write must never put it in the logs', async () => {
   const h = await boot('sekrit');
   assert.equal((await fetch(`${h.base}/status?token=sekrit`)).status, 200);
   assert.equal((await fetch(`${h.base}/status?token=wrong`)).status, 401);

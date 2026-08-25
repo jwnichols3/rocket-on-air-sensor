@@ -63,7 +63,12 @@ function encodeClientFrame(opcode: number, payload: Buffer): Buffer {
   return Buffer.concat([header, maskKey, masked]);
 }
 
-async function connectWs(port: number, path = '/events/ws', pipelinedBytes?: Buffer): Promise<WsTestClient> {
+async function connectWs(
+  port: number,
+  path = '/events/ws',
+  pipelinedBytes?: Buffer,
+  extraHeaders = '',
+): Promise<WsTestClient> {
   const socket = net.connect(port, '127.0.0.1');
   await new Promise<void>((resolve, reject) => {
     socket.once('connect', resolve);
@@ -77,6 +82,7 @@ async function connectWs(port: number, path = '/events/ws', pipelinedBytes?: Buf
     `Connection: Upgrade\r\n` +
     `Sec-WebSocket-Key: ${FIXED_KEY}\r\n` +
     `Sec-WebSocket-Version: 13\r\n` +
+    extraHeaders +
     `\r\n`;
   // Concatenated into one write (rather than two) so that, over loopback, any bytes the
   // caller wants pipelined right after the handshake land in the same TCP segment as the
@@ -252,18 +258,34 @@ test('close handling: server replies close and socket ends; app.close() still re
   assert.ok(Date.now() - start < 2000, 'app.close() should resolve promptly after the client closed');
 });
 
-test('token gating: upgrade without token 401s; ?token= succeeds', async () => {
+test('the upgrade is gated for a non-local client; ?passphrase= and ?token= both work', async () => {
   const app = await bootApp({ token: 'sekrit' });
+  // An Origin that is not ours is what a client from elsewhere looks like, and it is what
+  // takes the D-24 waiver off the table. The upgrade cannot carry an Authorization header
+  // from a browser, which is the whole reason the query fallback exists.
+  const REMOTE = `Origin: http://10.42.14.189:9099\r\n`;
 
-  const unauthed = await connectWs(app.port);
+  const unauthed = await connectWs(app.port, '/events/ws', undefined, REMOTE);
   assert.equal(unauthed.status, 401);
 
-  const authed = await connectWs(app.port, '/events/ws?token=sekrit');
+  const wrong = await connectWs(app.port, '/events/ws?token=nope', undefined, REMOTE);
+  assert.equal(wrong.status, 401);
+
+  const authed = await connectWs(app.port, '/events/ws?token=sekrit', undefined, REMOTE);
   assert.equal(authed.status, 101);
   const snapshot = await authed.nextJson();
-  assert.equal(snapshot.intended, 'off');
-
+  assert.equal(snapshot.intended, 'off', 'this harness seeds `available`');
   authed.close();
+
+  const byPassphrase = await connectWs(app.port, '/events/ws?passphrase=sekrit', undefined, REMOTE);
+  assert.equal(byPassphrase.status, 101);
+  byPassphrase.close();
+
+  // And locally, with no credential at all, it is waived (D-24).
+  const local = await connectWs(app.port);
+  assert.equal(local.status, 101);
+  local.close();
+
   await app.close();
 });
 

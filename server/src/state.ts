@@ -302,6 +302,12 @@ export class StateStore {
     return this.get();
   }
 
+  /** Clear or set the pin outright. Used by factory reset; routes go through `write`. */
+  setHold(hold: string | null): OnAirState {
+    this.state = { ...this.state, hold };
+    return this.get();
+  }
+
   setConfirmed(confirmed: string): OnAirState {
     this.state = { ...this.state, confirmed };
     return this.get();

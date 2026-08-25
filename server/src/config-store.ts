@@ -2,6 +2,7 @@ import { constants as fsConstants } from 'node:fs';
 import { open, rename, mkdir, readFile, chmod } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { dirname } from 'node:path';
+import { defaultAuth, type AuthBlock } from './auth.js';
 import { ID_PATTERN, SEED_ROWS, SEED_SHORTCUTS, UNKNOWN_ID, type Shortcuts, type StateRow } from './state.js';
 
 /**
@@ -22,12 +23,8 @@ export interface OnAirConfig {
   shortcuts: Shortcuts;
   /** The device the server drives. Credentials live here rather than in the env (D-36). */
   light: { host: string | null; entity: string; username: string | null; password: string | null };
-  /**
-   * The shape only. The passphrase, the admin session and the Origin waiver are D-35 and
-   * land with #40; this reserves the field so a config written now round-trips through
-   * that change instead of being dropped by it.
-   */
-  auth: { passphrase: string | null };
+  /** The passphrase and the admin credentials (D-35, D-43). Why this file is 0600. */
+  auth: AuthBlock;
 }
 
 /**
@@ -50,7 +47,7 @@ export function defaultConfig(): OnAirConfig {
     states: SEED_ROWS.map((r) => ({ ...r })),
     shortcuts: { ...SEED_SHORTCUTS },
     light: { host: null, entity: 'PresenceKey', username: null, password: null },
-    auth: { passphrase: null },
+    auth: defaultAuth(),
   };
 }
 
@@ -93,8 +90,7 @@ export function validateConfig(raw: unknown): Validated {
     username: strOrNull(lightRaw.username),
     password: strOrNull(lightRaw.password),
   };
-  const authRaw = (typeof c.auth === 'object' && c.auth !== null ? c.auth : {}) as Record<string, unknown>;
-  const auth = { passphrase: strOrNull(authRaw.passphrase) };
+  const auth = validateAuth(c.auth, fail);
 
   if (errors.length > 0) return { ok: false, errors };
   return {
@@ -105,6 +101,42 @@ export function validateConfig(raw: unknown): Validated {
 
 function strOrNull(v: unknown): string | null {
   return typeof v === 'string' && v !== '' ? v : null;
+}
+
+/**
+ * An EMPTY passphrase or admin password is a validation error, never bypassable auth
+ * (contract §8). The failure mode being designed against is a config edit that silently
+ * turns the door off, which is the one mistake here that has no visible symptom.
+ */
+function validateAuth(v: unknown, fail: (m: string) => void): AuthBlock {
+  const a = (typeof v === 'object' && v !== null ? v : {}) as Record<string, unknown>;
+  const d = defaultAuth();
+  const required = (key: 'passphrase' | 'adminUser' | 'adminPassword'): string => {
+    const raw = a[key];
+    // ABSENT (undefined or null) means "not configured" and takes the shipped default.
+    // EMPTY means someone typed nothing into a credential field, which is a different
+    // thing and is an error - an empty credential is never bypassable auth (§8). The null
+    // case is not hypothetical: the config document shipped one release with
+    // `auth: { passphrase: null }` as a reserved field, and rejecting that would put an
+    // upgrading host into the repair view on loopback, taking the light off the LAN.
+    if (raw === undefined || raw === null) return d[key];
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      fail(`auth.${key} must be a non-empty string - an empty credential is never bypassable auth`);
+      return d[key];
+    }
+    return raw;
+  };
+  const previous = strOrNull(a.previous);
+  const previousUntil = typeof a.previousUntil === 'number' && Number.isFinite(a.previousUntil) ? a.previousUntil : null;
+  return {
+    passphrase: required('passphrase'),
+    adminUser: required('adminUser'),
+    adminPassword: required('adminPassword'),
+    // The rotation window is persisted so a restart mid-rotation does not cut the clients
+    // that have not been updated yet.
+    previous: previousUntil === null ? null : previous,
+    previousUntil: previous === null ? null : previousUntil,
+  };
 }
 
 export function parseBind(v: unknown): BindMode | null {

@@ -7,6 +7,7 @@ import {
   saveConfigFile,
   type OnAirConfig,
 } from './config-store.js';
+import { rotate, SessionStore } from './auth.js';
 import { NoopDriver, type LightDriver } from './driver.js';
 import { EsphomeTextDriver } from './esphome-driver.js';
 import { loadState, saveState } from './persist.js';
@@ -22,6 +23,11 @@ export interface AppOptions {
   configFile?: string;
   /** Overrides the config's port. The real environment still wins over the file (D-14). */
   port?: number;
+  /**
+   * `ONAIR_PASSPHRASE` (or the deprecated `ONAIR_TOKEN`) from the real environment. It
+   * OVERRIDES the document's passphrase rather than gating separately - D-14's rule, and
+   * the break-glass path for a box you can only reach over SSH.
+   */
   token?: string;
   driver?: LightDriver;
   /** Built from the config's `light` block when not supplied. */
@@ -41,6 +47,7 @@ export interface App {
   port: number;
   store: StateStore;
   config: () => OnAirConfig;
+  sessions: SessionStore;
   close: () => Promise<void>;
 }
 
@@ -137,6 +144,9 @@ export async function createApp(opts: AppOptions): Promise<App> {
       log(`[onair] could not write a starting config: ${errorMessage(err)}`);
     }
   }
+  // The env credential wins over the file, and is folded in here so there is exactly ONE
+  // passphrase in play rather than two gates that could disagree.
+  if (opts.token !== undefined) config = { ...config, auth: { ...config.auth, passphrase: opts.token } };
   if (problem) {
     log(`[onair] CONFIG UNUSABLE - starting on loopback with defaults, serving the repair view:`);
     for (const e of problem.errors) log(`[onair]   ${e}`);
@@ -194,6 +204,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
 
   const hub = createSseHub();
   const wsBridge = createWsBridge();
+  const sessions = new SessionStore();
   let servers: Server[] = [];
   let boundPort = 0;
 
@@ -203,7 +214,6 @@ export async function createApp(opts: AppOptions): Promise<App> {
       driver,
       persist: (state) => saveState(opts.stateFile, state),
       enqueueWrite,
-      token: opts.token,
       hub,
       ws: wsBridge,
       log,
@@ -211,7 +221,30 @@ export async function createApp(opts: AppOptions): Promise<App> {
       config: () => config,
       configProblem: () => problem,
       applyConfig,
+      sessions,
+      factoryReset,
     });
+
+  /**
+   * Everything back to shipped defaults (D-35, amended by D-43 on the passphrase): admin
+   * credentials to `rocket`/`ESP32`, the passphrase to `onair`, the table to the seed rows,
+   * the hold cleared, live state `unknown`, `bind` to `all`, port to 8484.
+   *
+   * The device credentials are kept. They are not ours to reset - they were compiled into
+   * the firmware (D-17) and a reset that silently forgot them would take the light offline
+   * with no error, which is the opposite of what someone reaching for a factory reset wants.
+   */
+  async function factoryReset(): Promise<void> {
+    const fresh = { ...defaultConfig(), version: config.version + 1, light: { ...config.light } };
+    if (opts.configFile) await saveConfigFile(opts.configFile, fresh);
+    config = fresh;
+    problem = undefined;
+    store.setTable(new StateTable(fresh.states, fresh.version));
+    store.write(UNKNOWN_ID, { kind: 'human', label: 'factory-reset', raw: 'human:factory-reset' });
+    store.setHold(null);
+    await saveState(opts.stateFile, store.persisted());
+    log('[onair] factory reset: credentials, table, state and bind are back to defaults');
+  }
 
   /**
    * The one apply path (D-36). Persist first, then swap the table in, then rebind if the
@@ -221,7 +254,11 @@ export async function createApp(opts: AppOptions): Promise<App> {
    * answers `409` - "restart and hope" is not safe to invoke from across the house, and
    * under KeepAlive a process exit on a bad address is a crash-loop.
    */
-  async function applyConfig(next: OnAirConfig): Promise<{ ok: true } | { ok: false; status: 409 | 507; error: string }> {
+  async function applyConfig(input: OnAirConfig): Promise<{ ok: true } | { ok: false; status: 409 | 507; error: string }> {
+    let next = input;
+    // A passphrase change starts the 60-minute grace window, so the ESP32, Companion and
+    // the detector degrade on a schedule instead of all at once.
+    next = { ...next, auth: rotate(config.auth, next.auth) };
     if (opts.configFile) {
       try {
         await saveConfigFile(opts.configFile, next);
@@ -238,6 +275,9 @@ export async function createApp(opts: AppOptions): Promise<App> {
     // someone used to get the service back up.
     const rebinding = effectivePort(next) !== effectivePort(config) || next.bind !== config.bind;
     const previous = config;
+    // A changed admin password invalidates every live session: the point of changing it is
+    // that whoever knew the old one stops being admin.
+    if (next.auth.adminPassword !== config.auth.adminPassword) sessions.destroyAll();
     config = next;
     problem = undefined; // a successful save is the repair
     store.setTable(new StateTable(next.states, next.version));
@@ -306,6 +346,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     },
     store,
     config: () => config,
+    sessions,
     close: async () => {
       supervisor.stop(); // synchronous: never await an in-flight tick
       hub.closeAll();
