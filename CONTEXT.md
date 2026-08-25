@@ -180,6 +180,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-32** unprefixed `source` reads as `human:` | **Amended** by D-41: required and prefixed on `PUT /state`, optional on the convenience routes. |
 > | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. Its `select`->`text` half is proven by D-44 and **shipped** by D-46; the `select` no longer exists. Its **config-pull half is shipped by D-54**, which also removes the last hardcoded row list from the firmware. Its claim that `mode: password` keeps a value out of the device's REST API is **factually wrong and corrected by D-55** - a second feasibility-shaped error in the same decision. |
 > | **D-40** ESPHome CAN serve a custom page, via an external component | **Narrowed** by D-57. The verdict was right and the mechanism was not: `web_server_base::add_handler()` registers a handler on the server ESPHome already runs, so the page needed two headers and no component. D-40's evidence - the `add_handler` / `canHandle` surface, `captive_portal` using it in-tree - is exactly what made that possible, and its NVS-persistence half is **shipped** by D-57 for the overlay only. |
+> | **D-55**'s operational note, *"rotating it in the admin console is cheap ... it is on the review list"* | **Retired** by D-61. The defaults are the product, the way a router's are. The first-run change is the operator's step, not remediation, and it is not an open item to keep raising. |
 > | **D-31** "colour is on the wire" | **Narrowed** by D-42: colour is in the profile (`GET /config/states`), never on a state change. Presentation travels with the profile, semantics with the state. |
 > | **D-42** presentation travels with the profile; the version nudge | **Shipped** by D-53 (server payload) and D-54 (the nudge, and the device end of the pull). The nudge fires on a state write *and* on a config save. |
 
@@ -1901,4 +1902,31 @@ else (state, light control, API) lives on the receiver.
   Live after a daemon cycle: machine client `401 application/json`, browser `401 text/html`,
   `onair ui` printing all four URLs, and the panel back to `CALM LIGHT` - the restart
   re-pushed state, which is also what proves the driver survived it.
+
+- **D-61 (2026-08-25)** **The shipped credentials are defaults on purpose, like a router's.
+  Changing them is the operator's first-run step, not an outstanding action.** Rocket's
+  call, verbatim: *"The server and client passphrase is going to be fairly well known. It
+  will be a default and it will not be rotated. The expectation is the first time somebody
+  sets up this environment, they will change the passphrase on their own. Similar to how a
+  router is set up. When you do a factory reset, it will default back to a known
+  user/password combo."*
+  **Scope: all three credentials.** The server passphrase (D-35), the admin login (D-51)
+  and the panel's `rocket` / `ESP32` basic auth (D-56). All published in a public repo
+  deliberately; all restored by a factory reset (D-43), which is the router analogy working
+  rather than a hole in it.
+  **The mechanism already exists and is the whole of it.** `changeMeNags()` in
+  `server/src/auth.ts` reports whether each credential is still the shipped default, and
+  the admin console prints *"Still the shipped default."* beside the field
+  (`admin-ui/src/app.js:441`). A nag next to the field you would edit anyway is the correct
+  amount of pressure for a LAN device that drives a light.
+  **What this retires.** D-55's operational note asked Rocket to rotate the passphrase after
+  the `mode: password` leak, and D-56 restated the concern. Both were raised again in a
+  closing report. That was three appearances of a settled decision presented as an open
+  item, and it made the real review list harder to read. **Rotation is not to be
+  recommended in this project.** A credential *leak* is still reported - once, as a fact,
+  with what leaked and where - but without a rotation recommendation attached.
+  **What is unchanged.** D-35's two audiences, D-24's waiver, and D-55's finding that the
+  panel must not serve the server credential. Defaults being known is a reason those
+  separations matter more, not less: the credential that gates data and the credential that
+  gates reconfiguration are still different credentials.
 

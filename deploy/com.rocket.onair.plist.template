@@ -19,8 +19,11 @@
   placeholder reads "at" sign + NODE + "at" sign.
 
   No service configuration (port, token, state file) lives in this plist or
-  the rendered copy: the service reads $HOME/.onair/config.env itself at
-  startup (server/src/config.ts). Change it by editing that file and restarting -
+  the rendered copy. The service's configuration document is
+  $HOME/.onair/config.json (D-50), edited in the admin console;
+  $HOME/.onair/config.env is an env OVERLAY it also loads at startup
+  (server/src/config.ts), for the host whose service will not boot. Change
+  either and restart -
   no re-render of this plist required.
 -->
 <plist version="1.0">
