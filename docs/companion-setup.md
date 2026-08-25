@@ -16,8 +16,18 @@ Base URL `http://<host>:8484`. Two button actions:
 - **Off**: Method `POST`, URL `/off?source=companion`
 
 No body needed. `?source=companion` follows the API's convention for identifying which
-client wrote the state (see `docs/api-contract.md`). If `ONAIR_TOKEN` is set on the
-service, add a Header field to each action: `{"Authorization": "Bearer <ONAIR_TOKEN>"}`.
+client wrote the state (see `docs/api-contract.md`).
+
+**Add a Header field to each action:** `{"Authorization": "Bearer <passphrase>"}`. This is no
+longer conditional - it was written when `ONAIR_TOKEN` was optional, and D-35 replaced that
+with a passphrase that always exists. Without it you get a `401` from anywhere except
+loopback, where D-24's waiver may apply; set it regardless rather than depending on where
+Companion happens to be running.
+
+**Where the passphrase lives** (D-50, and this changed): `~/.onair/config.json`, under
+`auth.passphrase`. It is **not** in `config.env` any more - that file retired as the config
+source and survives only as an env overlay. The easiest place to read or change it is the
+admin console at `http://<host>:8484/admin`.
 
 **`/on` and `/off` survived v2, and so did `?source=companion`.** They no longer *name* a
 state - they resolve through the configured shortcut rows (seeded `on-air` and
@@ -32,11 +42,11 @@ To reach a row that is not a shortcut - `recording`, say - use `POST /state/{id}
 
 ## Status feedback: `generic-websocket`
 
-- **Target URL**: `ws://<host>:8484/events/ws?token=<ONAIR_TOKEN>` - the token is
-  **required** as of D-23; the bare form now gets a 401. The WS upgrade can't carry a
-  header the way the HTTP actions can, so it uses the same `?token=` query-param
-  convention as `GET /events`. Read the value with
-  `grep '^ONAIR_TOKEN=' ~/.onair/config.env`.
+- **Target URL**: `ws://<host>:8484/events/ws?passphrase=<passphrase>` - the credential is
+  **required**; the bare form gets a `401`. The WS upgrade cannot carry an `Authorization`
+  header the way the HTTP actions can, so it uses a query parameter, as `GET /events` does.
+  `?token=` is still accepted as a synonym, so an existing connection keeps working - only
+  the value's home moved (see above).
 - **Reconnect**: on
 - **Feedback JSON Path**: `intended`
 
