@@ -45,6 +45,46 @@ left. The table is not persisted, so a fresh boot shows `NO CONFIG` until the fi
 succeeds, which is correct: a table the device cannot vouch for is exactly what that branch
 is for.
 
+## The two pages the device serves
+
+Point a browser at the panel's IP (#33, D-57):
+
+| Path | Auth | What it is |
+|---|---|---|
+| `/onair` | **none** | what the panel is showing, and why |
+| `/onair/config` | device basic auth | the local presentation overrides |
+| `/` | device basic auth | ESPHome's stock dashboard, untouched |
+
+`/onair` is deliberately open and deliberately read-only: it shows no credential of any
+kind and offers no control that changes anything. It reports the same answer the glass is
+showing, because both call the same `compute_view()` in `onair_table.h` - a status page
+that could be calm about something the panel was not would be worse than no status page.
+
+"Configure" is a link, and the login is the browser's own credential prompt rather than a
+styled form. That is `add_handler()` doing its job: the page inherits `web_server`'s auth
+instead of implementing a second one. A real form would mean a session and a cookie, and
+D-23's CSRF objection with them, on a device that has no CSRF defences.
+
+### What a local override is, and is not
+
+**Presentation only, and an overlay rather than a copy of the table.** `label`, `color` and
+`bgcolor` can be overridden per row; `busy` and row membership cannot, and are not fields
+the overlay has. `busy` drives THE BUSY RULE on the glass (D-32) - an override that could
+set a busy row calm would draw a false OFF - and the server is what addresses a state, so a
+row invented here could never be selected.
+
+The panel keeps pulling while overrides are in place, so a row the server adds next month
+arrives with the server's own look and needs nothing done to it. Leave a field blank to
+follow the server.
+
+**The overlay persists; the pulled table still does not.** A boot with no successful pull
+shows `NO CONFIG` whether or not overrides exist - an overlay is not a vocabulary.
+
+**A colour edit can change the SHAPE a calm row draws.** The panel is 1-bit, so
+`luminance(bgcolor) >= 128` is what picks between the heavy double frame and the open ring
+(D-54). An edit across that line flips the picture. The page says so where colour is
+edited; it is a consequence, not a bug.
+
 ## The device's own entities
 
 All of these are at the device's IP on port 80, behind the `web_server` basic auth (D-17).
@@ -60,12 +100,12 @@ per-device one, and set `light.password` in `~/.onair/config.json` to match.
 | `text/ServerPassphrase` | **write-only.** Reads back `********` - see below |
 | `switch/AutoProfile` | on = follow the server, off = freeze the table last pulled |
 | `button/RefreshProfile` | "Refresh profile from server". Pulls even when frozen |
-| `text_sensor/ConfigPull` | `version:rows:ok:failed`, for checking the pull from a shell |
-| `text_sensor/RowLabel`, `text_sensor/RowColor` | the current row as pulled |
+| `text_sensor/ConfigPull` | `version:rows:ok:failed:overrides`, for checking the pull from a shell |
+| `text_sensor/RowLabel`, `text_sensor/RowColor` | the current row **as drawn** - local override included |
 | `text_sensor/Render` | which SHAPE the display lambda drew |
 
-`ServerHost`, `ServerPort` and the passphrase persist across reboots and across a reflash;
-the `!secret` values in `secrets.yaml` are first-boot defaults only.
+`ServerHost`, `ServerPort`, the passphrase and the local overrides persist across reboots
+and across a reflash; the `!secret` values in `secrets.yaml` are first-boot defaults only.
 
 ### The passphrase is write-only, and that is not caution
 
@@ -83,3 +123,29 @@ curl -u rocket:ESP32 -d '' \
 
 A change takes effect at once and triggers a pull, so `text_sensor/ConfigPull` tells you
 within a few seconds whether the new value works.
+
+**It is not offered on `/onair/config`.** A field that sets a credential and cannot show it
+belongs where the rest of the write-only entity lives, and duplicating it onto a page whose
+whole subject is presentation would invite exactly the confusion D-55 came out of.
+
+## The three headers
+
+| File | What is in it |
+|---|---|
+| `configs/elegoo-esp32.yaml` | the ESPHome configuration, the display lambda, the pull |
+| `configs/onair_table.h` | the table, the overlay, `effective()` and `compute_view()` |
+| `configs/onair_page.h` | the two web handlers |
+
+Headers rather than an external component. D-40 argued a component was needed for a
+device-served page; it was not - `web_server_base::add_handler()` registers a handler on
+the server ESPHome already runs (`captive_portal` does the same in-tree).
+
+**One thing to know before editing them.** ESPHome emits `includes:` files *after* the
+block that instantiates `GlobalsComponent<T>`, so a `globals:` entry whose C++ type comes
+from an include does not compile. Everything the panel holds therefore lives in
+`onair::held()`, a function-local static behind an inline accessor.
+
+**And one before adding a handler.** esp-idf runs web handlers on the httpd task, not the
+ESPHome main loop. Handlers here read under `held().lock` and *stage* every write for the
+main loop to apply. Nothing in `onair_page.h` touches an ESPHome component API directly,
+and nothing should.

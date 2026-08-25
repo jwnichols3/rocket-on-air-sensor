@@ -9,11 +9,14 @@ substitutions:
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
-  # The state table, its lookup and its parser. A header rather than an external
-  # component because that is the whole of it - see the file, and D-40 for what a real
-  # component would buy (#33).
+  # The state table, its lookup, its parser, the local presentation overlay and the
+  # effective-row computation both renderers share (onair_table.h); and the two pages the
+  # device serves (onair_page.h, #33). Headers rather than an external component: they
+  # register handlers on the web server ESPHome already runs, which is all D-40's
+  # component argument ever came down to.
   includes:
     - onair_table.h
+    - onair_page.h
   on_boot:
     # setup_priority::LATE - runs strictly after every component setup(). The template
     # text's setup() ends in publish_state(), which fires on_value unconditionally, so
@@ -26,6 +29,12 @@ esphome:
           // Before anything can pull. The stored value wins over the compiled-in one, so
           // a rotation typed at the panel survives a reflash.
           onair::load_passphrase("${onair_default_passphrase}");
+          // The local presentation overlay (#33). Persisted, unlike the table - a row the
+          // operator renamed survives a reboot, the vocabulary it renames does not.
+          onair::load_overlay();
+          // Priority -100 runs after every component setup(), and web_server's is
+          // WIFI - 1, so the server is up and a handler added now attaches to it live.
+          onair::install_pages();
 
 esp32:
   board: esp32dev
@@ -397,16 +406,41 @@ script:
                                    (unsigned) body.size());
                           return;
                         }
-                        onair::held().table = next;
-                        onair::held().version = version;
-                        onair::held().etag = response->get_response_header("etag");
-                        onair::held().have = true;
-                        onair::held().oks++;
+                        // Through install_table, not by hand: it takes the lock the
+                        // device-served page reads under, and `table = next` is a vector
+                        // move that would pull the strings out from under a reader on the
+                        // HTTP task.
+                        onair::install_table(next, version, response->get_response_header("etag"));
                         ESP_LOGI("onair", "config pull: table v%s, %u rows, etag %s",
                                  version.c_str(), (unsigned) onair::held().table.size(),
                                  onair::held().etag.c_str());
 
 interval:
+  # The device-served page's side of the fence (#33).
+  #
+  # esp-idf runs web handlers on the httpd task. Nothing there touches an ESPHome
+  # component: a page action is STAGED and applied here, on the main loop, and the HTTP
+  # task blocks until this has answered. 100ms is invisible to a browser and cheap - the
+  # common case is one comparison and a return.
+  #
+  # publish_context mirrors the two entity values the page needs, because a handler cannot
+  # reach an `id()`. Reading a <=100ms-old copy against a 90s staleness threshold is not a
+  # difference anyone can observe.
+  - interval: 100ms
+    then:
+      - lambda: |-
+          onair::publish_context(id(presence_key).has_state() ? id(presence_key).state : std::string(),
+                                 id(last_write_ms));
+          onair::pump();
+      - if:
+          condition:
+            lambda: 'return onair::take_refresh_request();'
+          then:
+            # Ungated by auto_profile, exactly like the Refresh BUTTON it mirrors: a press
+            # is a person asking, not the server asking to be followed.
+            - logger.log: "refresh requested from the device page"
+            - script.execute: pull_table
+
   # UNTIL THE FIRST SUCCESSFUL PULL, and then never again.
   #
   # MEASURED, every boot: the pull fired from `on_connect` fails once. on_connect means
@@ -474,25 +508,27 @@ text_sensor:
       // Branch 0/5 no longer name a row - a busy row is a busy row and the LABEL is
       // what tells them apart now (D-31). They name the SHAPE that was drawn, which is
       // what this sensor is for: proving what reached the glass, over HTTP.
-      switch (id(render_branch)) {
-        case 1: return {"CALM HEAVY"};
-        case 2: return {"CALM LIGHT"};
-        case 3: return {"NO DATA"};
-        case 4: return {"UNKNOWN KEY"};
-        case 6: return {"NO CONFIG"};
-        default: return {"BUSY"};
-      }
+      //
+      // The names come from onair::shape_name, which is also what the device-served
+      // status page prints (#33). The numbers ARE onair::Shape's values and have to
+      // stay that way; each display branch still assigns its own, so this reports the
+      // branch that RAN rather than the branch that was chosen (D-22.1).
+      return {std::string(onair::shape_name((onair::Shape) id(render_branch)))};
   - platform: template
     # The current row's LABEL, as drawn. Together with RowColor this is how a config pull
     # is proven from a shell instead of by looking at the panel - which matters because
     # the interesting states are the ones that only last a few seconds.
+    #
+    # EFFECTIVE, not pulled (#33): these sensors exist to say what reached the glass, and
+    # a local override is part of what reached it. `(no table)` and `(unknown key)` are
+    # unchanged - an overlay is not a vocabulary and cannot invent a row.
     name: "RowLabel"
     id: row_label_sensor
     update_interval: 5s
     lambda: |-
       if (!onair::held().have) return {"(no table)"};
-      const onair::Row *row = onair::find(onair::held().table, id(presence_key).state);
-      return row == nullptr ? std::string("(unknown key)") : row->label;
+      onair::Effective eff = onair::effective(id(presence_key).state);
+      return eff.known ? eff.row.label : std::string("(unknown key)");
   - platform: template
     # The row's background colour, as pulled. This panel is 1-bit and cannot draw it -
     # what it CAN do with colour is choose between the two calm shapes by luminance, see
@@ -503,20 +539,23 @@ text_sensor:
     update_interval: 5s
     lambda: |-
       if (!onair::held().have) return {""};
-      const onair::Row *row = onair::find(onair::held().table, id(presence_key).state);
-      return row == nullptr ? std::string("") : onair::format_hex_color(row->bgcolor);
+      onair::Effective eff = onair::effective(id(presence_key).state);
+      return eff.known ? onair::format_hex_color(eff.row.bgcolor) : std::string("");
   - platform: template
-    # version:rows:ok:failed. One string because it is one question - "is the pull
-    # working" - and four sensors would be four things to correlate.
+    # version:rows:ok:failed:overrides. One string because it is one question - "is the
+    # pull working" - and five sensors would be five things to correlate. The overlay
+    # count rides along because "the panel is showing the wrong label" has exactly two
+    # causes and this tells them apart without opening a browser (#33).
     name: "ConfigPull"
     id: config_pull_sensor
     update_interval: 5s
     lambda: |-
-      char buf[48];
-      snprintf(buf, sizeof(buf), "%s:%u:%u:%u",
+      char buf[64];
+      snprintf(buf, sizeof(buf), "%s:%u:%u:%u:%u",
                onair::held().have ? onair::held().version.c_str() : "none",
                (unsigned) onair::held().table.size(),
-               (unsigned) onair::held().oks, (unsigned) onair::held().failures);
+               (unsigned) onair::held().oks, (unsigned) onair::held().failures,
+               (unsigned) onair::held().overlay.size());
       return {std::string(buf)};
   - platform: wifi_info
     ip_address:
@@ -540,42 +579,28 @@ display:
         it.printf(127, 52, id(status_text), TextAlign::TOP_RIGHT, "%.0fdBm", id(wifi_signal_db).state);
       }
 
-      // ---- state, read from the text entity. The device is handed an opaque key and
-      //      renders it; it no longer declares which keys are valid (D-38). An empty or
-      //      absent state falls through to the UNKNOWN branch, which is never calm.
-      std::string key = id(presence_key).has_state() ? id(presence_key).state : std::string();
-
-      // The table is PULLED now (#43), not compiled in. Three cases, and they are three
-      // different pictures because they have three different causes:
-      //   no table  -> we have never reached the server. NO CONFIG.
-      //   no row    -> we reached it once and it has moved on. UNKNOWN KEY, and re-pull.
-      //   a row     -> render it.
-      // The `dnd` alias that carried the v1->v2 cutover is gone with the hardcoded rows;
-      // the pulled table is the vocabulary now, which is the whole point of the pull.
-      const onair::Row *row = onair::held().have ? onair::find(onair::held().table, key) : nullptr;
-      bool no_config = !onair::held().have;
-      bool known = row != nullptr;
-      const char *label = known ? row->label.c_str() : "";
-      // An unknown key is assumed BUSY, for the same reason the server's table defaults
-      // it that way: of the two guesses only the calm one can be a false OFF.
-      bool row_busy = known ? row->busy : true;
-
-      // ---- staleness: 0 means "nothing written since boot" (see on_boot) ----
-      const uint32_t STALE_MS = 90000;
-      uint32_t lw = id(last_write_ms);
-      bool stale = (lw == 0) || (millis() - lw > STALE_MS);
-
-      // THE BUSY RULE, on the glass. A calm row is the only claim that can be a false OFF,
-      // so a stale one is refused and drawn as NO DATA instead. Keyed on the row's busy
-      // flag rather than on rank, because there is no rank left - and this is the same
-      // rule the server enforces, deliberately restated here so the panel is safe even if
-      // the server heartbeats something it should not.
-      bool render_no_data = (key == "unknown") || (stale && known && !row_busy);
+      // ---- WHAT to draw: ONE decision, made in onair_table.h and shared with the
+      //      device-served status page (#33). The page has to be able to say NO CONFIG,
+      //      UNKNOWN KEY and NO DATA for exactly the reasons the glass says them, and the
+      //      only way to guarantee that permanently is for there to be one function.
+      //      Staleness, THE BUSY RULE and the luminance choice all live in there now.
+      //
+      //      Three causes, three pictures, unchanged since #43:
+      //        no table  -> we have never reached the server. NO CONFIG.
+      //        no row    -> we reached it once and it has moved on. UNKNOWN KEY, re-pull.
+      //        a row     -> render it, with any local override already applied.
+      //      The device is still handed an OPAQUE key and still declares no vocabulary of
+      //      its own (D-38); the overlay changes how a row LOOKS and never which rows
+      //      exist or which of them is busy.
+      onair::View view = onair::compute_view(
+          id(presence_key).has_state() ? id(presence_key).state : std::string(),
+          id(last_write_ms));
+      const char *label = view.eff.known ? view.eff.row.label.c_str() : "";
 
       // A long label will not fit at 30px. Pick the size from the label, not the row.
       auto label_font = [&](const char *t) { return strlen(t) > 8 ? id(status_title) : id(status_huge); };
 
-      if (no_config) {
+      if (view.shape == onair::Shape::NO_CONFIG) {
         // NO CONFIG - the table has never arrived, so there is no row to render and no
         // claim this panel is entitled to make. Distinct from NO DATA on purpose: NO DATA
         // means the SERVER stopped talking about state, this means WE have never heard
@@ -585,7 +610,7 @@ display:
         it.printf(64, 42, id(status_text), COLOR_ON, TextAlign::CENTER, "%s",
                   id(server_host).state.empty() ? "no server set" : id(server_host).state.c_str());
         id(render_branch) = 6;
-      } else if (!known) {
+      } else if (view.shape == onair::Shape::UNKNOWN_KEY) {
         // UNKNOWN KEY - the server named a state this build cannot draw. Solid header so
         // it cannot be mistaken for any of the rows, and the key itself on the glass so a
         // firmware/server skew is diagnosable without opening a laptop. Left-aligned
@@ -593,23 +618,23 @@ display:
         it.filled_rectangle(0, 0, 128, 16, COLOR_ON);
         it.printf(64, 8, id(status_title), COLOR_OFF, TextAlign::CENTER, "UNKNOWN KEY");
         it.printf(2, 20, id(status_text), COLOR_ON, TextAlign::TOP_LEFT, "%s",
-                  key.empty() ? "(no state)" : key.c_str());
+                  view.key.empty() ? "(no state)" : view.key.c_str());
         for (int x = 0; x < 128; x += 4) it.line(x, 40, x, 47, COLOR_ON);
         id(render_branch) = 4;
-      } else if (render_no_data) {
+      } else if (view.shape == onair::Shape::NO_DATA) {
         // NO DATA - hatched band. Never blank, never calm.
         for (int x = 0; x < 128; x += 4) it.line(x, 0, x, 14, COLOR_ON);
         it.printf(64, 26, id(status_title), COLOR_ON, TextAlign::CENTER, "NO DATA");
         id(render_branch) = 3;
-      } else if (row_busy) {
+      } else if (view.shape == onair::Shape::BUSY) {
         // BUSY - maximum ink. Words knocked out of a solid block, band left alone. Every
         // busy row shares this shape; the label is what tells them apart, which is the
         // point of the label being the row's and not the firmware's.
         it.filled_rectangle(0, 0, 128, 48, COLOR_ON);
         it.printf(64, 24, label_font(label), COLOR_OFF, TextAlign::CENTER, "%s", label);
-        if (stale) it.print(64, 44, id(status_text), COLOR_OFF, TextAlign::BASELINE_CENTER, "STALE");
+        if (view.stale) it.print(64, 44, id(status_text), COLOR_OFF, TextAlign::BASELINE_CENTER, "STALE");
         id(render_branch) = 0;
-      } else if (onair::luminance(row->bgcolor) >= 128) {
+      } else if (view.shape == onair::Shape::CALM_HEAVY) {
         // CALM, HEAVY - double frame INSET above the band, mid ink.
         //
         // THIS is where colour reaches a 1-bit panel. Two calm rows are identical in

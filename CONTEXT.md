@@ -179,6 +179,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
 > | **D-32** unprefixed `source` reads as `human:` | **Amended** by D-41: required and prefixed on `PUT /state`, optional on the convenience routes. |
 > | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. Its `select`->`text` half is proven by D-44 and **shipped** by D-46; the `select` no longer exists. Its **config-pull half is shipped by D-54**, which also removes the last hardcoded row list from the firmware. Its claim that `mode: password` keeps a value out of the device's REST API is **factually wrong and corrected by D-55** - a second feasibility-shaped error in the same decision. |
+> | **D-40** ESPHome CAN serve a custom page, via an external component | **Narrowed** by D-57. The verdict was right and the mechanism was not: `web_server_base::add_handler()` registers a handler on the server ESPHome already runs, so the page needed two headers and no component. D-40's evidence - the `add_handler` / `canHandle` surface, `captive_portal` using it in-tree - is exactly what made that possible, and its NVS-persistence half is **shipped** by D-57 for the overlay only. |
 > | **D-31** "colour is on the wire" | **Narrowed** by D-42: colour is in the profile (`GET /config/states`), never on a state change. Presentation travels with the profile, semantics with the state. |
 > | **D-42** presentation travels with the profile; the version nudge | **Shipped** by D-53 (server payload) and D-54 (the nudge, and the device end of the pull). The nudge fires on a state write *and* on a config save. |
 
@@ -1722,3 +1723,74 @@ else (state, light control, API) lives on the receiver.
   document (D-14) and would otherwise silently keep the old credential. Verified after:
   `rocket:ESP32` → 200, `onair:ESP32` → 401, and a write round-tripped to
   `confirmed: on-air` then `confirmed: available`, which is the device answering.
+
+- **D-57 (2026-08-25)** **The panel serves its own two pages, and a local override is
+  presentation and nothing else.** Resolves
+  [#33](https://github.com/jwnichols3/rocket-on-air-sensor/issues/33), the last of D-38's
+  device-side architecture and the last open ticket on the v2 backlog.
+  `GET /onair` is open and read-only; `GET`/`POST /onair/config` sits behind the device's
+  own basic auth. Both are `AsyncWebHandler`s on the `web_server` ESPHome already runs on
+  port 80 - **no second listener, no second port and no second credential.**
+  **D-40 was right that this was possible and wrong about what it needed.** It recorded
+  that a device-served page required an external component. It required two headers:
+  `web_server_base::add_handler()` and `add_handler_without_auth()` take any handler at any
+  time, and a handler registered after `init()` attaches to the running server. `on_boot`
+  at priority `-100` runs after every component setup, and `web_server`'s priority is
+  `WIFI - 1`, so the server is up by then. This is the third time in this project that a
+  component's *surface* was read as a statement about its *architecture*; D-40 and D-55 are
+  the other two, and the lesson has not changed.
+  **The overlay, and why `busy` is not a field in it.** The device holds the pulled table
+  (RAM only, D-54) and, separately, a sparse `row id -> {label?, color?, bgcolor?}` overlay
+  in NVS. `effective(id)` merges them at lookup. `busy` is **absent from the Override
+  struct**, which is a stronger guarantee than validating it away: an override that could
+  set a busy row calm would draw a calm shape while the server believed the row was busy -
+  a false OFF, the one failure this system exists to prevent - and a field the struct does
+  not have cannot be set by a malformed POST, a corrupted record, or an edit six months
+  from now that forgot why the check was there. Row **membership** is the server's for a
+  milder version of the same reason: the server addresses states, so a row invented locally
+  could never be selected. A `busy` parameter on a save is **refused with a message**, not
+  ignored, because silently dropping it would let a caller believe it had been applied.
+  **ONE rendering decision, not two.** `compute_view()` moved out of the display lambda
+  into `onair_table.h`, and the glass and the status page both call it. Staleness, THE BUSY
+  RULE, the `unknown` landing row and the luminance choice all live there now. A status
+  page that could say "available" while the panel beside it said `NO DATA` would be worse
+  than no status page, and the only way to guarantee that permanently is for there to be
+  one function. `onair::Shape`'s values ARE the `Render` sensor's branch numbers, so that
+  entity keeps working and now takes its names from the same table the page prints.
+  **The overlay persists and the table still does not - measured, in the same window.**
+  A reflash, then polling `/onair` every 200 ms: at t+4.5 s the page read `NO CONFIG`,
+  `profile: none held`, `overrides: 1 row(s) locally`; at t+4.8 s the pull landed and it
+  read `v9, 5 rows`. That is both halves of the invariant in one transcript - an overlay is
+  not a vocabulary, and a boot that has not reached the server still has nothing to say.
+  **The save is proved, not assumed.** Espressif warn a blob write can fail on page
+  fragmentation with space apparently free, and ESPHome's `save()` only *queues* - the
+  `nvs_set_blob` happens in `sync()`. The authority is therefore the **read-back**:
+  `sync()` clears the pending-save cache, so the `load()` after it is a real flash read.
+  `sync()`'s own return value is not trusted for the verdict, because it flushes every
+  pending preference and answers false if *anyone's* failed.
+  **The handlers run on esp-idf's httpd task, not the main loop.** That one fact shapes the
+  whole of `onair_page.h`. Reads take a mutex - `table = next` on a pull is a vector move
+  that would pull the strings out from under a concurrent reader - and **writes are staged
+  and applied by the main loop**, with the HTTP task blocking on the result for up to 3 s.
+  Blocking the browser's task rather than the display's is the right way round. Nothing in
+  the page touches an ESPHome component API directly, which is also why "Refresh profile
+  from server" sets a one-shot flag that a 100 ms interval turns into `script.execute`.
+  **The login is the browser's prompt, not a form.** `add_handler()` puts the config page
+  behind `web_server`'s own auth middleware, so following "Configure" raises the standard
+  credential dialog. A styled form would mean this code owning a session and a cookie,
+  which brings D-23's CSRF objection back onto a device with no CSRF defences. Flagged as a
+  taste call rather than assumed.
+  **A dormant override is kept and shown.** An override whose row the server has since
+  removed still applies to nothing; it is listed as `dormant` with its own Clear button.
+  Dropping it silently is the failure mode D-45 named, and it costs one line to not have.
+  **The passphrase is not on either page** and is not offered for setting there. D-55 put
+  it outside the entity system; duplicating a write-only credential field onto a page about
+  presentation would invite exactly the confusion D-55 came out of.
+  Live, on the board: an override of `available` to `FREE` on `#ffffff` flipped the calm
+  shape from `CALM LIGHT` to `CALM HEAVY` (luma 73 -> 255 across the 128 line, D-54's rule
+  doing what it says); four malformed saves - `busy` submitted, an invented row, `blue` as
+  a colour, a 65-character label - all returned `400` with a readable reason and left the
+  stored override untouched; `/onair/config` answered `401` without a credential and with a
+  wrong one; a temporary server row was added, overridden, removed, and the override
+  reported itself dormant; Clear all restored `AVAILABLE` / `#0b6e2e` / `CALM LIGHT`
+  exactly. The server config was left byte-identical apart from its version (9 -> 11).
