@@ -1,0 +1,24 @@
+{
+  "name": "onair-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "onair-api": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "check": "tsc --noEmit -p tsconfig.test.json",
+    "pretest": "npm run check",
+    "test": "node --import tsx --test 'test/*.test.ts'",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  }
+}

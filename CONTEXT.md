@@ -159,12 +159,12 @@ else (state, light control, API) lives on the receiver.
 > | **D-6** no TTL / staleness visible, never acted on | **Intact in principle; its rule is restated** by D-32's BUSY RULE. No TTL, no decay, no auto-raise - all confirmed. |
 > | **D-7** optional `ONAIR_TOKEN` | **Superseded** by D-35. Becomes the UI-configurable passphrase. |
 > | **D-9** `/display` browser tally | **Intact**, but its appearances are now table-driven rather than four hardcoded ones. |
-> | **D-10** `npx github:` distribution | **Amended** by D-15 then D-37. The `npx github:` path is formally retired; `deploy/get-onair` is the install path. |
+> | **D-10** `npx github:` distribution | **Amended** by D-15 then D-37, and **executed** by D-47: the root package is now `private` with no `bin`, so the `npx github:` path no longer resolves an executable. `deploy/get-onair` is the install path. |
 > | **D-11** hand-rolled WebSocket | **Intact and deployed.** The zero-dependency rule that justified it was never a rule (D-29); the code is not revisited. Its feedback wiring survives v2 because of D-33. |
 > | **D-12** light hardware on hold | Already superseded by D-16/D-18/D-21. |
-> | **D-13** LaunchDaemon supervision | **Intact**, but the plist's `ProgramArguments` path changes once with D-37's layout, carried by `onair update`. |
+> | **D-13** LaunchDaemon supervision | **Intact**, but the plist's `ProgramArguments` path changes once with D-37's layout, carried by `onair update` - built and tested in D-47, and **not yet applied on this host** (it needs one sudo run). |
 > | **D-14** config-file-first install | **Amended** by D-36. `config.env` retires as the config source and survives as an env overlay; the plist still carries no `ONAIR_*`. |
-> | **D-16** firmware in a separate repo | **Reversed** by D-28, implemented by D-37. Firmware moves to `firmware/`. The ESPHome `2026.8.0` pin and its warning survive. |
+> | **D-16** firmware in a separate repo | **Reversed** by D-28, implemented by D-37 and **done** in D-47. Firmware lives in `firmware/`. The ESPHome `2026.8.0` pin and its warning survive. |
 > | **D-17** device transport over plain HTTP | **Intact**, **amended** by D-38: the device entity moves from `select` to `text`. Basic auth stays mandatory and stays separate from the passphrase. |
 > | **D-18** three-rung ladder | **Superseded** by D-31 (table), D-32 (busy rule), D-33 (`intended`). |
 > | **D-19** hold as a floor | **Superseded** by D-32. Hold is a pin with one escalation carve-out. |
@@ -1232,3 +1232,63 @@ else (state, light control, API) lives on the receiver.
   state - [#43](https://github.com/jwnichols3/rocket-on-air-sensor/issues/43) replaces the
   hardcoded triple with the pulled table - but a firmware that recognised nothing would render
   `UNKNOWN KEY` for every state the server can currently send, which is not shippable.
+- **D-47 (2026-08-24)** **The four-part layout is in, `npm run verify` is the gate, and
+  `onair update` carries the plist across.** Resolves
+  [#36](https://github.com/jwnichols3/rocket-on-air-sensor/issues/36). **Implements D-37;
+  D-37's reasoning stands unchanged** - this records what implementing it actually cost and
+  the three things it turned up.
+  **What moved.** `src/ test/ dist/ tsconfig*.json package.json` -> `server/` (as `git mv`, so
+  the history follows). `firmware/` holds the ESPHome lab imported from `rocket-esp32` as files
+  with no history, minus `secrets.yaml`. Root `package.json` is `private: true`, has no `bin`,
+  and names three workspaces. `deploy/`, `docs/` and the root docs stay put.
+  **`npm run verify` is real, and proven to fail.** It runs every workspace typecheck, every
+  workspace test (152), the deploy-path tests (19), and `esphome config`. All four failure
+  modes were deliberately induced and each one failed the gate: a bogus firmware component
+  (exit 2), a missing `secrets.yaml` (exit 2, naming the file), a type error in `server/src`
+  (exit 1, naming the line). **The firmware step fails rather than skips** when the venv or
+  secrets are absent. A `verify` that quietly skipped the only check covering the device would
+  be worse than having no gate, because it would read as green.
+  **Three findings:**
+  1. **A latent bug in the plist check, found by writing its test.** `plist_is_stale` originally
+     read `ProgramArguments` with `PlistBuddy ... || true` and treated a non-empty result as the
+     installed path. **PlistBuddy writes `Error Reading File:` to STDOUT and exits 1** - so a
+     corrupt plist yields a *non-empty* string that compares unequal to the wanted path and is
+     indistinguishable from a stale one. The original code would have answered "stale" for an
+     unreadable plist and sent `update` off to do a **privileged re-render on the strength of a
+     parse error**. Now branches on exit status. This was not on anyone's list; it fell out of
+     asking "what does this do with a file that is not a plist".
+  2. **The two staleness causes are one rule, not two.** The node binary moving (a Homebrew
+     upgrade, already handled) and the entry point moving (this ticket) end identically: launchd
+     execs a path that is not there and `KeepAlive` respawns into the same failure forever. They
+     are now one predicate with two branches and a stated reason, rather than two special cases.
+     **The re-render must be followed by `bootout`+`bootstrap`, not `kickstart`** - `kickstart`
+     does not re-read the plist, so it would relaunch into the same wrong path.
+  3. **`sudo` is the wall an agent cannot climb, so the risky path was made testable instead.**
+     `render_plist` and every `launchctl` call need root, and there is no sudoers rule on this
+     host. Rather than claim the migration works, `deploy/onair` grew an `ONAIR_LIB_ONLY=1`
+     source seam and a split of `render_plist` into a pure `render_plist_to DEST` plus the
+     privileged install. `deploy/test-update.sh` then exercises the whole risky surface with no
+     sudo and `/Library` untouched: stale/current/moved-node/absent/corrupt plists, a
+     byte-for-byte render whose output is fed back in to prove the check **converges** rather
+     than oscillates, and the dist swap and rollback on a scratch tree including the
+     nothing-to-roll-back-to case. 19 assertions, in `npm run verify`. **The detection was also
+     run against the real installed plist on this host**, which correctly reports stale and
+     names the right replacement path.
+  **The live daemon is deliberately left one step behind.** The installed plist still names
+  `$APPDIR/dist/index.js`, and the pre-move root `dist/` is still on disk (gitignored), so the
+  running service and any `KeepAlive` respawn keep working - through a reboot. #36 changed no
+  runtime source, so that build is functionally identical to the new one. **The migration
+  completes when Rocket runs `sudo deploy/onair update`**, which is the one step in this ticket
+  an agent cannot perform. Chosen over the alternative - symlinking root `dist/` at
+  `server/dist/` - because D-37 rejected a root-level shim by name, and a "temporary" symlink at
+  the exact path a permanent one was rejected at is how permanent cruft arrives.
+  **Two taste calls.** (a) `admin-ui/` and `companion-module/` ship as a `package.json` plus a
+  README naming the ticket that fills them. A workspace list is a claim about the repo; three
+  names that all resolve makes it true today rather than aspirational, and it means #42 and #44
+  do not have to touch root config. They declare no scripts, so `--if-present` skips them and
+  `verify` does not pretend to have checked anything there. (b) `make -C firmware config` is the
+  canonical target name D-37 specified; the lab's `validate` survives as an alias, because
+  muscle memory is cheap to honour and a removed target is a confusing failure.
+  **One thing corrected in passing.** `README.md` still claimed "zero production npm
+  dependencies", which D-29 retired and `CLAUDE.md` already flags as never having been a rule.
+  Left in place it would keep being cited. Now says what D-29 says.

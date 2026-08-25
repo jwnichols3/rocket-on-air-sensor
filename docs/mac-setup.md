@@ -6,7 +6,7 @@ survives reboots and crashes with no GUI login required. Decision record:
 
 The supervisor is a macOS **LaunchDaemon** (`com.rocket.onair`, system domain,
 `UserName=john`, `KeepAlive=true`, `RunAtLoad=true`) running `node
-dist/index.js` from a local checkout. `RunAtLoad` brings it up on boot before
+server/dist/index.js` from a local checkout. `RunAtLoad` brings it up on boot before
 any user logs in; `KeepAlive` restarts it if the process ever crashes or
 exits unexpectedly. It's administered through the `onair` CLI (wraps
 `launchctl`), the `GET /admin/health` / `POST /admin/restart` HTTP routes
@@ -117,7 +117,7 @@ bootstrap, so a re-rendered plist actually takes effect.
 ## `~/.onair/config.env`
 
 The service reads `ONAIR_PORT`, `ONAIR_TOKEN`, and `ONAIR_STATE_FILE` from
-`~/.onair/config.env` itself at startup (`src/config.ts`, Node's
+`~/.onair/config.env` itself at startup (`server/src/config.ts`, Node's
 `process.loadEnvFile`). The `onair` CLI reads the same file, with the same
 precedence, to talk to the running API and manage it (health checks,
 `reset-state`'s direct-file fallback, building the sudoers scope, etc). A
@@ -210,7 +210,7 @@ unaffected and stays clickable.
 
 - **`onair status` looks wrong / partial** - remember it's two independent
   answers. `supervised: no, responding: yes` means something's answering on
-  the port but launchd isn't tracking it (e.g. you ran `node dist/index.js`
+  the port but launchd isn't tracking it (e.g. you ran `node server/dist/index.js`
   by hand, or `onair status` had no sudo ticket and can't see launchd state -
   check for `disabled=unknown state=unknown`). `supervised: yes, responding:
   no` means launchd has it loaded but it's not answering - check `onair logs`

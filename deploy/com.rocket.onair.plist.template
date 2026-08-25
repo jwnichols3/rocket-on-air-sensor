@@ -9,8 +9,10 @@
   Placeholders (filled in by `onair install`; kept out of this sentence so the
   rendered copy doesn't end up with a self-contradicting comment):
     NODE - absolute path to the node binary (e.g. /opt/homebrew/bin/node)
-    APPDIR - absolute path to the app checkout (WorkingDirectory; runs
-             APPDIR/dist/index.js)
+    APPDIR - absolute path to the repo checkout (WorkingDirectory; runs
+             APPDIR/server/dist/index.js - the service lives under server/ since
+             D-37, and `onair update` rewrites this path on a plist installed
+             before that move)
     USER - macOS username launchd runs the daemon as (UserName)
     HOME - that user's home directory (EnvironmentVariables.HOME, log paths)
   Each is written into the plist below wrapped in '@' signs, e.g. the node
@@ -18,7 +20,7 @@
 
   No service configuration (port, token, state file) lives in this plist or
   the rendered copy: the service reads $HOME/.onair/config.env itself at
-  startup (src/config.ts). Change it by editing that file and restarting -
+  startup (server/src/config.ts). Change it by editing that file and restarting -
   no re-render of this plist required.
 -->
 <plist version="1.0">
@@ -29,7 +31,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>@NODE@</string>
-		<string>@APPDIR@/dist/index.js</string>
+		<string>@APPDIR@/server/dist/index.js</string>
 	</array>
 
 	<key>UserName</key>

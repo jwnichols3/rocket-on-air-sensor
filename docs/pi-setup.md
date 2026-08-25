@@ -47,8 +47,10 @@ password itself when it needs to install the service.
 - installs the unit, runs `daemon-reload`, then `enable --now`
 - polls `/admin/health` for up to 5s and prints `health: PASS`/`FAIL`
 
-The rendered unit runs `node dist/index.js` from this checkout. It does not
-run `npx github:...` at boot: fetching and building at every start needs
+The rendered unit runs `node server/dist/index.js` from this checkout (the
+service moved under `server/` with D-37). It does not
+run `npx github:...` at boot - that path is retired outright (D-37): the root
+package is `private` with no `bin`. Fetching and building at every start needed
 network access before the service is up, and a Pi that boots before the
 network is ready would fail silently.
 
@@ -76,7 +78,7 @@ sudo systemctl restart onair
 ```
 
 A real environment variable set on the service always wins over the file
-(`src/config.ts`).
+(`server/src/config.ts`).
 
 ### Updating
 

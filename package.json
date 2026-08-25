@@ -1,25 +1,26 @@
 {
-  "name": "onair-api",
+  "name": "rocket-on-air-sensor",
   "version": "0.1.0",
   "private": true,
+  "description": "Detect call state on the Mac and drive a remote on-air light. Four parts, one verify command.",
   "type": "module",
-  "bin": {
-    "onair-api": "dist/index.js"
-  },
-  "files": [
-    "dist"
+  "workspaces": [
+    "server",
+    "admin-ui",
+    "companion-module"
   ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc",
-    "prepare": "npm run build",
-    "check": "tsc --noEmit -p tsconfig.test.json",
-    "pretest": "npm run check",
-    "test": "node --import tsx --test 'test/*.test.ts'",
-    "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "build": "npm run build --workspaces --if-present",
+    "check": "npm run check --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "firmware:config": "make -C firmware config",
+    "firmware:setup": "make -C firmware setup",
+    "firmware:compile": "make -C firmware compile",
+    "verify": "npm run check --workspaces --if-present && npm run test --workspaces --if-present && npm run test:deploy && npm run firmware:config",
+    "test:deploy": "bash deploy/test-update.sh"
   },
   "devDependencies": {
     "@types/node": "^22",

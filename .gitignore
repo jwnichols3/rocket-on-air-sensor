@@ -23,3 +23,11 @@ build/
 .dist-next/
 dist.prev/
 .dist-failed/
+
+# firmware/ (the ESPHome lab, imported by D-37). The build cache is large and
+# machine-local; secrets.yaml holds the D-17 device credentials and never lands
+# in a public repo - secrets.yaml.example is what is committed.
+firmware/.esphome/
+firmware/configs/.esphome/
+firmware/configs/secrets.yaml
+firmware/configs/.device-builder*

@@ -122,6 +122,13 @@ On the Mac, run `onair update`. It fetches, rebuilds, restarts, and then runs a
 health check; it rolls back to the previous build if the check fails. Run
 `onair update --check-only` first to list pending commits without applying them.
 
+**One update rewrites the LaunchDaemon plist.** D-37 moved the service from
+`dist/index.js` to `server/dist/index.js`, so a plist installed before that change names
+an entry point that no longer exists. `onair update` detects it, re-renders the plist,
+and does a `bootout`+`bootstrap` rather than a plain restart - a `kickstart` would
+relaunch into the same wrong path, because it does not re-read the plist. This happens
+once, automatically, and nothing else changes. Verified by `deploy/test-update.sh`.
+
 On the Pi, run `git pull && deploy/bootstrap`. It rebuilds and restarts the
 service if it is already active.
 

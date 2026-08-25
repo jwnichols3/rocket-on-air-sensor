@@ -1,0 +1,15 @@
+[project]
+name = "elegoo-esp32-lab"
+version = "0.1.0"
+description = "Local ESPHome environment for the Elegoo ESP32 Super Starter Kit"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "esphome-device-builder[esphome]==1.12.4",
+    # Pinned deliberately: the web_server REST URL scheme changed IN 2026.8.0 - the entity
+    # name replaced domain-object_id - so an unreviewed bump silently breaks every driver
+    # URL in rocket-on-air-sensor. esphome arrives transitively via the builder, so without
+    # this line `uv lock --upgrade` can drift it. After any bump, re-run the wire transcript
+    # (Step 6 of docs/superpowers/specs/2026-08-22-esp32-integration-design.md in that repo).
+    "esphome==2026.8.0",
+]
+

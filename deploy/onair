@@ -27,6 +27,16 @@ DEPLOY_DIR="$(resolve_script_path)"
 APPDIR="$(cd -P "$DEPLOY_DIR/.." && pwd)"
 TEMPLATE="$DEPLOY_DIR/com.rocket.onair.plist.template"
 
+# --- the service's home inside the four-part layout (D-37). Named once, here, so a
+# future move is one edit rather than a grep. ENTRY is what the plist launches, and
+# what plist_is_stale compares the installed plist against. ---
+SERVER_DIR="${ONAIR_SERVER_DIR:-$APPDIR/server}"
+ENTRY="$SERVER_DIR/dist/index.js"
+DIST_DIR="$SERVER_DIR/dist"
+DIST_NEXT="$SERVER_DIR/.dist-next"
+DIST_PREV="$SERVER_DIR/dist.prev"
+DIST_FAILED="$SERVER_DIR/.dist-failed"
+
 # --- resolve the real (non-root) target user + home, whether invoked directly or via sudo ---
 CURRENT_USER="$(id -un)"
 if [[ "$CURRENT_USER" == "root" && -n "${SUDO_USER:-}" ]]; then TARGET_USER="$SUDO_USER"; else TARGET_USER="$CURRENT_USER"; fi
@@ -188,12 +198,12 @@ migrate_cli_env() {
   fi
 }
 
-# render_plist - render the plist template (node/APPDIR/user/home
-# placeholders), lint it, and install it to $PLIST_PATH (0644 root:wheel).
-# Factored out of cmd_install so `onair update`'s node-path-changed path
-# (step 7) can re-render without going through cmd_install's full flow
-# (wizard-on-first-run, sudoers, bootstrap-start).
-render_plist() {
+# render_plist_to DEST - render the plist template (node/APPDIR/user/home
+# placeholders) into DEST and lint it. The whole render, and nothing privileged:
+# split out of render_plist so the byte-for-byte verification can run it into a
+# scratch file without sudo and without touching /Library.
+render_plist_to() {
+  local dest="$1"
   local node_bin
   node_bin="$(command -v node || true)"
   if [[ -z "$node_bin" ]]; then
@@ -214,8 +224,6 @@ render_plist() {
     fi
   done
 
-  local tmp_plist
-  tmp_plist="$(mktemp /tmp/com.rocket.onair.plist.XXXXXX)"
   # This is the exact sed pipeline used to render the template; verification
   # reproduces it byte-for-byte against a scratch dir.
   sed \
@@ -223,16 +231,63 @@ render_plist() {
     -e "s|@APPDIR@|$APPDIR|g" \
     -e "s|@USER@|$TARGET_USER|g" \
     -e "s|@HOME@|$TARGET_HOME|g" \
-    "$TEMPLATE" > "$tmp_plist"
+    "$TEMPLATE" > "$dest"
 
-  if ! plutil -lint "$tmp_plist" >/dev/null; then
+  if ! plutil -lint "$dest" >/dev/null; then
     echo "onair: rendered plist failed plutil -lint" >&2
-    rm -f "$tmp_plist"
+    rm -f "$dest"
     exit 1
   fi
+}
 
+# render_plist - render, then install to $PLIST_PATH (0644 root:wheel). Factored out
+# of cmd_install so `onair update`'s stale-plist path (step 7) can re-render without
+# going through cmd_install's full flow (wizard-on-first-run, sudoers, bootstrap-start).
+render_plist() {
+  local tmp_plist
+  tmp_plist="$(mktemp /tmp/com.rocket.onair.plist.XXXXXX)"
+  render_plist_to "$tmp_plist"
   sudo install -o root -g wheel -m 0644 "$tmp_plist" "$PLIST_PATH"
   rm -f "$tmp_plist"
+}
+
+# plist_is_stale PLIST [WANT_NODE] [WANT_ENTRY] - true when the installed plist no
+# longer describes how this checkout should be launched, so it MUST be re-rendered
+# before the daemon is restarted. Two causes, indistinguishable from the daemon's
+# side because both end the same way - launchd execs a path that is not there and
+# KeepAlive respawns into the same failure forever:
+#
+#   1. the node binary moved (a Homebrew upgrade)
+#   2. the entry point moved - D-37 put the service under server/, so a plist
+#      installed before that migration still names $APPDIR/dist/index.js
+#
+# Returns FALSE for an absent or unreadable plist. Deliberate: "I cannot read it" is
+# not "it is wrong", and re-rendering on a failed read would turn a transient
+# PlistBuddy hiccup into an unasked-for privileged write.
+plist_is_stale() {
+  local plist="$1"
+  local want_node="${2:-$(command -v node || true)}"
+  local want_entry="${3:-$ENTRY}"
+  local installed_node installed_entry
+  [[ -f "$plist" ]] || return 1
+  # Branch on PlistBuddy's EXIT STATUS, not on whether it printed something.
+  # PlistBuddy writes "Error Reading File: ..." to STDOUT and exits 1, so a corrupt
+  # plist hands back a non-empty string that compares unequal to the wanted path and
+  # looks exactly like a stale one. An emptiness check alone would answer "stale" for
+  # an unreadable file and send `update` off to do a privileged re-render on the
+  # strength of a parse error. Caught by deploy/test-update.sh.
+  installed_node="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist" 2>/dev/null)" || return 1
+  installed_entry="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:1' "$plist" 2>/dev/null)" || return 1
+  [[ -n "$installed_node" && -n "$installed_entry" && -n "$want_node" ]] || return 1
+  if [[ "$installed_node" != "$want_node" ]]; then
+    echo "onair: update: node path changed ($installed_node -> $want_node)" >&2
+    return 0
+  fi
+  if [[ "$installed_entry" != "$want_entry" ]]; then
+    echo "onair: update: entry point moved ($installed_entry -> $want_entry) - old-shape plist" >&2
+    return 0
+  fi
+  return 1
 }
 
 # run_as_invoking_user CMD... - runs CMD as $SUDO_USER when this script is
@@ -253,13 +308,48 @@ git_u() {
   run_as_invoking_user git -C "$APPDIR" "$@"
 }
 
-# dist_is_current - true if $APPDIR/dist exists and no file under
-# $APPDIR/src has a newer mtime than it.
+# dist_is_current - true if $DIST_DIR exists and no file under $SERVER_DIR/src has a
+# newer mtime than it.
 dist_is_current() {
-  [[ -d "$APPDIR/dist" ]] || return 1
+  [[ -d "$DIST_DIR" ]] || return 1
   local newer
-  newer="$(find "$APPDIR/src" -type f -newer "$APPDIR/dist" 2>/dev/null)"
+  newer="$(find "$SERVER_DIR/src" -type f -newer "$DIST_DIR" 2>/dev/null)"
   [[ -z "$newer" ]]
+}
+
+# swap_dist_in - move the staged build at $DIST_NEXT into $DIST_DIR, keeping the
+# outgoing one at $DIST_PREV for rollback. The trap is deliberately scoped to just
+# the two `mv`s: if a kill lands between them, $DIST_DIR would otherwise be left
+# missing entirely and KeepAlive would respawn into nothing.
+swap_dist_in() {
+  trap '
+    if [[ ! -d "$DIST_DIR" && -d "$DIST_PREV" ]]; then
+      echo "onair: update: interrupted mid-swap - restoring dist from dist.prev" >&2
+      mv "$DIST_PREV" "$DIST_DIR"
+    fi
+    exit 1
+  ' INT TERM ERR
+  rm -rf "$DIST_PREV"
+  if [[ -d "$DIST_DIR" ]]; then
+    mv "$DIST_DIR" "$DIST_PREV"
+  fi
+  mv "$DIST_NEXT" "$DIST_DIR"
+  trap - INT TERM ERR
+}
+
+# roll_dist_back - put the pre-update build back and keep the bad one for diagnosis.
+# Returns non-zero when there is nothing to roll back to, which is a materially
+# different situation and must not be reported as a successful rollback.
+roll_dist_back() {
+  if [[ ! -d "$DIST_PREV" ]]; then
+    echo "onair: update: no dist.prev to roll back to - $DIST_DIR left as the failed build" >&2
+    return 1
+  fi
+  rm -rf "$DIST_FAILED"
+  mv "$DIST_DIR" "$DIST_FAILED"
+  mv "$DIST_PREV" "$DIST_DIR"
+  echo "onair: update: failed build kept at $DIST_FAILED for diagnosis" >&2
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -589,25 +679,19 @@ cmd_enable() {
   cmd_start
 }
 
-# apply_restart_for_update - steps 7-8 of `onair update`: on Mac, if the
-# node path baked into the installed plist no longer matches `command -v
-# node` (e.g. a Homebrew node upgrade), re-render the plist and reload;
-# otherwise a plain restart. Both cmd_reload and cmd_restart already end in
-# mutating_health_poll (PASS/FAIL printed there) - this function's exit
-# status IS the health-poll result, for cmd_update to branch on.
+# apply_restart_for_update - steps 7-8 of `onair update`: on Mac, if the installed
+# plist no longer matches this checkout (see plist_is_stale), re-render it and
+# reload - a plain `restart` would kickstart the process without re-reading the
+# plist, so it would relaunch into the same wrong path. Otherwise a plain restart.
+# Both cmd_reload and cmd_restart already end in mutating_health_poll (PASS/FAIL
+# printed there) - this function's exit status IS the health-poll result, for
+# cmd_update to branch on.
 apply_restart_for_update() {
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    local installed_node="" current_node
-    if [[ -f "$PLIST_PATH" ]]; then
-      installed_node="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$PLIST_PATH" 2>/dev/null || true)"
-    fi
-    current_node="$(command -v node || true)"
-    if [[ -n "$installed_node" && -n "$current_node" && "$installed_node" != "$current_node" ]]; then
-      echo "onair: update: node path changed ($installed_node -> $current_node) - re-rendering plist and reloading" >&2
-      render_plist
-      cmd_reload
-      return
-    fi
+  if [[ "$(uname -s)" == "Darwin" ]] && plist_is_stale "$PLIST_PATH"; then
+    echo "onair: update: re-rendering plist and reloading" >&2
+    render_plist
+    cmd_reload
+    return
   fi
   cmd_restart
 }
@@ -698,27 +782,15 @@ cmd_update() {
   if [[ "$head_rev" != "$upstream_rev" ]]; then
     git_u merge --ff-only '@{u}'
   fi
+  # npm ci at the ROOT: the workspaces (D-37) are installed as one tree, and
+  # running it inside server/ would miss the other two and rewrite the root lock.
   ( cd "$APPDIR" && run_as_invoking_user npm ci --ignore-scripts )
 
-  # Step 6: build to a staging dir, then swap it in. The trap here is
-  # deliberately scoped to just the swap - if a kill lands between the two
-  # `mv`s, $APPDIR/dist would otherwise be left missing entirely.
-  rm -rf "$APPDIR/.dist-next"
-  ( cd "$APPDIR" && run_as_invoking_user npx tsc -p tsconfig.json --outDir .dist-next )
+  # Step 6: build to a staging dir, then swap it in.
+  rm -rf "$DIST_NEXT"
+  ( cd "$SERVER_DIR" && run_as_invoking_user npx tsc -p tsconfig.json --outDir .dist-next )
 
-  trap '
-    if [[ ! -d "$APPDIR/dist" && -d "$APPDIR/dist.prev" ]]; then
-      echo "onair: update: interrupted mid-swap - restoring dist from dist.prev" >&2
-      mv "$APPDIR/dist.prev" "$APPDIR/dist"
-    fi
-    exit 1
-  ' INT TERM ERR
-  rm -rf "$APPDIR/dist.prev"
-  if [[ -d "$APPDIR/dist" ]]; then
-    mv "$APPDIR/dist" "$APPDIR/dist.prev"
-  fi
-  mv "$APPDIR/.dist-next" "$APPDIR/dist"
-  trap - INT TERM ERR
+  swap_dist_in
 
   # Steps 7-8: restart (or reload, if node moved) + health-poll.
   if apply_restart_for_update; then
@@ -729,19 +801,21 @@ cmd_update() {
   # around for diagnosis, restart once more (best-effort - the update has
   # already failed regardless of whether this second restart's poll passes).
   echo "onair: update: health check failed after update - rolling back" >&2
-  if [[ -d "$APPDIR/dist.prev" ]]; then
-    rm -rf "$APPDIR/.dist-failed"
-    mv "$APPDIR/dist" "$APPDIR/.dist-failed"
-    mv "$APPDIR/dist.prev" "$APPDIR/dist"
-    echo "onair: update: failed build kept at $APPDIR/.dist-failed for diagnosis" >&2
+  if roll_dist_back; then
     apply_restart_for_update || true
-  else
-    echo "onair: update: no dist.prev to roll back to - $APPDIR/dist left as the failed build" >&2
   fi
   exit 1
 }
 
 # ---------------------------------------------------------------------------
+# ONAIR_LIB_ONLY=1 sources the functions above without dispatching a verb, so the
+# pure ones - render_plist_to, plist_is_stale, swap_dist_in, roll_dist_back - can be
+# exercised by deploy/test-update.sh with no sudo and nothing installed. It is a test
+# seam and nothing else: every verb below still requires an explicit argument.
+if [[ -n "${ONAIR_LIB_ONLY:-}" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 if [[ $# -lt 1 ]]; then
   usage
   exit 1

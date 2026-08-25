@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { loadConfig } from '../src/config.js';
 
-const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+// The `server` workspace root, not the repo root - D-37 put the service under
+// server/, and this spawns `src/index.ts` relative to it.
+const pkgRoot = fileURLToPath(new URL('..', import.meta.url));
 
 async function tmpDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'onair-config-test-'));
@@ -73,7 +75,7 @@ test('the real service loads its config file before reading ONAIR_PORT', async (
   // explain a listening port and wouldn't prove the config file was read.
   const { ONAIR_PORT: _dropped, ...envWithoutPort } = process.env;
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
-    cwd: repoRoot,
+    cwd: pkgRoot,
     env: { ...envWithoutPort, ONAIR_CONFIG: configFile },
     stdio: 'ignore',
   });

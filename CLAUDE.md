@@ -1,9 +1,35 @@
 # rocket-on-air-sensor
 
-Detect Zoom/Google Meet call state on the Mac and drive a remote on-air light. Read
-`CONTEXT.md` for the problem statement, glossary, invariants, and open questions -
-architecture is still undecided; do not assume a transport or hardware choice that
-isn't recorded there.
+Detect Zoom/Google Meet call state on the Mac and drive a remote on-air light.
+
+Read `CONTEXT.md` first, starting at the **Supersession index** at the top of its
+`## Decisions` section - several older decisions are written in a vocabulary the system
+no longer uses. The v2 architecture is settled in
+`docs/superpowers/specs/2026-08-23-onair-v2-design.md` and `docs/api-contract.md`; do not
+assume a transport or hardware choice that isn't recorded in those three.
+
+## Layout and the verify gate
+
+Four flat directories (D-37). `server/`, `admin-ui/` and `companion-module/` are npm
+workspaces; `firmware/` is ESPHome under uv, driven from root scripts.
+
+```
+server/  admin-ui/  firmware/  companion-module/   docs/  deploy/
+```
+
+**`npm run verify` at the root is the gate** - every typecheck, every test, the
+deploy-path tests, and `esphome config` on the firmware YAML. Run it before any commit
+that touches source. There is no CI, deliberately.
+
+The firmware half needs `npm run firmware:setup` and a `firmware/configs/secrets.yaml`
+(gitignored) once per machine. Without them `verify` fails and says which is missing; it
+does not skip quietly.
+
+**There is a live device.** A real ESP32 drives a real light, supervised by a
+LaunchDaemon on 8484. `onair restart` needs sudo with a TTY, so an agent cycles the
+daemon by killing the process listening on 8484 and letting `KeepAlive` respawn it
+against a rebuilt `server/dist/`. Never foreground `esphome logs` or `make -C firmware
+flash` - they tail with no timeout and hang the turn.
 
 ## Agent skills
 
