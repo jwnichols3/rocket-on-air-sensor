@@ -2330,3 +2330,63 @@ else (state, light control, API) lives on the receiver.
   three (`colorful`, `technical`) are unambiguously skins. If `table` cannot be reached from
   the judged markup without a second markup path, it is pool A cost and the honest move is to
   say so rather than ship a second renderer quietly.
+
+- **D-71 (2026-08-26)** **B, master/detail, wins #50's bake-off - conditionally, and the
+  condition is A's glass emitter.** Three judges through three lenses (safety, the operator,
+  the firmware) split 2-1 for B over C, and B beat C by **0.67 points out of 210**. That is
+  not a result, so the tie was broken on facts the arithmetic does not carry.
+
+  **B wins on the one criterion where a wrong answer reboots the light.** With CSS and JS in
+  pool B (D-69), B measures 1,814 B of chrome + a 2,076 B editor emitted **once** + 353 B per
+  row, so 24 rows is ~12.1 KB against today's ~20.9 KB. **It is the only entrant that makes
+  the contiguous allocation smaller than what already ships.** A wants 34-45 KB, D wants
+  27-34 KB, and C wants ~28.9 KB when everything is overridden, which would force
+  `MAX_ROWS_RENDERED` from 24 down to 18. A failed `reserve()` under `-fno-exceptions` is
+  `abort()`, and `abort()` is the light going out mid-call - the same false OFF the system
+  exists to prevent, arriving through the configuration page.
+
+  The structural reason, and the thing to preserve: **a row is a line, not a form.** All the
+  cleverness lives in the once-only stylesheet; per-row emission is one flat append.
+
+  **The condition. B ships with A's glass emitter or it does not ship.** B renders `unknown`
+  as a solid BUSY block. `compute_view()` short-circuits `key == "unknown"` to
+  `Shape::NO_DATA` **before** the busy test (`onair_table.h:600`), and B's stylesheet has no
+  hatch primitive at all - it is structurally incapable of drawing that row's real picture.
+  Two judges called this narrow and cheap to patch. It is neither; it is a missing shape.
+
+  **Why the emitter fixes it as a class rather than as a bug.** A's row is
+  `<i class=g data-shape=N><b>LABEL</b><s></s></i>`, about 62 bytes, one append, no per-shape
+  branching in C++. Every primitive is a CSS rule keyed on `[data-shape]`, so the cost is
+  pool B. And `Shape`'s enum values **are** the `data-shape` numbers - that is why branch 5
+  is skipped. **The page writes through the integer the firmware itself computed, so it never
+  decides a shape and cannot disagree with the glass.** Every variant that re-derived the
+  shape got `unknown` wrong; the one that wrote the enum through got it right. Cause, not
+  coincidence. At 62 B it is affordable on every row, not just the open one, which also
+  answers "why does this row draw a ring and that one a frame?" - and 24 rows still lands
+  ~13.6 KB, ~7 KB under today.
+
+  **Two errors in my own brief, found by the entrants, both now corrected in
+  `SAMPLE-DATA.md`:**
+
+  - I wrote that `unknown` renders "n/a - busy". It always renders `NO_DATA`. A read the
+    source and got it right; my brief was wrong.
+  - I wrote that the label font rule (30px at `<= 8` chars, 14px above) applies to every
+    branch. **CALM LIGHT hardcodes `status_text`, 11px, unconditionally** and never calls
+    `label_font()` (`elegoo-esp32.yaml:661`). C found this by reading the lambda rather than
+    trusting me. The consequence is real: an 11px `INTERRUPTIBLE` is ~75 px against a 30 px
+    ring hole, so **the label genuinely collides with the ring on the glass**, and a
+    miniature that tidies that away is lying.
+
+  Both are recorded because a bench brief that is wrong propagates into every entry that
+  trusts it, and the two entrants that scored best on truthfulness are exactly the two that
+  went and checked.
+
+  Grafted from the runners-up: C's counting pass, which also hands `reserve()` an **exact**
+  size instead of a worst-case guess; C's server-vs-panel miniature pair on flipped rows;
+  C's PENDING wording, the only one that says the page *body* is unconfirmed rather than
+  presenting it as current fact; C's "put this panel back" undo, first and outlined red;
+  D's 128-threshold luminance track, once in the editor, with its draggable-looking thumb
+  removed. Rejected: D's card-as-colour identity, because the dominant visual on a page about
+  a 1-bit panel must not be a colour that panel cannot produce; and D's "ticking fills"
+  behaviour, which copies the server's hex into the named field on tick and so pins the
+  server's current value as a permanent override by way of a click made to look at a picker.

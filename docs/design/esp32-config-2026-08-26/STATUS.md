@@ -16,16 +16,17 @@ at every step boundary, not at the end.
 | 2 | Capture the "before" page from the live device | done - `shots/before.html` |
 | 3 | Research the design envelope (bytes, JS, CSS, gzip, chunking) | done - `docs/research/2026-08-26-esp32-web-ui-envelope.md`, D-69 |
 | 4 | Hunt for Rocket's earlier description of what he wanted | done - **it does not exist**. House style taken from the admin console instead |
-| 5 | Workflow: 4 variations, prototyped as standalone HTML | running - `wf_801f41ae-771` |
-| 6 | Screen-capture each variation | not started |
-| 7 | Judge panel, scored | not started |
+| 5 | Workflow: 4 variations, prototyped as standalone HTML | done - `variants/`, all four pass the fatal checks |
+| 6 | Screen-capture each variation | done - `shots/`, and sent to Rocket on Discord |
+| 7 | Judge panel, scored | running - `wf_73d4d4ec-30b`, 3 lenses |
 | 8 | Implement the winner in `onair_page.h` | not started |
+| 8a | **D-70 appearance**: 3 skins + dark/light, one stylesheet, NVS-persisted | not started |
 | 9 | `npm run verify` green | not started |
 | 10 | `npm run firmware:compile` green | not started |
 | 11 | OTA flash + capture the real page from the device | not started |
 | 12 | Prove the light still works | not started |
 | 13 | Decisions into `CONTEXT.md` | not started |
-| 14 | Discord DM readout | channel proven, kickoff sent |
+| 14 | Discord DM readout | kickoff + four variations sent; winner and final readout pending |
 
 ## Artifacts
 

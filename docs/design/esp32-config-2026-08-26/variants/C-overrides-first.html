@@ -134,36 +134,46 @@ summary{cursor:pointer;padding:.4rem 0}
 </main></body></html>
 <!-- NOTES
 CONCEPT: The page answers "what have I changed?" before it offers to change anything - it opens
-with "2 of 5 rows are overridden on this panel", then shows those two in full, each as a
-server-vs-panel diff with a 1:1 miniature of the actual 128x64 glass. The three untouched rows
-collapse into one <details> holding a single pick-a-row form, and "Clear all overrides - put
-this panel back" is the first control on the page rather than a footnote.
+with "2 of 5 rows overridden on this panel, plus 1 dormant", then shows every override in full,
+each as a server-vs-panel diff with a 1:1 miniature of the actual 128x64 glass. Every one of the
+five rows gets a miniature, busy rows included, so the page answers "what will ON AIR draw?"
+without a click; "Clear all overrides - put this panel back" is the first control on the page
+rather than a footnote.
 
-BYTES: html=5575 css=3199 js=0 total=8774   (the real file is 18099 bytes; this NOTES block is
-9325 of them. "css" is the text between <style> and </style>; "html" is everything else.
-Measured with python3 on the file, not estimated.)
+BYTES: html=7086 css=3496 page=10582   (the real file is 23303 bytes; this NOTES block is
+12721 of them. "css" is <style>...</style> inclusive of the tags; "html" is everything else
+before the NOTES comment. Measured with python3 on the file, not estimated.)
   Honest comparison: shots/before.html is 6840 bytes (css 1890, html 4950) for the same five
-  rows. So as a standalone file this is BIGGER, by 1934 bytes. It is not the smallest thing
-  that could be drawn, and pretending otherwise would fail the one value the brief puts above
-  every other. Two numbers say why it is nevertheless the cheaper page on the device:
+  rows, and it renders NEITHER the two overrides NOR a dormant one. So as a standalone file this
+  is BIGGER, by 3742 bytes, and pretending otherwise would fail the one value the brief puts
+  above every other. Two numbers say why it is nevertheless the cheaper page on the device:
   1. Pool A vs pool B. The scarce resource is ESP32 heap - one contiguous std::string per
      request (envelope Q2) - not file size. In the firmware this stylesheet is a flash-served,
      gzipped, immutable-cached asset (Q3), which the page today cannot do because it inlines.
      Dynamic cost is then the HTML only. Measured pieces of this file:
-       fixed chrome                            1289 B   (today: 3148 B)
+       fixed chrome (head 1197 + footer 295)    1492 B   (today: 3148 B, and that includes
+                                                          today's inline CSS)
        override card, one miniature (available) 1155 B
        override card, flip pair (interruptible) 1520 B
-       <details> fixed part                      897 B
-       untouched row inside it                   238 B   (today: 738 B per row, always)
+       dormant card                              823 B
+       <details> fixed part                     1046 B
+       untouched row inside it, w/ miniature      350 B   (today: 738 B per row, always)
   2. Cost scales with overrides, not with rows. That is the whole bet:
-       live panel today, 0 overrides, 5 rows:  ~3.2 KB   (today: 6.8 KB)
-       this page, 2 overrides, 5 rows:          5.6 KB   (today: 6.8 KB)
-       24 rows, 0 overrides:                   ~7.7 KB   (today: ~20.9 KB)
-       24 rows, ALL overridden:               ~28.9 KB   OVER the ~24 KB reserve.
-     That last line is a real regression at the extreme and it is not hidden: if this variation
-     wins, MAX_ROWS_RENDERED drops from 24 to 18 (1289 + 18 x 1155 = ~22.1 KB) and keeps
-     announcing itself when it bounds. Dropping the miniature past the first 8 overridden rows
-     does not save enough on its own (~26 KB). 18 is the number.
+       live panel today, 0 overrides, 5 rows:  ~4.3 KB   (today: 6.8 KB)
+       THIS render, 2 overrides + 1 dormant:    7.1 KB   (today: 6.8 KB)  <- LOSES, by 246 B
+       24 rows, 0 overrides:                   ~10.9 KB  (today: ~20.9 KB)
+       24 rows, ALL overridden:                ~29.2 KB  OVER the ~24 KB reserve.
+     The second line is the uncomfortable one and it is not hidden: at the exact state the panel
+     is in today the new page is slightly BIGGER than the old one, because three miniatures and a
+     dormant card are three miniatures and a dormant card. The bet is the third line, and the
+     third line is where the panel actually lives once a profile has more than five rows.
+     The last line is a real regression at the extreme: if this variation wins, the cap becomes
+     18 CARDS - live and dormant counted together, not MAX_ROWS_RENDERED's 18 rows - because a
+     dormant override is not a row and would otherwise sit outside the bound entirely
+     (1492 + 18 x 1155 = ~22.3 KB, whatever the live/dormant mix). Dormant cards are counted
+     into that budget FIRST, so a dormant override can never be the thing that falls off the end;
+     the cap announces itself when it bounds, exactly as MAX_ROWS_RENDERED does today. Dropping
+     the miniature past the first 8 overridden rows does not save enough on its own (~26 KB).
 
 COLOUR TRAP: Not hit, deliberately - there is no <input type=color> anywhere. A native picker
 cannot represent blank, blank is the load-bearing value in this contract, and every zero-JS way
@@ -176,33 +186,45 @@ beside each hex in the diff, and the row's own colours on the identity chip (the
 "the name IS the swatch"). Both are server-side inline styles, ~45 B each. The cost is that a
 swatch reflects the SAVED value, never what is currently typed. Truthfulness is value 1, so a
 swatch that always shows what the panel actually holds beats one that sometimes shows what you
-have not saved.
+have not saved. The three busy rows are the sharpest case: their chips are scarlet, purple and
+magenta-on-near-black, and their three miniatures are the identical white block. That side by
+side is the argument that colour does not reach a busy branch, made in one look instead of a
+sentence.
 
 NO-JS: Everything works; there is no JavaScript in the file at all, and no <script> tag.
-<details>/<summary> is native. Every control is a plain form submit carrying
-action=save|clear|clearall|refresh. Native validation rejects a malformed hex before the POST and
-:user-invalid colours the box. The untouched rows are radio buttons in one form, so `required` on
-the first makes the browser demand a row before Save. The forms omit action= entirely and post to
-the current URL, which IS /onair/config - correct, and 22 bytes cheaper per form. `busy` is not a
-field anywhere on the page. Nothing degrades because nothing depends on script; what a JS build
-would add and this gives up is live colour preview and live luminance/SHAPE recompute as you
-type.
+<details>/<summary> is native and ships OPEN, so nothing on the page needs a click to be read;
+it stays a <details> only so the pick list can be collapsed once you know what is in it. Every
+control is a plain form submit carrying action=save|clear|clearall|refresh. Native validation
+rejects a malformed hex before the POST and :user-invalid colours the box. The untouched rows are
+radio buttons in one form, so `required` on the first makes the browser demand a row before Save.
+The forms omit action= entirely and post to the current URL, which IS /onair/config - correct,
+and 22 bytes cheaper per form. `busy` is not a field anywhere on the page. Nothing degrades
+because nothing depends on script; what a JS build would add and this gives up is live colour
+preview and live luminance/SHAPE recompute as you type.
 
 C++ COST: Easier than what is there now, with five named hard parts.
   - page_head() drops the inline <style> for <link rel=stylesheet href=/onair.css> against a
-    flash blob. That alone deletes 1890 B from every response.
+    flash blob. That alone deletes 3496 B from every response.
   - config_page() needs one counting pass over the overlay before rendering so the h1 can say
-    "N of M". A loop over <=24 entries under the lock it already holds. No new state.
-  - Rows are emitted in two passes over the same table: pass 1 skips rows with no override, pass
-    2 skips rows with one. Same data read twice, no extra allocation.
-  - render_row_form() splits into render_override_card() and a one-line render_pick_row().
+    "N of M rows, plus K dormant". Two counters, one loop over <=24 entries under the lock it
+    already holds. No new state. K is counted the same way the third render pass selects: an
+    overlay entry whose id is not in the table.
+  - Rows and overrides are emitted in THREE passes, not two. Pass 1 walks the table and skips
+    rows with no override (the override cards). Pass 2 walks the OVERLAY and skips entries whose
+    id IS in the table (the dormant cards) - this is the pass the shipping firmware already has
+    at onair_page.h:477-492, and it is the only pass that can produce a dormant card at all,
+    because a dormant override is by definition absent from the table that passes 1 and 3 walk.
+    Pass 3 walks the table again and skips rows WITH an override (the pick list). Same data read
+    twice plus the overlay once, no extra allocation.
+  - render_row_form() splits into render_override_card(), a ~5-line render_dormant_card() (id,
+    stored fields, one Clear button, no miniature) and a one-line render_pick_row().
     colour_field() survives nearly as-is, gaining a swatch <i> styled with
     format_hex_color(effective).
   HARD PARTS:
   1. The miniature reimplements the display lambda, so the two can drift. It is fixed markup plus
-     two variables - the label, and which of .ring/.hv is emitted - a switch on Shape, ~6 lines.
-     It needs a comment on the lambda in elegoo-esp32.yaml saying a second copy exists, and a
-     test asserting both pick the same Shape for the same row.
+     two variables - the label, and which of .ring/.hv/.blk is emitted - a switch on Shape,
+     ~7 lines. It needs a comment on the lambda in elegoo-esp32.yaml saying a second copy exists,
+     and a test asserting both pick the same Shape for the same row.
   2. THE FONT RULE IN SAMPLE-DATA.md IS WRONG FOR THE RING, and I only found it by reading
      elegoo-esp32.yaml:601-660. `label_font()` (30px huge at strlen<=8, else 14px title) is
      applied on the BUSY and CALM HEAVY branches only. CALM LIGHT hardcodes id(status_text), 11px,
@@ -210,17 +232,29 @@ C++ COST: Easier than what is there now, with five named hard parts.
      on the ring is 11px and fits the 30px hole; INTERRUPTIBLE on the ring is also 11px, ~75px
      wide, and therefore collides with the ring - which is what the glass really does, and is a
      second consequence of the flip that no amount of prose would have shown. The heavy frame
-     draws INTERRUPTIBLE at 14px because that branch does consult label_font(). Whoever
-     implements this must read the lambda, not the sample data.
+     draws INTERRUPTIBLE at 14px because that branch does consult label_font(). The busy
+     miniatures follow the same call: ON AIR (6) and NO DATA (7) draw at 30px, RECORDING (9)
+     drops to 14px, and that size change is visible in the pick list. Whoever implements this
+     must read the lambda, not the sample data.
   3. Miniature geometry uses box-sizing:content-box arithmetic while the page sets
      *{box-sizing:border-box}. The ring is width:44px with a 7px border, NOT width:30px - I
      shipped that bug once and it silently drew a 16px hole. Worth a comment in the stylesheet.
-  4. Two empty-section guards. "Overridden here" must not be emitted when the overlay is empty,
-     and the <details> must not be emitted when every row is overridden. Both edges are easy to
-     get wrong and both need a test.
-  5. Only CALM branches have a miniature (.ring, .hv). Busy rows deliberately get none: colour is
-     not consulted there and a picture would imply it is. A .blk rule for the solid block with a
-     knocked-out label is ~90 B of pool-B CSS if that ever changes.
+     The block is the easy one: .blk is filled_rectangle(0,0,128,48) exactly, and it stops at 48
+     so the y>=49 diagnostics band stays lit-on-dark, which is what the panel does.
+  4. THREE empty-section guards, not two. "Overridden here" must not be emitted when the overlay
+     is empty; the dormant cards must not be emitted when every overlay entry has a row (the
+     normal case, and the case the live panel is in today); and the <details> must not be emitted
+     when every row is overridden. All three edges are easy to get wrong and all three need a
+     test. The dormant guard needs a fixture the live panel cannot supply - an overlay entry for
+     an id the profile does not contain - which is why this file renders `presenting`: an id the
+     server removed is exactly a row that does not exist, so inventing it invents no row.
+  5. Every branch that draws has a miniature: .ring (CALM LIGHT), .hv (CALM HEAVY), .blk (BUSY).
+     The busy block costs 116 B of pool-B CSS measured (.blk 77, .blk+b 19, .hg 30px 20) and
+     ~110 B of pool-A HTML per pick row, and it earns both: BUSY's shape is the most distinctive
+     of the five, and showing three identical blocks under three violently different chips is a
+     clearer statement that colour is not consulted than the sentence underneath them.
+     Dormant overrides are the one case with NO miniature, and that is the point - the panel
+     draws nothing for them, so drawing something would be the lie.
 
 GIVES UP:
   - Live preview of anything. Type a hex, see nothing until you save. This is the biggest
@@ -229,22 +263,24 @@ GIVES UP:
     SAVED state. You can save a flip without being warned first; you are warned on the page you
     land on. Truthful, but late.
   - The untouched rows lose their own per-row forms. They become one pick-a-row form, which is
-    what takes them from 738 B each to 238 B each, and it costs a click plus a radio press to
-    start overriding one. If today's job is "edit on-air", this page is slower than a flat list.
-    That is the bet: the common job is "what have I done to this panel", not "edit row 3".
+    what takes them from 738 B each to 350 B each, and it costs a radio press to start overriding
+    one. If today's job is "edit on-air", this page is still slower than a flat list. That is the
+    bet: the common job is "what have I done to this panel", not "edit row 3".
   - Those rows also lose per-field placeholders (the shared boxes say "follow the server", not
     "#c1121f"), so the exact server value you are replacing is in the row line, not in the box.
     Their hex values ARE printed on the pick line, but you cannot see them while typing.
   - No contrast/AA readout from the admin console. On a 1-bit panel contrast is not the question -
     luminance against 128 is, because that picks the SHAPE - so the luminance readout replaces
     it, per the brief's own note. Deliberate, not an oversight.
-  - Dormant overrides are not in this render because the sample data has none, and inventing one
-    would have meant inventing a row. They belong as a third card in "Overridden here", tagged
-    DORMANT, with only Clear and no miniature (the panel draws nothing for them). This file does
-    not prove that case and a reviewer should ask for it.
+  - The dormant card shows the stored label and nothing else useful, because there is nothing
+    else: no server row means no server value to diff against and no shape to draw. It is the
+    fattest card per unit of information on the page (823 B to say "this applies to nothing"),
+    and that is the price of the invariant.
   - Only the PENDING banner is rendered, as asked. APPLIED (green) and FAILED (red) reuse the
     .pend rule with two colour overrides, ~80 B of pool-B CSS, not present here.
-  - No NO CONFIG screen (a bonus, not a requirement).
+  - No NO CONFIG screen (a bonus, not a requirement). Branches 3 (NO DATA hatch) and 4
+    (UNKNOWN KEY) also have no miniature here - they are panel-level failure states, not
+    per-row draws, so no row on this page can produce one.
   - The miniature is exact on geometry (every coordinate is from the lambda) and approximate on
     type: it substitutes system-ui for Roboto at the same pixel sizes. Shapes cannot lie; glyph
     widths can be off by a few pixels.

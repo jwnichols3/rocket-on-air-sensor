@@ -1,6 +1,6 @@
 <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>On-Air panel - configuration</title><style>
 :root{color-scheme:dark;--bg:#0f1113;--pn:#15181c;--ln:#262c33;--fg:#e8eaed;--mu:#8b959e;--acc:#79d0ff;--lit:#cfe9ff;--off:#04070b;--ok:#8fd6a3;--wa:#ffca6b;--er:#ff8f8f}
-*{box-sizing:border-box}
+*,::before,::after{box-sizing:border-box}
 body{margin:0;padding:1.1rem;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
 main{max-width:76rem;margin:0 auto}
 h1{font-size:.78rem;letter-spacing:.15em;text-transform:uppercase;color:var(--mu);margin:0 0 .5rem}
@@ -141,7 +141,7 @@ footer{color:var(--mu);font-size:.78rem;line-height:1.55;margin-top:1.2rem;borde
 <div class=cr><span>Backg.</span><input type=color value=#0b6e2e aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#0b6e2e aria-label="background colour hex"><button type=button class=fs>follow</button></div>
 <p class=cc>as colour: <b class=chip style="color:#ffffff;background:#0b6e2e">FREE</b> <span>which this 1-bit glass cannot show</span></p>
 <p class=n></p>
-<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear formnovalidate>Follow server</button></div>
 </form>
 </article>
 
@@ -157,7 +157,7 @@ footer{color:var(--mu);font-size:.78rem;line-height:1.55;margin-top:1.2rem;borde
 <div class=cr><span>Backg.</span><input type=color value=#c1121f aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#c1121f aria-label="background colour hex"><button type=button class=fs>follow</button></div>
 <p class=cc>as colour: <b class=chip style="color:#ffffff;background:#c1121f">ON AIR</b> <span>which this 1-bit glass cannot show</span></p>
 <p class=n></p>
-<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear formnovalidate>Follow server</button></div>
 </form>
 </article>
 
@@ -177,7 +177,7 @@ footer{color:var(--mu);font-size:.78rem;line-height:1.55;margin-top:1.2rem;borde
 <div class=cr><span>Backg.</span><input type=color value=#3b5bdb aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#e8a317 value=#3b5bdb aria-label="background colour hex"><button type=button class=fs>follow</button></div>
 <p class=cc>as colour: <b class=chip style="color:#1a1a1a;background:#3b5bdb">INTERRUPTIBLE</b> <span>which this 1-bit glass cannot show</span></p>
 <p class=n></p>
-<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear formnovalidate>Follow server</button></div>
 </form>
 </article>
 
@@ -193,7 +193,7 @@ footer{color:var(--mu);font-size:.78rem;line-height:1.55;margin-top:1.2rem;borde
 <div class=cr><span>Backg.</span><input type=color value=#6a0dad aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#6a0dad aria-label="background colour hex"><button type=button class=fs>follow</button></div>
 <p class=cc>as colour: <b class=chip style="color:#ffffff;background:#6a0dad">RECORDING</b> <span>which this 1-bit glass cannot show</span></p>
 <p class=n></p>
-<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear formnovalidate>Follow server</button></div>
 </form>
 </article>
 
@@ -209,7 +209,7 @@ footer{color:var(--mu);font-size:.78rem;line-height:1.55;margin-top:1.2rem;borde
 <div class=cr><span>Backg.</span><input type=color value=#1a1a1a aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#1a1a1a aria-label="background colour hex"><button type=button class=fs>follow</button></div>
 <p class=cc>as colour: <b class=chip style="color:#ff00ff;background:#1a1a1a">NO DATA</b> <span>which this 1-bit glass cannot show</span></p>
 <p class=n></p>
-<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear formnovalidate>Follow server</button></div>
 </form>
 </article>
 
@@ -259,7 +259,7 @@ if(bar){if(H.test(bg)){var v=L(bg);bar.style.width=(v/2.55).toFixed(1)+'%';lt.in
 if(fl){fl.hidden=s==+d.s0;if(!fl.hidden)fl.textContent='This override crosses the 128 line: the picture changes from '+N[+d.s0]+' to '+N[s]+'.'}
 A(c.querySelectorAll('input[type=color]'),function(p){var t=p.nextElementSibling,v=t.value.trim()||(t.name=='color'?d.sc:d.sb);if(H.test(v))p.value=v})
 }
-c.addEventListener('input',function(e){var t=e.target;if(t.type=='color')t.nextElementSibling.value=t.value;c.classList.add('dirty');up()});
+c.addEventListener('input',function(e){var t=e.target;if(t.type=='color'){var n=t.nextElementSibling,sv=(n.name=='color'?d.sc:d.sb)||'',nv=t.value.toLowerCase()==sv.toLowerCase()?'':t.value;if(n.value==nv)return;n.value=nv}c.classList.add('dirty');up()});
 c.addEventListener('click',function(e){if(!e.target.classList.contains('fs'))return;e.target.previousElementSibling.value='';c.classList.add('dirty');up()});
 up()});
 })();
@@ -273,20 +273,20 @@ Editing happens directly under the miniature it changes and the miniature change
 type, so the 1-bit consequence stops being a paragraph at the top of the page and becomes
 the picture you are already looking at.
 
-BYTES: html=10710 css=8572 js=2039 total=21321
-  Measured on this file with the NOTES block removed. total = 21,321 B; the <style> element
-  including its tags is 8,572 B, the <script> element including its tags is 2,039 B, leaving
-  10,710 B of markup. Split the way the envelope doc splits it - CSS and JS are pool B
-  (flash, gzipped, immutable-cached, ~0 heap; the two together gzip to 3,625 B against a
+BYTES: html=10785 css=8589 js=2154 total=21528
+  Measured on this file with the NOTES block removed. total = 21,528 B; the <style> element
+  including its tags is 8,589 B, the <script> element including its tags is 2,154 B, leaving
+  10,785 B of markup. Split the way the envelope doc splits it - CSS and JS are pool B
+  (flash, gzipped, immutable-cached, ~0 heap; the two together gzip to 3,680 B against a
   32 KB pool B budget) - so the per-request heap cost is the markup alone:
     fixed chrome  3,440 B   (head, banner, presentation rule, override summary, dormant
                              slot, the three-picture <details>, clear-all, footer)
-    per row       1,296 B avg for a row that follows the server
-                  1,690 B avg for a row with an override (it also carries the ghost glass)
+    per row       1,312 B avg for a row that follows the server
+                  1,705 B avg for a row with an override (it also carries the ghost glass)
   Today's page: 3,148 B chrome + 738 B per row.
   THIS IS OVER BUDGET AND I AM NOT HIDING IT. The envelope allows 4 KB chrome + 900 B/row
   under a 24 KB hard ceiling. At MAX_ROWS_RENDERED=24 this projects to
-  3,440 + 24 x 1,296 = 34,544 B, so reserve() would want ~38 KB contiguous against a floor
+  3,440 + 24 x 1,312 = 34,928 B, so reserve() would want ~38 KB contiguous against a floor
   only proven to 24.7 KB. See C++ COST for the two ways down and why the number has to be
   measured before this ships.
 

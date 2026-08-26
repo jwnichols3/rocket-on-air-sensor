@@ -160,8 +160,9 @@ function up(f){
  var ov=0,c,b;
  [].forEach.call(f.querySelectorAll('.f input:not([type])'),function(w){
   var d=w.closest('.f'),k=Q(d,'input[type=checkbox]'),p=Q(d,'input[type=color]'),v=k.checked?w.value.trim():'';
-  w.disabled=!k.checked;w.required=k.checked;if(p)p.disabled=!k.checked;
+  w.disabled=!k.checked;if(p)p.disabled=!k.checked;
   if(w.name!='label'&&!H.test(v))v='';if(v)ov=1;
+  w.required=k.checked;w.setCustomValidity(k.checked&&!v?'Ticked means override this row. Type a value, or untick to follow the server.':'');
   var e=v||w.placeholder;
   if(p&&H.test(e))p.value=e;
   if(w.name=='label'){var l=Q(f,'.lb');l.textContent=e;l.classList.toggle('sm',e.length>8)}
@@ -195,19 +196,22 @@ own integer luminance on a 0-255 track with the 128 threshold ruled across it, b
 miniature of the SHAPE that number produces, so the consequence of a colour is visible
 before the click rather than after the reload.
 
-BYTES: html=8392 css=6269 js=2312 total=16973
+BYTES: html=8468 css=6269 js=2446 total=17183
   Measured on this file with this NOTES block removed. css and js are the complete
-  <style> and <script> elements including their tags; html is everything else.
+  <style> and <script> elements including their tags; html is everything else. KB = 1000 B
+  throughout, as the envelope doc counts it.
   Split the way the firmware actually pays for it:
-    pool B (flash, gzipped, immutable-cached, 0 bytes of heap): css+js = 8581 raw,
-      3182 gzipped. Budget is 32 KB gz. Uses 10% of it.
-    pool A (heap, contiguous, per request): 8392 of markup, made of
-      fixed chrome 2993 B  (head, header, PENDING banner, legend, details, noscript,
+    pool B (flash, gzipped, immutable-cached, 0 bytes of heap): css+js = 8715 raw,
+      3257 gzipped. Budget is 32 KB gz. Uses 10% of it.
+    pool A (heap, contiguous, per request): 8468 of markup, made of
+      fixed chrome 2988 B  (head, header, PENDING banner, legend, details, noscript,
                             refresh, dormant heading, clear-all, footer)
-      editable row 925-973 B, average 973 B with the two overrides present
-      + 221 B on a row whose bgcolor override crosses the 128 threshold (the flip note)
-      dormant card 443 B
-  Projection at MAX_ROWS_RENDERED=24: 2993 + 24 x 973 = 26.8 KB.
+      editable row 941-994 B  (941 a busy row with no override, 965 and 994 the two rows
+                            that carry one; the spread is the override value plus its
+                            checked attribute)
+      + 216 B on a row whose bgcolor override crosses the 128 threshold (the flip note)
+      dormant card 444 B (228 of that is its explanatory paragraph)
+  Projection at MAX_ROWS_RENDERED=24: 2988 + 24 x 994 = 26.8 KB.
   THAT IS OVER. The envelope allows 900 B/row and the live device is only proven to
   allocate ~24.7 KB contiguous; 21 rows is what fits. This is stated, not hidden - the
   options are under GIVES UP.
@@ -229,9 +233,28 @@ COLOUR TRAP: solved structurally first, then made visible.
      submitted, so Save on an unticked field posts no key for it at all and has_color
      stays false. :has() dims the whole field group so the state reads before you find the
      box.
-  4. TICKING FILLS. Ticking an empty field writes the server's value into it immediately,
-     so "ticked" never means "overridden to nothing". Without this the OVERRIDDEN badge
-     would be a lie for one keystroke.
+  4. TICKED MEANS A REAL VALUE, AND THE BADGE IS DRIVEN BY THE VALUE. up() sets a row's
+     OVERRIDDEN badge and the legend counter from the EFFECTIVE value, never from the
+     tickbox: a field counts only when it is ticked AND holds something the firmware would
+     actually store - any non-blank label, a complete #rrggbb for the colours. Ticking an
+     empty field still autofills it with the server's value, but that is now a convenience,
+     not the guarantee. The guarantee is native validation: while a box is ticked its text
+     field is required and carries a custom validity message, so ticked-and-blank cannot
+     reach the wire at all - not by clearing the autofill, not by a whitespace-only label
+     (required alone would accept "   "), not by a half-typed #12. "Follow server" carries
+     formnovalidate, so clearing a row is never blocked by that row's own unfinished edit.
+     This closes a real hole: before it, ticking LABEL on on-air and then emptying the box
+     posted label= (empty), which handle_action() reads as "follow the server", while the
+     card said OVERRIDDEN and the legend counted it. The badge was a false positive - the
+     brief's #6 defect inverted.
+     Measured in headless Chrome by reading FormData and checkValidity() off the live form:
+     tick LABEL on on-air -> POST[id=on-air label=ON AIR] ov=true valid=true, counter 3;
+     clear the text -> POST[label=] ov=FALSE valid=FALSE, counter back to 2; type LIVE ->
+     ov=true valid=true. On colours: tick BACKGROUND on available -> bgcolor=#0b6e2e
+     ov=true; clear -> valid=false; "#12" -> valid=false; "#123456" -> valid=true. A sweep
+     that ticks and empties every field of every editable row finds no field that can
+     submit while ticked-empty, and page load is unchanged: counter 2, ov on available and
+     interruptible only.
   Measured, on the shipped file: available posts {id, label:"FREE"} and nothing else;
   interruptible posts {id, bgcolor:"#3b5bdb"} and nothing else; the three busy rows post
   {id} alone. No busy key exists anywhere in the document.
@@ -247,6 +270,10 @@ NO-JS: the preview is server-rendered, so the page is still truthful, just not l
   Lost: the colour pickers are inert (rendered disabled, and a <noscript> block says so
   in plain words), nothing repaints as you type, the "· unsaved" marker on Save never
   appears, and the overridden count in the legend does not move until reload.
+  Not lost, because it cannot arise: required / formnovalidate are set by up(), but with
+  JS off the tickbox is inert and the text field is the only control, so there is no
+  ticked-but-empty state to guard - a blank field simply means follow the server, which is
+  what the server-rendered badge already says.
   Degraded, never wrong. Nothing that can mislead depends on script.
 
 C++ COST: buildable, with two things that are real work and one that is a build change.
@@ -260,7 +287,10 @@ C++ COST: buildable, with two things that are real work and one that is a build 
   needs a runtime decision. The form's action attribute is gone entirely - a form with no
   action posts to the document URL, which is /onair/config. Every badge is a CSS
   pseudo-element driven off a class the firmware already knows (bz / ov / dm), so badges
-  cost 0 bytes of heap per row.
+  cost 0 bytes of heap per row - and the firmware must emit ov from the same test the page
+  now uses, i.e. a stored override that is non-empty (and a well-formed hex for the two
+  colours), which is already what has_label / has_color mean. formnovalidate on the
+  Follow-server button is a static literal, +15 B/row, already in the count above.
   Real work, all arithmetic the firmware already owns:
    1. Effective-colour resolution before the row is emitted (override else server, for
       both colours) so the style attribute can carry them. Three lines.
@@ -281,9 +311,9 @@ C++ COST: buildable, with two things that are real work and one that is a build 
   Nothing here needs a template engine, a second pass over the string, or a lookup table.
 
 GIVES UP:
- - THE BYTE BUDGET, and it is the headline. 973 B/row against a 900 B allowance, so
+ - THE BYTE BUDGET, and it is the headline. 994 B/row against a 900 B allowance, so
    24 rows needs ~26.8 KB where ~24.7 KB is what the device is proven to give. Three
-   honest fixes: drop MAX_ROWS_RENDERED from 24 to 21 (2993 + 21x973 = 23.4 KB, inside
+   honest fixes: drop MAX_ROWS_RENDERED from 24 to 21 (2988 + 21x994 = 23.9 KB, inside
    the proven block, and the cap already announces itself when it bounds); or cut ~80 B/row
    by removing the id <code>, the /255 in the readout and the pattern attributes; or bump
    the reserve and accept a smaller margin. I would take the cap cut - this is a five-row

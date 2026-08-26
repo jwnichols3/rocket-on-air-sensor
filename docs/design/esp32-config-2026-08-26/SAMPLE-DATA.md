@@ -9,7 +9,7 @@ from the live panel. Use exactly this. Do not invent prettier rows.
 | `on-air` | ON AIR | `#ffffff` | `#c1121f` | **yes** | 1 | 71 | n/a - busy |
 | `interruptible` | INTERRUPTIBLE | `#1a1a1a` | `#e8a317` | no | 2 | 167 | CALM HEAVY (double frame) |
 | `recording` | RECORDING | `#ffffff` | `#6a0dad` | **yes** | 3 | 59 | n/a - busy |
-| `unknown` | NO DATA | `#ff00ff` | `#1a1a1a` | **yes** | 99 | 26 | n/a - busy |
+| `unknown` | NO DATA | `#ff00ff` | `#1a1a1a` | **yes** | 99 | 26 | **n/a - always draws NO DATA, see below** |
 
 Luminance is the firmware's own integer formula in `onair_table.h:291`. It is Rec.601,
 integral, and truncating:
@@ -62,10 +62,38 @@ to be the glass must include that band, because the real panel always does.
 
 Branch 5 is skipped deliberately - the `Shape` enum values ARE these branch numbers.
 
-Font sizes: the label uses a large font when `strlen(label) <= 8` and a smaller one above
-that. `INTERRUPTIBLE` is 13 characters, so it draws SMALL. `ON AIR` is 6, so it draws LARGE.
-A miniature that renders every label at the same size is wrong in the one case the operator
-is most likely to be looking at.
+### `unknown` never draws as BUSY. CORRECTED 2026-08-26.
+
+This table first said `unknown` was "n/a - busy". That was wrong, and it was wrong in a way
+that matters: `compute_view()` at `onair_table.h:600` short-circuits on the KEY, **before**
+the busy test.
+
+```cpp
+if (key == "unknown" || (v.stale && !v.eff.row.busy)) { v.shape = Shape::NO_DATA; return v; }
+if (v.eff.row.busy)                                   { v.shape = Shape::BUSY;    return v; }
+```
+
+The row carries `busy: true` as a row property and that is real - it is what stops a stale
+`unknown` being a false OFF - but the SHAPE drawn is always `NO_DATA`, the hatch band. A
+preview that draws `unknown` as a solid BUSY block is showing a picture the glass will never
+produce.
+
+### Font sizes. CORRECTED 2026-08-26.
+
+Three fonts, `elegoo-esp32.yaml:477-486`: `status_title` 14px, `status_text` 11px,
+`status_huge` 30px bold.
+
+`label_font()` picks 30px at `strlen(label) <= 8` and 14px above - but it is applied on the
+**BUSY** and **CALM HEAVY** branches only. The **CALM LIGHT** branch hardcodes
+`id(status_text)`, 11px, unconditionally (`elegoo-esp32.yaml:661`) and never calls
+`label_font()` at all.
+
+This table previously stated the rule as applying to every branch. It does not.
+
+**The consequence is not cosmetic.** An 11px `INTERRUPTIBLE` is about 75px wide against a
+ring whose hole is 30px across, so on the real glass **the label genuinely collides with the
+ring**. A miniature that renders CALM LIGHT at a large size, or that tidily fits the label
+inside the hole, is hiding a collision the operator will see on the panel.
 
 **Colour never reaches a busy branch.** Shape there is keyed on `busy` alone, because a dark
 red and a dark green have near-identical luminance and a false OFF is the one error that
