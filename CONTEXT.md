@@ -2233,3 +2233,55 @@ else (state, light control, API) lives on the receiver.
 
   Recorded before the design work rather than after, so the four variations are judged
   against a fixed target.
+
+- **D-69 (2026-08-26)** **The panel's CSS and JS move out of the generated HTML and into
+  flash, gzipped at build time and served with an immutable cache.** Researched for #50 and
+  verified against the installed ESPHome 2026.8.0 source, not assumed.
+
+  The constraint that shapes every page this device serves is that **there is no chunked
+  response and no runtime compression on esp-idf.** `web_server_base.h` includes
+  `web_server_idf/web_server_idf.h` on ESP32; ESPAsyncWebServer is only used off-ESP32.
+  `beginChunkedResponse` does not exist in that shim, `beginResponse_P` is ESP8266-only, and
+  `AsyncResponseStream` only *looks* like streaming - it is a `std::string` appended to and
+  flushed in one `httpd_resp_send`. Measured: `GET /onair` with `Accept-Encoding: gzip,
+  deflate, br` returns the same 2,655 uncompressed bytes and no `Content-Encoding`. So a
+  dynamic page is one contiguous heap allocation, sent raw, every time.
+
+  **That makes inline CSS the most expensive byte on the device, and it dominates.** Measured
+  on the live panel: of `/onair`'s 2,655-byte body, **1,890 bytes - 71% - is the inline
+  `<style>`**, re-sent on every request and re-allocated in heap every time, on a board where
+  a failed allocation is `abort()` and `abort()` reboots the panel driving the light.
+
+  **`AsyncWebServerResponseProgmem` is the escape hatch and it is already in the shim.** It
+  holds a `const uint8_t *` and a length and hands them to `httpd_resp_send`, copying nothing.
+  ESPHome serves its own dashboard this way. Three lines, plus a build-time gzip into a
+  generated header that `includes:` picks up:
+
+  ```cpp
+  auto *res = r->beginResponse(200, "text/css", ONAIR_CSS_GZ, sizeof(ONAIR_CSS_GZ));
+  res->addHeader("Content-Encoding", "gzip");
+  res->addHeader("Cache-Control", "public, max-age=31536000, immutable");
+  ```
+
+  So there are **two budgets, three orders of magnitude apart**: heap-scarce generated markup,
+  and near-free flash assets. The design consequence is the point of recording this - the page
+  can be far better looking than the byte count first suggests, because **the thing that
+  actually binds is per-row generated markup paid 24 times, not the stylesheet.**
+
+  Three findings that cost nothing to write down and would each be expensive to rediscover:
+
+  - **`css_include:`/`js_include:` cannot be used**, though they do exactly the right thing at
+    build time. Their handler is registered on the `WebServer` component via
+    `add_handler(this)` - **with** auth. `/onair` is deliberately open (D-57), so its
+    stylesheet must be registered with `add_handler_without_auth` or the open page raises a
+    credential prompt for a subresource.
+  - **gzip, not brotli.** ESPHome offers `compression: br` and it is ~13% smaller, but Firefox
+    refuses to decode `Content-Encoding: br` over plain HTTP - both browsers restricted it to
+    secure origins deliberately. D-17 pins this device to plain HTTP.
+  - **Connection slots are the real concurrency limit**, not CPU. Measured: past four
+    simultaneous connections the sixth waits about a second for a TCP SYN retransmit. So no
+    SSE, no WebSocket and no parallel `fetch()` from these pages - each long-lived connection
+    permanently holds one of roughly five slots, and the operator may already have ESPHome's
+    dashboard open in another tab holding one of them.
+
+  Full evidence in `docs/research/2026-08-26-esp32-web-ui-envelope.md`.
