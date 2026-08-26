@@ -14,6 +14,18 @@ Updated 2026-08-26, after #44 and #18 closed.
 intermittent without a deterministic repro is the worst-value thing available. If it
 reappears, capture the failing run first.
 
+## One thing for Rocket, thirty seconds
+
+**SwiftBar will not survive a reboot.** It is running and configured, but not registered to
+start at login - no LaunchAgent, no login item, and the only `launchctl` entry is the running
+GUI app's own non-persistent registration.
+
+**SwiftBar menu -> Preferences -> General -> tick "Launch at Login".** SwiftBar ships its own
+`LaunchAtLoginHelper.app`, so its own toggle is the right mechanism.
+
+Registering it from the CLI was attempted and correctly blocked: adding a login item is a
+persistent system-level change and belongs to the machine's owner. Not worked around.
+
 ## The gap that is not a ticket, and now is the moment for it
 
 **Nothing writes state automatically.** Every surface is now built and proven:
