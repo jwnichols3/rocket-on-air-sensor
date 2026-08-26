@@ -19,13 +19,16 @@
     "firmware:config": "make -C firmware config",
     "firmware:setup": "make -C firmware setup",
     "firmware:compile": "make -C firmware compile",
-    "verify": "npm run build --workspaces --if-present && npm run check --workspaces --if-present && npm run test --workspaces --if-present && npm run test:deploy && npm run firmware:assets:check && npm run firmware:config",
+    "verify": "npm run build --workspaces --if-present && npm run check --workspaces --if-present && npm run test --workspaces --if-present && npm run test:deploy && npm run test:firmware && npm run firmware:assets:check && npm run firmware:config",
     "test:deploy": "for f in deploy/test-*.sh; do bash \"$f\" || exit 1; done",
     "firmware:assets": "python3 firmware/tools/gen-assets.py",
-    "firmware:assets:check": "python3 firmware/tools/gen-assets.py --check"
+    "firmware:assets:check": "python3 firmware/tools/gen-assets.py --check",
+    "test:firmware": "bash firmware/test/run.sh",
+    "test:browser": "node firmware/test/browser/test-page.mjs"
   },
   "devDependencies": {
     "@types/node": "^22",
+    "playwright": "^1.62.1",
     "tsx": "^4.23.8",
     "typescript": "^7.0.2"
   }

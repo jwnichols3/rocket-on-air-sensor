@@ -2476,3 +2476,64 @@ else (state, light control, API) lives on the receiver.
   genuine skin here, not a second layout.** The winning markup was already a list of lines,
   so all three skins are pure CSS over byte-identical markup - the pages differ by 1-5 bytes,
   which is the length of the skin's name in the attribute.
+
+- **D-73 (2026-08-26)** **The device-served UI has tests now: a host suite in the gate and a
+  browser suite beside it.** Closes the gap D-72 shipped with. Before this, `esphome config`
+  validated YAML and never looked at `onair_page.h`, `firmware:compile` compiled it and
+  asserted nothing about its output, and **nothing anywhere tested the generated HTML** -
+  which is how three defects reached a live panel behind a green compile and 311 passing
+  server tests.
+
+  **Two suites, split on what each can actually settle, and only one is in `verify`.**
+
+  | | `firmware/test/run.sh` | `firmware/test/browser/test-page.mjs` |
+  |---|---|---|
+  | in `npm run verify` | **yes** | no |
+  | needs | a C++ compiler | a downloaded Chromium |
+  | asserts on | the bytes the firmware emits | what a browser does with them |
+
+  The browser suite stays out of the gate because `verify` must not fail on a machine that
+  has not run `npx playwright install`, and there is no CI to guarantee one. `playwright`
+  is a new devDependency - judged by the dependency rule: genuinely needed, because the
+  guarded colour mirror has no other honest test.
+
+  **The host suite compiles the real headers against a shim** (`firmware/test/shim/`), so it
+  tests the shipped code rather than a copy. Two shim decisions carry the weight:
+
+  - **`vTaskDelay` runs the main loop instead of sleeping.** On the device `submit()` stages
+    a command and blocks the httpd task while the *main loop* applies it; a host test has one
+    thread, so a sleeping `vTaskDelay` would make every command time out and every assertion
+    would be about a timeout rather than about behaviour. Running the loop makes the handoff
+    real, and nulling the hook reproduces a parked loop and proves PENDING (D-64) is reported.
+  - **The preferences shim reproduces queue-then-`sync()`**, which is why `save_overlay()`
+    and `save_appearance()` verify by loading again. A test can force `sync()` to fail and
+    prove the read-back check catches it, rather than trusting a `save()` that returned true.
+
+  **Proven by mutation, because a suite that cannot fail is worthless.** Four deliberate
+  breakages, each caught:
+
+  | mutation | caught by |
+  |---|---|
+  | give the colour picker a `name` (the D-68 trap) | host, 2 checks |
+  | emit the server's value into `value=` instead of the placeholder | host, 2 checks |
+  | drop the guarded mirror's comparison (D-71's third door) | browser, 2 checks |
+  | shorten `*,::before,::after` back to `*` (D-71's geometry defect) | browser, 8 checks |
+
+  **The last mutation found a defect in my own test.** At first it failed only the
+  `box-sizing` assertion: `getComputedStyle` on a pseudo-element returns the SPECIFIED width,
+  not the rendered box, so every geometry check was reading the CSS back to itself and passed
+  under exactly the defect it existed to catch. The comment claimed they measured the
+  rendering. They now reconstruct the effective outer box the way the browser lays it out -
+  borders outside the declared width under `content-box`, inside under `border-box` - and the
+  same mutation fails eight checks including "the ring enters the reserved diagnostics band",
+  which is the actual harm.
+
+  **A test's expectation was wrong too, and the test was right to argue.** It asserted
+  `#808080` luminance 127. The Rec.601 coefficients sum to exactly 1000, so it is exactly
+  **128** - which makes it the boundary case worth having, because it is the only colour where
+  `>` instead of `>=` would ever show.
+
+  **What is deliberately NOT covered**, written down so a green run is not read as more than
+  it is: `parse_table()` (the JSON shim is a stub - and that path has a continuous real signal
+  in `text_sensor/ConfigPull`, which the HTML never had); the display lambda, which lives in
+  YAML and needs the panel; and concurrency, since the host has one thread and the device two.
