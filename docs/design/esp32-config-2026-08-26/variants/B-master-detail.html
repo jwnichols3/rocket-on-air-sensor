@@ -59,8 +59,8 @@ li.ed{background:#14181d;border-top:1px solid var(--ac)}
 .ctl input::placeholder{color:var(--dim)}
 .ctl input:user-invalid{border-color:#a44}
 .cf .ctl input{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;flex:none;width:7.2rem}
-.sw{position:relative;width:1.9rem;height:1.9rem;flex:none;border-radius:5px;border:1px solid #444d55;background:var(--s)}
-.sw input{position:absolute;inset:0;width:100%;height:100%;opacity:0;padding:0;border:0;cursor:pointer}
+.sw{position:relative;width:1.9rem;height:1.9rem;flex:none;border-radius:5px;border:1px solid #444d55;background:var(--s);overflow:hidden}
+.ctl .sw input{position:absolute;inset:0;width:100%;height:100%;opacity:0;padding:0;border:0;cursor:pointer}
 .sw input::-webkit-color-swatch-wrapper{padding:0}
 .acts{display:flex;gap:.5rem;align-items:center;margin-top:.9rem;flex-wrap:wrap}
 .acts .u{font-size:.75rem;color:var(--ac);display:none}
@@ -92,8 +92,12 @@ foot,footer{display:block;margin-top:1.4rem;border-top:1px solid var(--line);pad
 .hd{display:none}
 .r{grid-template-columns:3px 9rem 3.4rem 1fr;row-gap:.2rem}
 .r .bz,.r .dr{grid-column:2/5}
+.edh{flex-wrap:wrap}
+.edh .note{order:9;flex-basis:100%}
 .edb{grid-template-columns:1fr}
 .prev{width:100%;max-width:256px}
+.dorm{grid-template-columns:3px 9rem 4.6rem 1fr;row-gap:.3rem}
+.dorm .note,.dorm button{grid-column:2/5;justify-self:start}
 }
 </style></head><body><main>
 
@@ -135,7 +139,7 @@ foot,footer{display:block;margin-top:1.4rem;border-top:1px solid var(--line);pad
 <div class="prev">
   <p class="cap">What the 128&times;64 glass draws</p>
   <div class="glass s2" id="gl"><div class="blk"></div><div class="fr"></div><div class="fr2"></div><div class="ring"></div><div class="lb" id="lb">INTERRUPTIBLE</div><div class="band"><span>IP: 10.42.12.77</span><span>-58dBm</span></div></div>
-  <p class="lum">Background luminance <b id="lv">96</b> &middot; under 128 &rarr; <b id="ls">open ring</b></p>
+  <p class="lum">Background luminance <b id="lv">96</b> &middot; <span id="lc">under 128</span> &rarr; <b id="ls">open ring</b></p>
   <p class="flip" id="fl2">The server's <code>#e8a317</code> is 167, which draws the heavy double frame. This override flips the shape.</p>
   <p class="cap">Colour never reaches the glass. Only its brightness does, and only to pick the shape &mdash; busy rows ignore it entirely.</p>
 </div>
@@ -163,7 +167,7 @@ foot,footer{display:block;margin-top:1.4rem;border-top:1px solid var(--line);pad
 (function(){
 var ed=document.getElementById('ed'),f=ed.firstElementChild;
 var L=document.getElementById('fl'),C=document.getElementById('fc'),B=document.getElementById('fb');
-var GL=document.getElementById('gl'),LB=document.getElementById('lb'),LV=document.getElementById('lv'),LS=document.getElementById('ls'),FL=document.getElementById('fl2');
+var GL=document.getElementById('gl'),LB=document.getElementById('lb'),LV=document.getElementById('lv'),LC=document.getElementById('lc'),LS=document.getElementById('ls'),FL=document.getElementById('fl2');
 var srv={},busy=0,base='';
 function lum(h){var n=parseInt(h.slice(1),16);return Math.floor((299*(n>>16&255)+587*(n>>8&255)+114*(n&255))/1000)}
 function ok(v){return /^#[0-9a-fA-F]{6}$/.test(v)}
@@ -185,6 +189,7 @@ function draw(){
   var sh=busy?0:(n>=128?1:2);
   GL.className='glass s'+sh+(l.length<=8?' lg':'');
   LB.textContent=l;LV.textContent=n;
+  LC.textContent=busy?'busy row, luminance ignored':(n>=128?'128 or over':'under 128');
   LS.textContent=busy?'solid block (busy)':(n>=128?'heavy double frame':'open ring');
   var s=lum(srv.b),o=B.value.trim();
   FL.style.display=(!busy&&ok(o)&&(s>=128)!=(n>=128))?'':'none';
@@ -222,75 +227,101 @@ open(document.querySelector('a.r.sel')||document.querySelector('a.r'));
 </body></html>
 <!-- NOTES
 CONCEPT: One list, one editor. Every row collapses to a single scannable line - the label
-drawn in its own colours, the id, the server-owned busy flag, and the shape the 1-bit glass
-will actually draw with its luminance - and exactly one row at a time expands in place into
-the only editor on the page, so the repeated prose and the five Save/Clear pairs exist once.
+drawn in its own colours, the id, the server-owned busy flag, a LOCAL rail and badge for an
+override, and the shape the 1-bit glass will actually draw with its luminance - and exactly
+one row at a time expands in place into the only editor on the page, so the repeated prose
+and the five Save/Clear pairs exist once instead of five times.
 
-BYTES: html=8619 css=4525 js=2496 total=15640
-(Measured on the real file minus this NOTES block: total 15640 B; the <style> element's inner
-text is 4525 B and the <script> element's inner text is 2496 B, so markup+chrome is 8619 B.
-In production CSS and JS move to pool B - one flash-served, gzipped, immutable-cached asset
-each, ~7 KB gz combined - and pool A pays only the markup. Pool A breakdown: fixed chrome
-(head, banner, note, bar, header line, cap note, footer) ~2.6 KB; a list row averages 305 B
-against 738 B for a row form today; the single editor is ~1.9 KB and is emitted once.
-5 rows -> ~6.0 KB, about the 6,840 B the page costs today. At MAX_ROWS_RENDERED=24 ->
-2.6 + 24*0.305 + 1.9 = ~11.8 KB against ~20.9 KB today, so the reserve() can drop from
-3000 + 24*900 to about 5000 + 24*350, roughly 13.4 KB contiguous instead of 24.7 KB.
-That halving is the whole point of the bet.)
+BYTES: html=6107 css=7199 js=3034 total=16340
+Measured on this file with the NOTES block removed and trailing whitespace stripped: 16340 B
+total, of which the <style> element's inner text is 7199 B and the <script> element's inner
+text is 3034 B, leaving 6107 B of markup. (An earlier revision of this block quoted
+css=7178 / total=16176; that was a mis-measurement, not a change in the file.)
 
-COLOUR TRAP: the only element that ever carries name="color"/name="bgcolor" is a plain text
-input with pattern="#[0-9a-fA-F]{6}", empty by default, placeholder showing the server's
-value. There is no <input type=color> in the served HTML at all - the picker and the
-"Follow server" button are created by JS and appended, and the picker is given no name, so
-it cannot be serialised even if scripting is on. The picker only ever writes into the text
-input (touching it is an explicit act of overriding, which is the correct semantic);
-"Follow server" blanks that input. So #000000 can never be posted by default, with or
-without JS. Which state a field is in is shown without JS too: a CSS :has()
-+ :placeholder-shown rule flips the per-field pill between "follows server" and
-"overridden here" as you type.
+What matters for the panel is that CSS and JS belong in pool B - one flash-served, gzipped,
+immutable-cached asset each (2,187 B + 1,366 B gzipped, measured), costing no heap per request. Pool A
+then pays only the markup, measured from this file:
 
-NO-JS: everything essential works. Clicking a row follows href="/onair/config?edit=<id>" and
-the firmware renders the same page with that row's editor expanded - the JS only removes the
-round trip. Save, Clear this row, Clear all overrides, Refresh and Close are plain form
-posts and links. The follows-server / overridden-here pills are pure CSS. The glass
-miniature, the luminance number and the shape sentence are server-rendered for the row's
-current values, so they are correct on load; what is lost is that they stop updating live as
-you type, and the colour swatch beside each field becomes a static square showing the current
-value rather than a picker. That is an acceptable trade: with JS off the page degrades to
-exactly today's honest text-field behaviour plus a correct static preview, and never to a
-wrong one.
+  fixed chrome (head, banner, note, bar, list header, cap note, footer)   1,808 B
+  one list row                                        avg 354 B  (327-408)
+  the single editor, emitted once                                        2,098 B
+  a dormant override row                                                   433 B
 
-C++ COST: low, and lower than what it replaces. The list row is one flat append with six
-substitutions (id, effective colours, effective label, busy, luminance, shape word) - all
-values config_page() already has or that compute_view()/the luminance helper already
-produce, and the two override flags it needs are the same o->has_* it reads today. The
-editor is emitted once, inside the row loop, guarded by
-`if (r.id == param(request,"edit"))` - and getParam() already reads URL query strings
-(web_server_idf.cpp:598-618 falls through to find_query_value_), so `?edit=` needs no new
-plumbing; config_page() just takes the id as an argument. The glass miniature is the only
-new-looking thing and it is the cheapest part: all geometry lives in the stylesheet, so C++
-picks one of three class names (s0/s1/s2), optionally adds `lg` when strlen(label) <= 8, and
-writes the label text. Hard parts, honestly: (1) config_page() gains a parameter and the
-GET handler must pass it through, and an `edit` id that matches nothing must fall back to
-"no row open" rather than silently opening the first; (2) the editor markup has to be
-emitted between two <li> elements inside the loop, so the loop body is now
-`row(); if (selected) editor();` rather than one call - trivial but easy to get wrong when
-the selected row is also the last one; (3) the data-v attribute is a hand-rolled
-pipe-delimited packing of eight fields and MUST be escaped, and a label containing '|' or a
-quote would corrupt it - html_escape() covers the quote, and '|' needs either escaping or a
-different delimiter. Worth flagging: that attribute is the one genuinely new failure mode.
+  5 rows  = 1,808 + 5x354 + 2,098   = ~5.5 KB   (today: 6,840 B)
+  24 rows = 1,808 + 24x354 + 2,098  = ~12.1 KB  (today: ~20.9 KB)
 
-GIVES UP: (1) You cannot see two editors at once, and you cannot compare two rows' fields
-side by side - the list is the comparison surface and it deliberately carries only what fits
-on one line. (2) With JS off, opening a row costs a round trip to the panel, which is a
-device that serialises requests and can be blocked for up to 2 s by a concurrent POST.
-(3) There is no per-row miniature; only the open row previews its glass, so "show me what
-all five look like" is answered by the shape glyph and luminance number, not by five
-pictures. (4) The busy rows' luminance is shown struck through rather than hidden, which
-costs a few bytes to say a thing that does not matter, because hiding it invites the
-question "does my colour do nothing here?". (5) The house style's contrast ratio readout is
-dropped entirely: on 1-bit glass contrast between fg and bg is not what picks the shape,
-luminance against 128 is, so the readout is a luminance readout instead. (6) A dormant
-override gets a one-line row with a Clear button, not an editor - editing presentation for
-a row that draws nothing would be a lie about what the panel will do.
+So reserve() can go from 3000 + 24*900 (~24.7 KB contiguous) to about 4500 + 24*400
+(~14.1 KB). Halving the worst-case contiguous allocation is the point of the bet: a row
+costs 354 B here against 738 B today because a row is a line, not a form. If the CSS and JS
+were forced to stay inline they would add ~10.0 KB to every request, which is exactly why
+they must not be.
+
+COLOUR TRAP: the only element that ever carries name="color" or name="bgcolor" is a plain
+text input, pattern="#[0-9a-fA-F]{6}", empty by default, with the server's value as its
+placeholder. There is no <input type=color> in the served HTML at all. The picker and the
+"Follow server" button are created by JS and appended, and the picker is deliberately given
+no name attribute, so it cannot be serialised even with scripting on - verified in the
+browser: the form's named controls are exactly id, label, color, bgcolor, action, and both
+colour pickers are unnamed. The picker only ever writes into the text input, which makes
+touching it an explicit act of overriding (the correct semantic); "Follow server" blanks
+that input. That only holds if the invisible picker stays inside its 1.9rem swatch, so the
+sizing rule is written `.ctl .sw input` (to outrank `.cf .ctl input`, which sets a 7.2rem
+width for the hex fields) and `.sw` is overflow:hidden. Verified by hit-testing at 980px:
+document.elementFromPoint across the full width of #fc and #fb returns the text input at
+every offset, and the picker is returned only inside the swatch square. #000000 therefore cannot be posted by default in any code path. Which state a
+field is in is visible without JS too: a CSS :has(input:placeholder-shown) rule flips the
+per-field pill between "follows server" and "overridden here" live as you type.
+No busy field exists anywhere in the page.
+
+NO-JS: everything essential works. Clicking a row follows href="/onair/config?edit=<id>"
+and the firmware renders the same page with that row's editor expanded - the JS only removes
+the round trip. Save, Clear this row, Clear all overrides, Refresh, Clear on a dormant row
+and Close are plain form posts and links. The follows-server / overridden-here pills, the
+LOCAL rails, the shape glyphs and the luminance column are pure CSS and markup. The glass
+miniature, the luminance readout and the shape-flip sentence are server-rendered from the
+row's stored values, so they are correct on load. What is lost with JS off: they stop
+updating live as you type, the swatch beside each colour field stays a static square instead
+of becoming a picker, the "Follow server" buttons are absent (blank the field by hand
+instead), and the "unsaved" marker on Save does not appear. That degrades to exactly today's
+honest text-field behaviour plus a correct static preview - never to a wrong one.
+
+C++ COST: low, and lower than what it replaces. A list row is one flat append with six
+substitutions (id, effective colours, effective label, busy, luminance, shape word); every
+one of those is a value config_page() already holds or that the luminance helper at
+onair_table.h:291 already produces, and the override flags are the same o->has_* it reads
+today. The editor is emitted once inside the row loop, guarded by
+`if (r.id == param(request, "edit"))` - and getParam() already falls through to
+find_query_value_ for URL query strings (web_server_idf.cpp:598-618), so ?edit= needs no new
+plumbing at all; config_page() just gains the id as an argument. The glass miniature looks
+like the expensive part and is the cheapest: all geometry lives in the stylesheet, so C++
+picks one of three class names (s0/s1/s2), adds "lg" when strlen(label) <= 8, and writes the
+label text - the same two decisions compute_view() already makes. The luminance sentence
+under it is three substitutions, not two: the number, the connective ("under 128" /
+"128 or over" / "busy row, luminance ignored") and the shape word, all off the same
+busy / n>=128 test. A busy row must not print "under 128" next to a number over 128, and
+must not imply luminance picked its shape when the caption below says it did not.
+Hard parts, honestly: (1) config_page() gains a parameter and the GET handler must pass it
+through, and an ?edit= id matching no row must fall back to "nothing open" rather than
+silently opening the first row. (2) The editor markup is emitted between two <li> elements
+inside the loop, so the body becomes `row(); if (selected) editor();` - trivial, but easy to
+get wrong when the selected row is the last one. (3) data-v is a hand-rolled pipe-delimited
+packing of eight fields; html_escape() covers the quote, but a label containing '|' would
+corrupt the split, so it needs escaping or a delimiter that cannot appear in a label. That
+attribute is the one genuinely new failure mode this design introduces, and it only affects
+the JS path - the no-JS path never reads it.
+
+GIVES UP: (1) You cannot see two editors at once and cannot compare two rows' fields side by
+side; the list is the comparison surface and it carries only what fits on one line.
+(2) With JS off, opening a row costs a round trip to a device that serialises requests and
+can be blocked for up to 2 s by a concurrent POST. (3) There is no per-row miniature - only
+the open row previews its glass, so "show me all five pictures" is answered by a shape glyph
+and a luminance number, not by five pictures. (4) The admin console's contrast-ratio readout
+is dropped entirely: on 1-bit glass the fg/bg ratio is not what picks the shape, background
+luminance against 128 is, so this page shows a luminance readout instead and says so.
+(5) A dormant override gets a one-line row with a Clear button, not an editor - editing the
+presentation of a row that draws nothing would be a lie about what the panel will do.
+(6) The miniature draws the label straight across the open ring, which reads at first glance
+like a rendering bug. It is not: the firmware draws the ring lit, then the label lit on top,
+so INTERRUPTIBLE really does cross it on the glass. Keeping that is the truthfulness rule
+beating the handsome rule.
 -->

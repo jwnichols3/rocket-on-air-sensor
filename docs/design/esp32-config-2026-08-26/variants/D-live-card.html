@@ -31,16 +31,16 @@ details p{margin:.5rem 0 0}
 .lb{font-size:1.55rem;font-weight:700;letter-spacing:.03em;line-height:1.05;margin-right:.2rem}
 .lb.sm{font-size:1rem;letter-spacing:.08em}
 .hd code{font-size:.76rem;opacity:.72}
-.bg{font-size:.62rem;letter-spacing:.09em;font-weight:700;border:1px solid;border-radius:99px;padding:.06rem .45rem;opacity:.75}
-.on{opacity:1;background:var(--c);color:var(--b)}
-.ovb{display:none}
-.ov .ovb{display:inline}
-.dt .sv::after{content:" \00b7 unsaved";font-weight:400;opacity:.75}
-.dt .sv{box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 35%,transparent)}
+.hd::after{content:"CALM";align-self:center;font-size:.62rem;letter-spacing:.09em;font-weight:700;border:1px solid;border-radius:99px;padding:.06rem .45rem;opacity:.75}
+.bz .hd::after{content:"BUSY · SERVER'S"}
+.dm .hd::after{content:"DORMANT"}
+.ov .lb::after{content:"OVERRIDDEN";font-size:.62rem;letter-spacing:.09em;font-weight:700;background:var(--c);color:var(--b);border-radius:99px;padding:.06rem .45rem;margin-left:.55rem;vertical-align:.32rem}
+.dt [value=save]::after{content:" · unsaved";font-weight:400;opacity:.75}
+.dt [value=save]{box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 35%,transparent)}
 .r>button{width:auto;margin:.5rem .4rem 0 0}
 
 .f{display:grid;grid-template-columns:7.4rem 1fr;align-items:center;gap:.45rem;background:color-mix(in srgb,var(--c) 11%,transparent);border-radius:7px;padding:.24rem .42rem;margin:0 0 .26rem}
-.f:has(input[type=color]){grid-template-columns:6.6rem auto minmax(0,1fr);width:calc(50% - .25rem)}
+.f:has(input[type=color]){grid-template-columns:7.3rem auto minmax(0,1fr);width:calc(50% - .25rem)}
 @media(max-width:38rem){.f:has(input[type=color]){width:100%}}
 .f>label{display:flex;align-items:center;gap:.4rem;font-size:.72rem;letter-spacing:.07em;text-transform:uppercase;cursor:pointer;user-select:none;font-weight:600}
 .f input[type=checkbox]{accent-color:var(--c);margin:0;width:.95rem;height:.95rem;flex:none}
@@ -59,7 +59,7 @@ details p{margin:.5rem 0 0}
 .m::after{content:"128 threshold";position:absolute;left:50.2%;top:.7rem;transform:translateX(-50%);font-size:.6rem;letter-spacing:.05em;opacity:.75;white-space:nowrap}
 .m i{position:absolute;top:50%;width:.72rem;height:.72rem;margin:-.36rem 0 0 -.36rem;border-radius:50%;background:var(--c);box-shadow:0 0 0 2px var(--b)}
 .rd{display:flex;align-items:center;gap:.4rem;font-size:.76rem;letter-spacing:.03em;padding-top:.2rem}
-.bz{opacity:.5}
+.bz .mw{opacity:.5}
 /* the three SHAPES the glass can draw, in miniature */
 .sh{display:inline-block;width:1.7rem;height:1rem;border:1px solid var(--c);position:relative;flex:none}
 .hv::before{content:"";position:absolute;inset:2px;border:1px solid var(--c)}
@@ -90,59 +90,60 @@ footer{font-size:.8rem;color:var(--dim);margin:1.4rem 0 0;border-top:1px solid v
 
 <form class="r ov" method=post style="--c:#ffffff;--b:#0b6e2e">
 <input type=hidden name=id value=available>
-<div class=hd><b class=lb>FREE</b><code>available</code><b class=bg>CALM</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=hd><b class=lb>FREE</b><code>available</code></div>
 <div class=f><label><input type=checkbox checked>Label</label><input name=label maxlength=64 placeholder=AVAILABLE value=FREE></div>
-<div class=f><label><input type=checkbox>Text</label><input type=color value="#ffffff" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#ffffff"></div>
-<div class=f><label><input type=checkbox>Background</label><input type=color value="#0b6e2e" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#0b6e2e"></div>
+<div class=f><label><input type=checkbox>Text</label><input type=color value=#ffffff disabled><input name=color pattern=#[0-9a-fA-F]{6} placeholder=#ffffff></div>
+<div class=f><label><input type=checkbox>Background</label><input type=color value=#0b6e2e disabled><input name=bgcolor pattern=#[0-9a-fA-F]{6} placeholder=#0b6e2e></div>
 <div class=mw><div class=m><i style=left:28.6%></i></div><span class=rd><i class="sh lt"></i><span class=mr>lum <b>73</b>/255 &middot; under 128 &middot; CALM LIGHT, open ring</span></span></div>
-<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+<p class=fl hidden></p>
+<button name=action value=save>Save</button><button class=gh formnovalidate name=action value=clear>Follow server</button>
 </form>
 
-<form class=r method=post style="--c:#ffffff;--b:#c1121f">
+<form class="r bz" method=post style="--c:#ffffff;--b:#c1121f">
 <input type=hidden name=id value=on-air>
-<div class=hd><b class=lb>ON AIR</b><code>on-air</code><b class=bg>BUSY &middot; SERVER'S</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=hd><b class=lb>ON AIR</b><code>on-air</code></div>
 <div class=f><label><input type=checkbox>Label</label><input name=label maxlength=64 placeholder="ON AIR"></div>
-<div class=f><label><input type=checkbox>Text</label><input type=color value="#ffffff" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#ffffff"></div>
-<div class=f><label><input type=checkbox>Background</label><input type=color value="#c1121f" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#c1121f"></div>
-<div class="mw bz"><div class=m><i style=left:27.8%></i></div><span class=rd><i class="sh bk"></i><span class=mr>lum <b>71</b>/255 &middot; not consulted &middot; BUSY, solid block</span></span></div>
-<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+<div class=f><label><input type=checkbox>Text</label><input type=color value=#ffffff disabled><input name=color pattern=#[0-9a-fA-F]{6} placeholder=#ffffff></div>
+<div class=f><label><input type=checkbox>Background</label><input type=color value=#c1121f disabled><input name=bgcolor pattern=#[0-9a-fA-F]{6} placeholder=#c1121f></div>
+<div class=mw><div class=m><i style=left:27.8%></i></div><span class=rd><i class="sh bk"></i><span class=mr>lum <b>71</b>/255 &middot; not consulted &middot; BUSY, solid block</span></span></div>
+<button name=action value=save>Save</button><button class=gh formnovalidate name=action value=clear>Follow server</button>
 </form>
 
 <form class="r ov" method=post style="--c:#1a1a1a;--b:#3b5bdb">
 <input type=hidden name=id value=interruptible>
-<div class=hd><b class="lb sm">INTERRUPTIBLE</b><code>interruptible</code><b class=bg>CALM</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=hd><b class="lb sm">INTERRUPTIBLE</b><code>interruptible</code></div>
 <div class=f><label><input type=checkbox>Label</label><input name=label maxlength=64 placeholder=INTERRUPTIBLE></div>
-<div class=f><label><input type=checkbox>Text</label><input type=color value="#1a1a1a" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#1a1a1a"></div>
-<div class=f><label><input type=checkbox checked>Background</label><input type=color value="#3b5bdb" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#e8a317" value="#3b5bdb"></div>
+<div class=f><label><input type=checkbox>Text</label><input type=color value=#1a1a1a disabled><input name=color pattern=#[0-9a-fA-F]{6} placeholder=#1a1a1a></div>
+<div class=f><label><input type=checkbox checked>Background</label><input type=color value=#3b5bdb disabled><input name=bgcolor pattern=#[0-9a-fA-F]{6} placeholder=#e8a317 value=#3b5bdb></div>
 <div class=mw><div class=m><i style=left:37.6%></i></div><span class=rd><i class="sh lt"></i><span class=mr>lum <b>96</b>/255 &middot; under 128 &middot; CALM LIGHT, open ring</span></span></div>
 <p class=fl>This override <strong>changes the SHAPE</strong>. The server's <code>#e8a317</code> is luminance 167 and draws the heavy double frame. Your <code>#3b5bdb</code> is 96 and draws the open ring instead.</p>
-<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+<button name=action value=save>Save</button><button class=gh formnovalidate name=action value=clear>Follow server</button>
 </form>
 
-<form class=r method=post style="--c:#ffffff;--b:#6a0dad">
+<form class="r bz" method=post style="--c:#ffffff;--b:#6a0dad">
 <input type=hidden name=id value=recording>
-<div class=hd><b class=lb>RECORDING</b><code>recording</code><b class=bg>BUSY &middot; SERVER'S</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=hd><b class=lb>RECORDING</b><code>recording</code></div>
 <div class=f><label><input type=checkbox>Label</label><input name=label maxlength=64 placeholder=RECORDING></div>
-<div class=f><label><input type=checkbox>Text</label><input type=color value="#ffffff" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#ffffff"></div>
-<div class=f><label><input type=checkbox>Background</label><input type=color value="#6a0dad" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#6a0dad"></div>
-<div class="mw bz"><div class=m><i style=left:23.1%></i></div><span class=rd><i class="sh bk"></i><span class=mr>lum <b>59</b>/255 &middot; not consulted &middot; BUSY, solid block</span></span></div>
-<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+<div class=f><label><input type=checkbox>Text</label><input type=color value=#ffffff disabled><input name=color pattern=#[0-9a-fA-F]{6} placeholder=#ffffff></div>
+<div class=f><label><input type=checkbox>Background</label><input type=color value=#6a0dad disabled><input name=bgcolor pattern=#[0-9a-fA-F]{6} placeholder=#6a0dad></div>
+<div class=mw><div class=m><i style=left:23.1%></i></div><span class=rd><i class="sh bk"></i><span class=mr>lum <b>59</b>/255 &middot; not consulted &middot; BUSY, solid block</span></span></div>
+<button name=action value=save>Save</button><button class=gh formnovalidate name=action value=clear>Follow server</button>
 </form>
 
-<form class=r method=post style="--c:#ff00ff;--b:#1a1a1a">
+<form class="r bz" method=post style="--c:#ff00ff;--b:#1a1a1a">
 <input type=hidden name=id value=unknown>
-<div class=hd><b class=lb>NO DATA</b><code>unknown</code><b class=bg>BUSY &middot; SERVER'S</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=hd><b class=lb>NO DATA</b><code>unknown</code></div>
 <div class=f><label><input type=checkbox>Label</label><input name=label maxlength=64 placeholder="NO DATA"></div>
-<div class=f><label><input type=checkbox>Text</label><input type=color value="#ff00ff" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#ff00ff"></div>
-<div class=f><label><input type=checkbox>Background</label><input type=color value="#1a1a1a" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#1a1a1a"></div>
-<div class="mw bz"><div class=m><i style=left:10.2%></i></div><span class=rd><i class="sh bk"></i><span class=mr>lum <b>26</b>/255 &middot; not consulted &middot; BUSY, solid block</span></span></div>
-<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+<div class=f><label><input type=checkbox>Text</label><input type=color value=#ff00ff disabled><input name=color pattern=#[0-9a-fA-F]{6} placeholder=#ff00ff></div>
+<div class=f><label><input type=checkbox>Background</label><input type=color value=#1a1a1a disabled><input name=bgcolor pattern=#[0-9a-fA-F]{6} placeholder=#1a1a1a></div>
+<div class=mw><div class=m><i style=left:10.2%></i></div><span class=rd><i class="sh bk"></i><span class=mr>lum <b>26</b>/255 &middot; not consulted &middot; BUSY, solid block</span></span></div>
+<button name=action value=save>Save</button><button class=gh formnovalidate name=action value=clear>Follow server</button>
 </form>
 
 <h1 style=margin:1.3rem_0_.55rem>Dormant overrides</h1>
 <form class="r dm" method=post>
 <input type=hidden name=id value=standby>
-<div class=hd><b class="lb sm">STANDBY</b><code>standby</code><b class=bg>DORMANT</b></div>
+<div class=hd><b class="lb sm">STANDBY</b><code>standby</code></div>
 <p class=fl>This override is stored on the panel, but the server's profile has no such row, so it applies to nothing. It is shown because an override that quietly stopped applying is the failure this page exists to prevent.</p>
 <button class=gh name=action value=clear>Clear this row</button>
 </form>
@@ -159,8 +160,8 @@ function up(f){
  var ov=0,c,b;
  [].forEach.call(f.querySelectorAll('.f input:not([type])'),function(w){
   var d=w.closest('.f'),k=Q(d,'input[type=checkbox]'),p=Q(d,'input[type=color]'),v=k.checked?w.value.trim():'';
-  w.disabled=!k.checked;if(p)p.disabled=!k.checked;if(k.checked)ov=1;
-  if(w.name!='label'&&!H.test(v))v='';
+  w.disabled=!k.checked;w.required=k.checked;if(p)p.disabled=!k.checked;
+  if(w.name!='label'&&!H.test(v))v='';if(v)ov=1;
   var e=v||w.placeholder;
   if(p&&H.test(e))p.value=e;
   if(w.name=='label'){var l=Q(f,'.lb');l.textContent=e;l.classList.toggle('sm',e.length>8)}
@@ -168,10 +169,12 @@ function up(f){
  });
  f.style.setProperty('--c',c);f.style.setProperty('--b',b);
  f.classList.toggle('ov',!!ov);
- var n=lum(b),z=Q(f,'.mw').classList.contains('bz');
+ var n=lum(b),z=f.classList.contains('bz');
  Q(f,'.m i').style.left=(n*100/255).toFixed(1)+'%';
  Q(f,'.sh').className='sh '+(z?'bk':n>=128?'hv':'lt');
  Q(f,'.mr').innerHTML='lum <b>'+n+'</b>/255 · '+(z?'not consulted · BUSY, solid block':n>=128?'128 or over · CALM HEAVY, double frame':'under 128 · CALM LIGHT, open ring');
+ var fl=Q(f,'.fl'),g=Q(f,'[name=bgcolor]').placeholder,sn=lum(g),A=function(x){return x>=128?'heavy double frame':'open ring'};
+ if(fl&&(fl.hidden=z||(n>=128)==(sn>=128))==false)fl.innerHTML='This override <strong>changes the SHAPE</strong>. The server\'s <code>'+g+'</code> is luminance '+sn+' and draws the '+A(sn)+'. Your <code>'+b+'</code> is '+n+' and draws the '+A(n)+' instead.';
  f.classList.toggle('dt',f.dataset.s!==undefined&&sig(f)!=f.dataset.s);
 }
 function all(){[].forEach.call(document.querySelectorAll('form.r:not(.dm)'),up);
@@ -179,6 +182,132 @@ function all(){[].forEach.call(document.querySelectorAll('form.r:not(.dm)'),up);
 all();[].forEach.call(document.querySelectorAll('form.r:not(.dm)'),function(f){f.dataset.s=sig(f)});
 addEventListener('input',function(e){
  var f=e.target.closest('form.r');if(!f)return;
- if(e.target.type=='color')Q(e.target.closest('.f'),'input:not([type])').value=e.target.value;
+ var t=e.target;
+ if(t.type=='color')Q(t.closest('.f'),'input:not([type])').value=t.value;
+ if(t.type=='checkbox'&&t.checked){var w=Q(t.closest('.f'),'input:not([type])');if(!w.value.trim())w.value=w.placeholder}
  all()});
 </script></body></html>
+<!-- NOTES
+CONCEPT: Every row is a card painted in the exact colours it edits - the background IS
+bgcolor, every glyph on it IS color - so the card previews itself and there is no swatch,
+no legend and no second rendering to keep in sync. Under the fields runs the firmware's
+own integer luminance on a 0-255 track with the 128 threshold ruled across it, beside a
+miniature of the SHAPE that number produces, so the consequence of a colour is visible
+before the click rather than after the reload.
+
+BYTES: html=8392 css=6269 js=2312 total=16973
+  Measured on this file with this NOTES block removed. css and js are the complete
+  <style> and <script> elements including their tags; html is everything else.
+  Split the way the firmware actually pays for it:
+    pool B (flash, gzipped, immutable-cached, 0 bytes of heap): css+js = 8581 raw,
+      3182 gzipped. Budget is 32 KB gz. Uses 10% of it.
+    pool A (heap, contiguous, per request): 8392 of markup, made of
+      fixed chrome 2993 B  (head, header, PENDING banner, legend, details, noscript,
+                            refresh, dormant heading, clear-all, footer)
+      editable row 925-973 B, average 973 B with the two overrides present
+      + 221 B on a row whose bgcolor override crosses the 128 threshold (the flip note)
+      dormant card 443 B
+  Projection at MAX_ROWS_RENDERED=24: 2993 + 24 x 973 = 26.8 KB.
+  THAT IS OVER. The envelope allows 900 B/row and the live device is only proven to
+  allocate ~24.7 KB contiguous; 21 rows is what fits. This is stated, not hidden - the
+  options are under GIVES UP.
+
+COLOUR TRAP: solved structurally first, then made visible.
+  1. STRUCTURAL. Every <input type=color> on the page has NO name attribute. A control
+     with no name is not serialised by any browser, ever. So the picker cannot post
+     #000000 as a silent override with JS off, with JS broken, or with the toggle logic
+     wrong. Verified by driving the real page in headless Chrome and reading FormData off
+     each form: the only keys that ever appear are id, label, bgcolor, action.
+  2. THE WIRE FIELD IS UNCHANGED. What posts is still a text input named color/bgcolor
+     with pattern="#[0-9a-fA-F]{6}", whose placeholder is the server's value and whose
+     empty string means follow the server - exactly what colour_field() emits today and
+     exactly what handle_action() already parses. The picker is a writer into that text
+     field and nothing else.
+  3. THE VISIBLE GATE. One checkbox per field, labelled LABEL / TEXT / BACKGROUND.
+     Ticked means override this on this panel; unticked means follow the server. Unticked
+     sets disabled on both the text field and the picker, and a disabled control is not
+     submitted, so Save on an unticked field posts no key for it at all and has_color
+     stays false. :has() dims the whole field group so the state reads before you find the
+     box.
+  4. TICKING FILLS. Ticking an empty field writes the server's value into it immediately,
+     so "ticked" never means "overridden to nothing". Without this the OVERRIDDEN badge
+     would be a lie for one keystroke.
+  Measured, on the shipped file: available posts {id, label:"FREE"} and nothing else;
+  interruptible posts {id, bgcolor:"#3b5bdb"} and nothing else; the three busy rows post
+  {id} alone. No busy key exists anywhere in the document.
+
+NO-JS: the preview is server-rendered, so the page is still truthful, just not live.
+  Works: every card drawn in its real colours (C++ emits style="--c:..;--b:.." on the
+  form), the luminance number, the marker's left:NN.N% from that same integer, the
+  128 tick and its two-zone track, the SHAPE miniature, the CALM / BUSY / OVERRIDDEN /
+  DORMANT badges (all CSS pseudo-elements keyed off classes the firmware emits), the
+  small-font label rule for labels over 8 characters, the SHAPE-flip warning, field
+  dimming on untick, native pattern validation, and the whole editing path - type a hex,
+  blank to follow the server, Follow server to clear a row.
+  Lost: the colour pickers are inert (rendered disabled, and a <noscript> block says so
+  in plain words), nothing repaints as you type, the "· unsaved" marker on Save never
+  appears, and the overridden count in the legend does not move until reload.
+  Degraded, never wrong. Nothing that can mislead depends on script.
+
+C++ COST: buildable, with two things that are real work and one that is a build change.
+  Easy and unchanged in shape: still one form per row appended to one std::string;
+  render_row_form() keeps its structure; the three field groups collapse into ONE helper
+  called three times - field(h, name, caption, overridden, value, server_value, colour?) -
+  which is simpler than today's split between an inline label block and colour_field().
+  Static attributes are unquoted (class=r, method=post, value=save, pattern=#[0-9a-fA-F]{6},
+  placeholder=#0b6e2e) which is valid HTML5 and saves ~70 B/row; dynamic text stays quoted
+  and html_escape()d, so the rule is "literals unquoted, escaped output quoted" and never
+  needs a runtime decision. The form's action attribute is gone entirely - a form with no
+  action posts to the document URL, which is /onair/config. Every badge is a CSS
+  pseudo-element driven off a class the firmware already knows (bz / ov / dm), so badges
+  cost 0 bytes of heap per row.
+  Real work, all arithmetic the firmware already owns:
+   1. Effective-colour resolution before the row is emitted (override else server, for
+      both colours) so the style attribute can carry them. Three lines.
+   2. The marker percent. n*100/255 to one decimal WITHOUT %f - ESP-IDF's newlib-nano
+      printf has no float by default. Do it as (n*1000/255) and print d.d by hand, or
+      accept integer percent and drop the decimal.
+   3. A three-way branch emitting the shape class and readout string for busy / >=128 /
+      <128. This is compute_view's own branch, reused, which is the point: the page cannot
+      disagree with the glass because it asks the same question.
+   4. The SHAPE-flip paragraph, emitted only when the row is calm, bgcolor is overridden,
+      and lum(override)>=128 differs from lum(server)>=128. One comparison, and it is the
+      most valuable sentence on the page.
+  The build change: the <style> and <script> must NOT ship inline. They go to flash as
+  /onair.css and /onair.js served with AsyncWebServerResponseProgmem + immutable caching
+  (the envelope doc's Q1/Q3 escape hatch). That is an edit to elegoo-esp32.yaml and the
+  build, not to this page. Inlining them instead would add 8.6 KB to every single request
+  out of the scarce pool and the design would be dead on arrival.
+  Nothing here needs a template engine, a second pass over the string, or a lookup table.
+
+GIVES UP:
+ - THE BYTE BUDGET, and it is the headline. 973 B/row against a 900 B allowance, so
+   24 rows needs ~26.8 KB where ~24.7 KB is what the device is proven to give. Three
+   honest fixes: drop MAX_ROWS_RENDERED from 24 to 21 (2993 + 21x973 = 23.4 KB, inside
+   the proven block, and the cap already announces itself when it bounds); or cut ~80 B/row
+   by removing the id <code>, the /255 in the readout and the pattern attributes; or bump
+   the reserve and accept a smaller margin. I would take the cap cut - this is a five-row
+   panel - but that is Rocket's call, not a prototype's, so the file ships honest about
+   the overrun rather than quietly shrinking to fit.
+ - A MINIATURE OF THE ACTUAL GLASS. There is none. No 128x64 frame, no y>=49 diagnostics
+   band, no knocked-out label, no hatch. The shape chip is a 27x16 abstraction of WHICH
+   shape, not a rendering of the screen. Deliberate: the luminance meter answers the
+   question the miniature would be drawn to answer, in fewer bytes and with no risk of a
+   miniature that drifts from the lambda. It is the largest thing a reviewer could ask for
+   back.
+ - LEGIBILITY INSURANCE. Because the controls inherit the row's own colours, a bad colour
+   pair makes the card's own chrome hard to read - see the NO DATA row, magenta on near
+   black. I will not paper over that with a fixed scrim: the panel is exactly that hard to
+   read, and truthful outranks handsome. It does mean this page looks worse than a neutral
+   one whenever the operator's colours are poor. That is the design working.
+ - A SEPARATE OVERVIEW. Five cards is ~1700 px against the old page's ~2100, and the stack
+   of cards IS the overview, but there is no one-glance index and that claim stops being
+   true somewhere past a dozen rows.
+ - LIGHT MODE. Dark only, as today. A prefers-color-scheme branch is ~400 B of pool B and
+   free of heap, but the card colours dominate the page either way and light chrome around
+   #1a1a1a-on-#ff00ff looks worse, not better.
+ - THE ADMIN CONSOLE'S CONTRAST RATIO. Not shown, on purpose. The glass is 1-bit; a
+   contrast ratio is the wrong question there and would be a number that looks
+   authoritative while predicting nothing. The luminance meter is this surface's answer to
+   the console's 6.39:1 AA readout.
+-->

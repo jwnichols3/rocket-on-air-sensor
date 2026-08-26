@@ -2285,3 +2285,48 @@ else (state, light control, API) lives on the receiver.
     dashboard open in another tab holding one of them.
 
   Full evidence in `docs/research/2026-08-26-esp32-web-ui-envelope.md`.
+
+- **D-70 (2026-08-26)** **The panel's pages get a selectable appearance: three skins
+  (`table`, `colorful`, `technical`) and a dark/light mode, defaulting to `dark`. It is
+  stored on the device, and it is the one agreed exception to D-68's frozen wire contract.**
+  Rocket asked for this mid-flight on #50.
+
+  **Why it is nearly free, and why that is the whole reason to say yes.** D-69 moved the
+  stylesheet into a gzipped flash blob, so the cost of a skin is pool B bytes, not heap. All
+  three skins and both modes live in **one** stylesheet, selected by attributes on the root
+  element - `<html data-skin="technical" data-mode="dark">` - so **the generated markup is
+  byte-identical whichever appearance is active.** Pool A, the scarce contiguous allocation
+  paid on every request, grows by one small appearance form in the chrome and by nothing
+  per row. Three skins would have been unaffordable a day ago and are affordable now.
+
+  **Stored on the device, not in the browser.** The alternative was `localStorage`, which is
+  cheaper still and wrong here: the local presentation overlay already persists in NVS
+  because it describes *this panel*, and an appearance that lived in one browser would mean
+  the panel looks different depending on who opened it, with no way to see what it is set to.
+  Cookies were not considered - D-23 rejected them on this device and CSRF is why.
+  The tradeoff is accepted and worth stating: **the appearance is shared, so one person's
+  choice changes it for everyone.** On a single-desk appliance that is the right answer, and
+  it is reversible.
+
+  **The exception to D-68.** Persisting a choice needs a verb, so `handle_action()` gains one
+  branch, `action=appearance`, carrying `skin` and `mode`. Everything D-68 froze stays frozen:
+  the `save`/`clear`/`clearall`/`refresh` verbs, the field names, "empty means follow the
+  server", the `busy` refusal, the Origin check, the three-outcome `submit()`. This is
+  additive and it is recorded as an exception rather than waved through, because "the
+  contract is frozen except when I want something" is how a frozen contract stops meaning
+  anything.
+
+  **It needs no JavaScript.** The switcher is an ordinary form with `<select>`s and a submit
+  button, so it works with scripting off, which keeps it consistent with the rest of the page.
+
+  **What this does NOT touch: the glass.** A skin changes the *web page* the device serves.
+  It has no effect on the 128x64 OLED, on `compute_view()`, or on which SHAPE is drawn.
+  Luminance still picks the frame from the ring, and a skin cannot alter that. Worth writing
+  down because "theme" is a word that invites exactly the wrong assumption on a device whose
+  whole job is to render a state.
+
+  **Open at the time of writing:** whether `table` is reachable as pure CSS over the winning
+  variation's markup, or whether it is a second layout wearing a skin's name. Two of the
+  three (`colorful`, `technical`) are unambiguously skins. If `table` cannot be reached from
+  the judged markup without a second markup path, it is pool A cost and the honest move is to
+  say so rather than ship a second renderer quietly.

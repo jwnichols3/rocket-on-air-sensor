@@ -21,11 +21,13 @@ button:hover{background:#262c33}
 .chip{border-radius:4px;padding:.1rem .45rem;font-size:.85rem;font-weight:600}
 .tag{font-size:.62rem;letter-spacing:.09em;border:1px solid #444d55;border-radius:3px;padding:.1rem .3rem;color:#8b959e}
 .ov{border-color:#5ec8d8;color:#5ec8d8}
+.dm{border-left-color:#7a6a3b}
+.dr{border-color:#7a6a3b;color:#e8ca8f}
 .d{flex:1 1 14rem;display:grid;grid-template-columns:3.2rem 1fr;gap:.15rem .5rem;font-size:.82rem;align-content:start}
 .d i{color:#8b959e;font-style:normal}
 .sw{display:inline-block;width:.65rem;height:.65rem;border-radius:2px;border:1px solid #666;vertical-align:-1px;margin-right:.25rem}
 label{display:block;font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;color:#8b959e;margin:.45rem 0 0}
-.pick{margin:0;padding:.3rem;border-radius:6px;text-transform:none;letter-spacing:0;font-size:.85rem;color:#e8eaed}
+.pick{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:.5rem;align-items:center;margin:.4rem 0;padding:.35rem;border-radius:6px;text-transform:none;letter-spacing:0;font-size:.85rem;color:#e8eaed}
 .pick:has(:checked){background:#171b1f;outline:1px solid #3a424a}
 input{display:block;width:100%;margin-top:.15rem;font:inherit;font-size:.9rem;background:#0b0d0f;color:#e8eaed;border:1px solid #333a41;border-radius:5px;padding:.3rem .45rem}
 input[type=radio]{width:auto;margin:0;accent-color:#5ec8d8}
@@ -38,6 +40,9 @@ summary{cursor:pointer;padding:.4rem 0}
 .g u{position:absolute;left:0;right:0;top:49px;border-top:1px solid #fff;display:flex;justify-content:space-between;padding:2px 0 0}
 .g b{position:absolute;left:0;right:0;top:24px;transform:translateY(-50%);text-align:center;font-weight:400}
 .lg{font-size:14px}
+.hg{font-size:30px}
+.blk{position:absolute;left:0;top:0;width:128px;height:48px;background:#fff}
+.blk+b{color:#000}
 .ring{position:absolute;left:42px;top:2px;width:44px;height:44px;border:7px solid #fff;border-radius:50%}
 .hv{position:absolute;left:0;top:0;width:128px;height:48px;border:1px solid #fff}
 .hv:before{content:"";position:absolute;left:1px;top:1px;right:1px;bottom:1px;border:1px solid #fff}
@@ -46,15 +51,15 @@ summary{cursor:pointer;padding:.4rem 0}
 
 <p class=pend><b>PENDING</b> — the panel is busy applying this and it may still be landing. Nothing below is confirmed until you <a href=/onair/config>Reload</a>.</p>
 
-<h1>2 of 5 rows are overridden on this panel.</h1>
-<p class=m>Profile v11, 5 rows. The other 3 follow the server exactly. Overrides are <b>presentation only</b> and live on this panel alone — the server owns <code>busy</code> and owns which rows exist.</p>
+<h1>2 of 5 rows overridden on this panel, plus 1 dormant.</h1>
+<p class=m>Profile v11, 5 rows. The other 3 follow the server exactly. A <b>dormant</b> override is one this panel still stores for a row the server has since removed: it is not one of the 5, which is why it is counted separately and not as a fraction of them. Overrides are <b>presentation only</b> and live on this panel alone — the server owns <code>busy</code> and owns which rows exist.</p>
 
 <form class=bar method=post>
 <button class=dg name=action value=clearall>Clear all overrides — put this panel back</button>
 <button name=action value=refresh>Refresh profile from server</button>
 </form>
 
-<h2>Overridden here · 2</h2>
+<h2>Overridden here · 2 live, 1 dormant</h2>
 <p class=m>Empty a field to follow the server again. The grey text in each box is the server’s own value.</p>
 
 <form class=card method=post><input type=hidden name=id value=available>
@@ -97,13 +102,24 @@ summary{cursor:pointer;padding:.4rem 0}
 <p class=acts><button name=action value=save>Save</button><button class=dg name=action value=clear>Clear this row</button></p>
 </form>
 
+<form class="card dm" method=post><input type=hidden name=id value=presenting>
+<p class=hd><code>presenting</code><span class="tag dr">dormant</span></p>
+<div class=d>
+<i>label</i><span>PRESENTING, stored on this panel</span>
+<i>colour</i><span>not overridden</span>
+<i>glass</i><span>nothing — profile v11 has no <code>presenting</code> row</span>
+</div>
+<p class=m>The server removed this row, so the override applies to nothing and the panel never draws it. There is no miniature because there is nothing to draw. It stays listed rather than being dropped quietly: an override that stopped applying without saying so is exactly the silent rot this page exists to prevent. Clearing is the only thing you can do to it.</p>
+<p class=acts><button class=dg name=action value=clear>Clear this override</button></p>
+</form>
+
 <h2>Following the server · 3</h2>
-<details><summary>Untouched — <code>on-air</code>, <code>recording</code>, <code>unknown</code>. Open to start overriding one.</summary>
+<details open><summary>Untouched — what each one draws now. Pick one to start overriding it.</summary>
 <form method=post>
-<label class="pick hd"><input type=radio name=id value=on-air required><b class=chip style=background:#c1121f;color:#ffffff>ON AIR</b><code>on-air</code><span class=tag>busy</span><span class=m>#ffffff on #c1121f · lum 71</span></label>
-<label class="pick hd"><input type=radio name=id value=recording><b class=chip style=background:#6a0dad;color:#ffffff>RECORDING</b><code>recording</code><span class=tag>busy</span><span class=m>#ffffff on #6a0dad · lum 59</span></label>
-<label class="pick hd"><input type=radio name=id value=unknown><b class=chip style=background:#1a1a1a;color:#ff00ff>NO DATA</b><code>unknown</code><span class=tag>busy</span><span class=m>#ff00ff on #1a1a1a · lum 26</span></label>
-<p class=m>All three are <b>busy</b> — the server’s call, not editable here. Busy draws the solid block with the label knocked out and never consults colour, so a colour override on these three changes nothing on the glass today. Pick a row, fill only what you want overridden, leave the rest empty.</p>
+<label class=pick><input type=radio name=id value=on-air required><span class=hd><b class=chip style=background:#c1121f;color:#ffffff>ON AIR</b><code>on-air</code><span class=tag>busy</span><span class=m>#ffffff on #c1121f · lum 71</span></span><span class=g><i class=blk></i><b class=hg>ON AIR</b><u>IP: 10.42.12.77<s>-58dBm</s></u></span></label>
+<label class=pick><input type=radio name=id value=recording><span class=hd><b class=chip style=background:#6a0dad;color:#ffffff>RECORDING</b><code>recording</code><span class=tag>busy</span><span class=m>#ffffff on #6a0dad · lum 59</span></span><span class=g><i class=blk></i><b class=lg>RECORDING</b><u>IP: 10.42.12.77<s>-58dBm</s></u></span></label>
+<label class=pick><input type=radio name=id value=unknown><span class=hd><b class=chip style=background:#1a1a1a;color:#ff00ff>NO DATA</b><code>unknown</code><span class=tag>busy</span><span class=m>#ff00ff on #1a1a1a · lum 26</span></span><span class=g><i class=blk></i><b class=hg>NO DATA</b><u>IP: 10.42.12.77<s>-58dBm</s></u></span></label>
+<p class=m>All three are <b>busy</b> — the server’s call, not editable here. Every miniature above is the same solid block with the label knocked out, in three wildly different colours: that is the point. Busy never consults colour, so a colour override on these three changes nothing on the glass today, and the only thing that varies is the label and its font (large at 8 characters or fewer, small above). Pick a row, fill only what you want overridden, leave the rest empty.</p>
 <div class=f3>
 <label>label<input name=label maxlength=64 placeholder="follow the server"></label>
 <label>text<input name=color maxlength=7 pattern="#[0-9a-fA-F]{6}" placeholder="follow"></label>
@@ -116,3 +132,123 @@ summary{cursor:pointer;padding:.4rem 0}
 <p class=m style=margin-top:1.4rem>All 5 rows shown; this page edits at most 24. The passphrase is not shown here and cannot be read back from this device (D-55) — set it on the ESPHome dashboard. <a href=/onair>Back to status</a> · <a href=/>ESPHome dashboard</a></p>
 
 </main></body></html>
+<!-- NOTES
+CONCEPT: The page answers "what have I changed?" before it offers to change anything - it opens
+with "2 of 5 rows are overridden on this panel", then shows those two in full, each as a
+server-vs-panel diff with a 1:1 miniature of the actual 128x64 glass. The three untouched rows
+collapse into one <details> holding a single pick-a-row form, and "Clear all overrides - put
+this panel back" is the first control on the page rather than a footnote.
+
+BYTES: html=5575 css=3199 js=0 total=8774   (the real file is 18099 bytes; this NOTES block is
+9325 of them. "css" is the text between <style> and </style>; "html" is everything else.
+Measured with python3 on the file, not estimated.)
+  Honest comparison: shots/before.html is 6840 bytes (css 1890, html 4950) for the same five
+  rows. So as a standalone file this is BIGGER, by 1934 bytes. It is not the smallest thing
+  that could be drawn, and pretending otherwise would fail the one value the brief puts above
+  every other. Two numbers say why it is nevertheless the cheaper page on the device:
+  1. Pool A vs pool B. The scarce resource is ESP32 heap - one contiguous std::string per
+     request (envelope Q2) - not file size. In the firmware this stylesheet is a flash-served,
+     gzipped, immutable-cached asset (Q3), which the page today cannot do because it inlines.
+     Dynamic cost is then the HTML only. Measured pieces of this file:
+       fixed chrome                            1289 B   (today: 3148 B)
+       override card, one miniature (available) 1155 B
+       override card, flip pair (interruptible) 1520 B
+       <details> fixed part                      897 B
+       untouched row inside it                   238 B   (today: 738 B per row, always)
+  2. Cost scales with overrides, not with rows. That is the whole bet:
+       live panel today, 0 overrides, 5 rows:  ~3.2 KB   (today: 6.8 KB)
+       this page, 2 overrides, 5 rows:          5.6 KB   (today: 6.8 KB)
+       24 rows, 0 overrides:                   ~7.7 KB   (today: ~20.9 KB)
+       24 rows, ALL overridden:               ~28.9 KB   OVER the ~24 KB reserve.
+     That last line is a real regression at the extreme and it is not hidden: if this variation
+     wins, MAX_ROWS_RENDERED drops from 24 to 18 (1289 + 18 x 1155 = ~22.1 KB) and keeps
+     announcing itself when it bounds. Dropping the miniature past the first 8 overridden rows
+     does not save enough on its own (~26 KB). 18 is the number.
+
+COLOUR TRAP: Not hit, deliberately - there is no <input type=color> anywhere. A native picker
+cannot represent blank, blank is the load-bearing value in this contract, and every zero-JS way
+to gate it fails in one direction or the other: a disabled input never submits and cannot be
+re-enabled without script, and a checkbox is a field the handler does not read. So the colour
+control stays a text input with pattern="#[0-9a-fA-F]{6}" maxlength=7 and the SERVER's value as
+the placeholder - empty still means follow the server, byte-for-byte the same contract as today.
+What is new is that the page finally SHOWS colour instead of only spelling it: a rendered swatch
+beside each hex in the diff, and the row's own colours on the identity chip (the admin console's
+"the name IS the swatch"). Both are server-side inline styles, ~45 B each. The cost is that a
+swatch reflects the SAVED value, never what is currently typed. Truthfulness is value 1, so a
+swatch that always shows what the panel actually holds beats one that sometimes shows what you
+have not saved.
+
+NO-JS: Everything works; there is no JavaScript in the file at all, and no <script> tag.
+<details>/<summary> is native. Every control is a plain form submit carrying
+action=save|clear|clearall|refresh. Native validation rejects a malformed hex before the POST and
+:user-invalid colours the box. The untouched rows are radio buttons in one form, so `required` on
+the first makes the browser demand a row before Save. The forms omit action= entirely and post to
+the current URL, which IS /onair/config - correct, and 22 bytes cheaper per form. `busy` is not a
+field anywhere on the page. Nothing degrades because nothing depends on script; what a JS build
+would add and this gives up is live colour preview and live luminance/SHAPE recompute as you
+type.
+
+C++ COST: Easier than what is there now, with five named hard parts.
+  - page_head() drops the inline <style> for <link rel=stylesheet href=/onair.css> against a
+    flash blob. That alone deletes 1890 B from every response.
+  - config_page() needs one counting pass over the overlay before rendering so the h1 can say
+    "N of M". A loop over <=24 entries under the lock it already holds. No new state.
+  - Rows are emitted in two passes over the same table: pass 1 skips rows with no override, pass
+    2 skips rows with one. Same data read twice, no extra allocation.
+  - render_row_form() splits into render_override_card() and a one-line render_pick_row().
+    colour_field() survives nearly as-is, gaining a swatch <i> styled with
+    format_hex_color(effective).
+  HARD PARTS:
+  1. The miniature reimplements the display lambda, so the two can drift. It is fixed markup plus
+     two variables - the label, and which of .ring/.hv is emitted - a switch on Shape, ~6 lines.
+     It needs a comment on the lambda in elegoo-esp32.yaml saying a second copy exists, and a
+     test asserting both pick the same Shape for the same row.
+  2. THE FONT RULE IN SAMPLE-DATA.md IS WRONG FOR THE RING, and I only found it by reading
+     elegoo-esp32.yaml:601-660. `label_font()` (30px huge at strlen<=8, else 14px title) is
+     applied on the BUSY and CALM HEAVY branches only. CALM LIGHT hardcodes id(status_text), 11px,
+     for every label regardless of length. This miniature follows the lambda, not the brief: FREE
+     on the ring is 11px and fits the 30px hole; INTERRUPTIBLE on the ring is also 11px, ~75px
+     wide, and therefore collides with the ring - which is what the glass really does, and is a
+     second consequence of the flip that no amount of prose would have shown. The heavy frame
+     draws INTERRUPTIBLE at 14px because that branch does consult label_font(). Whoever
+     implements this must read the lambda, not the sample data.
+  3. Miniature geometry uses box-sizing:content-box arithmetic while the page sets
+     *{box-sizing:border-box}. The ring is width:44px with a 7px border, NOT width:30px - I
+     shipped that bug once and it silently drew a 16px hole. Worth a comment in the stylesheet.
+  4. Two empty-section guards. "Overridden here" must not be emitted when the overlay is empty,
+     and the <details> must not be emitted when every row is overridden. Both edges are easy to
+     get wrong and both need a test.
+  5. Only CALM branches have a miniature (.ring, .hv). Busy rows deliberately get none: colour is
+     not consulted there and a picture would imply it is. A .blk rule for the solid block with a
+     knocked-out label is ~90 B of pool-B CSS if that ever changes.
+
+GIVES UP:
+  - Live preview of anything. Type a hex, see nothing until you save. This is the biggest
+    sacrifice and it is exactly what buys zero JS.
+  - Luminance is only ever recomputed server-side, so the SHAPE FLIP warning always describes the
+    SAVED state. You can save a flip without being warned first; you are warned on the page you
+    land on. Truthful, but late.
+  - The untouched rows lose their own per-row forms. They become one pick-a-row form, which is
+    what takes them from 738 B each to 238 B each, and it costs a click plus a radio press to
+    start overriding one. If today's job is "edit on-air", this page is slower than a flat list.
+    That is the bet: the common job is "what have I done to this panel", not "edit row 3".
+  - Those rows also lose per-field placeholders (the shared boxes say "follow the server", not
+    "#c1121f"), so the exact server value you are replacing is in the row line, not in the box.
+    Their hex values ARE printed on the pick line, but you cannot see them while typing.
+  - No contrast/AA readout from the admin console. On a 1-bit panel contrast is not the question -
+    luminance against 128 is, because that picks the SHAPE - so the luminance readout replaces
+    it, per the brief's own note. Deliberate, not an oversight.
+  - Dormant overrides are not in this render because the sample data has none, and inventing one
+    would have meant inventing a row. They belong as a third card in "Overridden here", tagged
+    DORMANT, with only Clear and no miniature (the panel draws nothing for them). This file does
+    not prove that case and a reviewer should ask for it.
+  - Only the PENDING banner is rendered, as asked. APPLIED (green) and FAILED (red) reuse the
+    .pend rule with two colour overrides, ~80 B of pool-B CSS, not present here.
+  - No NO CONFIG screen (a bonus, not a requirement).
+  - The miniature is exact on geometry (every coordinate is from the lambda) and approximate on
+    type: it substitutes system-ui for Roboto at the same pixel sizes. Shapes cannot lie; glyph
+    widths can be off by a few pixels.
+  - Attribute quoting is minimal wherever the value is a fixed token, which is what C++ string
+    concatenation emits anyway. Anything that can carry server text - labels, placeholders - is
+    quoted and would be html_escape()d.
+-->

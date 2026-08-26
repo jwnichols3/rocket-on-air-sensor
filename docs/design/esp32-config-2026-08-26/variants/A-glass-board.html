@@ -255,7 +255,7 @@ var s=d.fx?+d.fx:d.b=='1'?0:H.test(bg)?(L(bg)>=128?1:2):+d.s0;
 if(!d.fx){b.textContent=lab;b.className=lab.length<=8?'lg':''}
 g.setAttribute('data-shape',s);
 vd.innerHTML=N[s]+' <span>'+D[s]+'</span>';
-if(bar&&H.test(bg)){var v=L(bg);bar.style.width=(v/2.55).toFixed(1)+'%';lt.innerHTML='background luminance <b>'+v+'</b> · the line is 128'}
+if(bar){if(H.test(bg)){var v=L(bg);bar.style.width=(v/2.55).toFixed(1)+'%';lt.innerHTML='background luminance <b>'+v+'</b> · the line is 128'}else{bar.style.width=0;lt.innerHTML='background luminance <b>-</b> · that is not a #rrggbb, so the glass below is still the saved picture'}}
 if(fl){fl.hidden=s==+d.s0;if(!fl.hidden)fl.textContent='This override crosses the 128 line: the picture changes from '+N[+d.s0]+' to '+N[s]+'.'}
 A(c.querySelectorAll('input[type=color]'),function(p){var t=p.nextElementSibling,v=t.value.trim()||(t.name=='color'?d.sc:d.sb);if(H.test(v))p.value=v})
 }
@@ -268,91 +268,112 @@ up()});
 <!-- NOTES
 CONCEPT: The page is a board of the panel's own glass, drawn five times - each state as a
 miniature 128x64 1-bit SH1106 rendered in CSS at the firmware's own pixel coordinates,
-showing the exact shape the display lambda will draw, diagnostics band included. Editing
-happens under the miniature it changes and the miniature changes as you type, so the 1-bit
-consequence stops being a paragraph at the top of the page and becomes the picture you are
-already looking at.
+showing the exact shape the display lambda will draw, reserved diagnostics band included.
+Editing happens directly under the miniature it changes and the miniature changes as you
+type, so the 1-bit consequence stops being a paragraph at the top of the page and becomes
+the picture you are already looking at.
 
-BYTES: html=13091 css=5455 js=1503 total=20049
-  Measured on the real file with the NOTES block removed: total 20,049 B; the <style>...
-  </style> element is 5,455 B and the <script>...</script> element is 1,503 B, leaving
-  13,091 B of markup. Split the way the envelope doc splits it: CSS and JS are pool B
-  (flash, gzipped, immutable-cached, ~0 heap), so the per-request heap cost is the markup
-  only. Of that markup: fixed chrome (head, banner, rule, summary, dormant slot, the
-  three-picture <details>, footer) is 4,132 B and the five cards are 8,959 B - 1,792 B for
-  each of the two overridden cards, 1,125 B avg for the three that follow the server.
-  Today's page is 3,148 B chrome + 738 B/row.
+BYTES: html=10710 css=8572 js=2039 total=21321
+  Measured on this file with the NOTES block removed. total = 21,321 B; the <style> element
+  including its tags is 8,572 B, the <script> element including its tags is 2,039 B, leaving
+  10,710 B of markup. Split the way the envelope doc splits it - CSS and JS are pool B
+  (flash, gzipped, immutable-cached, ~0 heap; the two together gzip to 3,625 B against a
+  32 KB pool B budget) - so the per-request heap cost is the markup alone:
+    fixed chrome  3,440 B   (head, banner, presentation rule, override summary, dormant
+                             slot, the three-picture <details>, clear-all, footer)
+    per row       1,296 B avg for a row that follows the server
+                  1,690 B avg for a row with an override (it also carries the ghost glass)
+  Today's page: 3,148 B chrome + 738 B per row.
   THIS IS OVER BUDGET AND I AM NOT HIDING IT. The envelope allows 4 KB chrome + 900 B/row
-  with a 24 KB hard ceiling; at MAX_ROWS_RENDERED=24 this design projects to
-  4,132 + 24 x 1,150 = ~31.7 KB, needing a reserve() near 34 KB contiguous against a floor
-  that is only proven to 24.7 KB. See C++ COST for the two ways down.
+  under a 24 KB hard ceiling. At MAX_ROWS_RENDERED=24 this projects to
+  3,440 + 24 x 1,296 = 34,544 B, so reserve() would want ~38 KB contiguous against a floor
+  only proven to 24.7 KB. See C++ COST for the two ways down and why the number has to be
+  measured before this ships.
 
-COLOUR TRAP: solved by giving the native picker no name. Each colour is a pair: an
-<input type=color> with NO name attribute, and next to it the text input that actually
-carries name=color / name=bgcolor with pattern="#[0-9a-fA-F]{6}" and the server's value as
-placeholder. The picker is a viewfinder that writes into the text input; it is structurally
-incapable of posting anything, with or without JavaScript, so it can never turn "follow the
-server" into "override to black". Empty text field still means follow the server, exactly as
-today. The "follow" button beside each field blanks the text input and re-syncs the picker
-to the server value; the row's "Follow server" button is the real action=clear submit.
-No form on this page carries a field named busy - busy appears only as a class and as prose.
+COLOUR TRAP: solved by giving the native picker no name. Each colour is a pair - an
+<input type=color> carrying NO name attribute, and beside it the text input that actually
+carries name=color / name=bgcolor, with pattern="#[0-9a-fA-F]{6}" and the server's value as
+its placeholder. The picker is a viewfinder that writes into the text input; it is
+structurally incapable of posting anything, with or without JavaScript, so it can never turn
+"follow the server" into "override to black". Empty text field still means follow the
+server, exactly as today. The "follow" button beside each field blanks the text input and
+re-syncs the picker to the server's value; the row's "Follow server" button is the real
+action=clear submit. VERIFIED in headless Chrome on this file: all ten colour pickers report
+name=null; the interruptible row posts id/label/color/bgcolor and nothing else; after
+"follow" it posts bgcolor=""; a row with no override posts label="" color="" bgcolor="";
+there is no element named busy anywhere on the page; there are zero src/href/img/iframe
+references, so nothing is fetched.
 
-NO-JS: everything the page is for still works. All five miniatures, the shapes, the label
-text, the label font size (30px bold at <=8 chars, 14px above), the luminance bar and
-readout, the "this override crosses the 128 line" warning, the ghost of the server's own
-picture, the override/following badges, the PENDING banner, Refresh, Save, Follow server and
-Clear all are server-rendered and submit as ordinary forms. What is lost: live preview while
-typing, the "unsaved" pill, the invalid-hex dimming, and the "follow" mini-buttons (which are
+NO-JS: everything the page exists to do still works. All five miniatures, the shapes, the
+label text, the label font size (30px bold at <=8 characters, 14px above - and 11px in the
+open ring, because that branch ignores label_font), the luminance bar and readout, the
+"this override crosses the 128 line" warning, the ghost of the server's own picture, the
+busy/calm and override badges, the PENDING banner, Refresh, Save, Follow server and Clear
+all are server-rendered and submit as ordinary form POSTs. What is lost: live preview while
+typing, the "unsaved" pill, the invalid-hex dimming, and the "follow" mini-buttons (they are
 type=button and go inert - you clear the text field by hand instead, and the row-level
-"Follow server" still works). The colour pickers still open and still show the current value;
-they just stop writing into the text field, so with JS off you type the hex. Nothing silently
-lies with JS off, because the server-rendered state is the truth and JS only re-derives it.
+"Follow server" still works). The colour pickers still open and still show the current
+value; they just stop writing into the text field, so with JS off you type the hex. Nothing
+lies with JS off, because the server-rendered state is the truth and the script only
+re-derives it from the same numbers.
 
 C++ COST: moderate, with one honest problem.
-  EASY: the whole glass is <i class=g data-shape=N><b>LABEL</b><s></s></i> - about 62 bytes,
-  one std::string append, no per-shape branching in the emitter. Every primitive is a CSS
-  ::before on [data-shape]: the double frame is one border plus a two-layer inset box-shadow,
-  the open ring is one 7px border on a 44px circle, the hatch is a repeating-linear-gradient.
-  The diagnostics band is one empty <s>, with the IP and dBm strings injected once per page
-  as --ip/--db custom properties on <body> instead of five times in the markup. The three
-  repeated per-shape notes are CSS content on .card / .card.b / .card.fx, so a 16-byte
-  <p class=n></p> carries them - which is also why the note is no longer printed five times.
-  compute_view() already returns the Shape enum and those enum values ARE the data-shape
-  numbers, so the emitter writes the int straight in. luminance() already exists.
-  MEDIUM: render_row_form() has to emit both the data-* mirror of the server row
+  EASY: a whole glass is <i class=g data-shape=N><b>LABEL</b><s></s></i> - about 62 bytes,
+  one append, no per-shape branching in the emitter. Every primitive is a CSS ::before keyed
+  on [data-shape]: the double frame is one 1px border plus a two-layer inset box-shadow
+  (verified to land lit pixels at x=2..3/125..126 and y=2..3/45..46, which is exactly
+  rectangle(2,2,124,44)); the open ring is one 7px border on a 44px circle at (42,2), which
+  is filled_circle(64,24,22) minus filled_circle(64,24,15); the hatch is a
+  repeating-linear-gradient at the same 4px pitch. Text drawn COLOR_ON over a lit shape
+  disappears for free because both are var(--lit), which is what the real panel does when it
+  ORs pixels. The diagnostics band is one empty <s>, with the IP and dBm strings injected
+  ONCE per page as --ip/--db custom properties on <body> rather than five times in markup.
+  The three per-shape notes are CSS content on .card / .card.b / .card.fx, so a 16-byte
+  <p class=n></p> carries them - which is also how the note stopped being printed five
+  times. compute_view() already returns the Shape enum and those enum values ARE the
+  data-shape numbers, so the emitter writes the int straight in; luminance() already exists.
+  MEDIUM: render_row_form() must emit both the data-* mirror of the server's row
   (data-sl/sc/sb/b/s0) and the visible fields, so every server value is written twice - once
-  escaped into an attribute, once into a placeholder. Needs care with html_escape on labels.
-  The ghost glass is a second call to the same glass emitter with the server's shape, gated
-  on "the override changes the picture".
-  HARD, and this is the real cost: per-row bytes go 738 -> ~1,150. The 24-row projection
-  (~31.7 KB) exceeds the 24 KB ceiling and the reserve() would have to grow past what is
-  proven safe on the device. Two ways down, both cheap and both mine to name rather than
-  discover later: (1) emit the editor only for the first N rows and the glass-plus-verdict
-  for the rest, which keeps the board complete and drops the tail to ~350 B/row; (2) drop the
-  per-row colour chip and the two "follow" mini-buttons above some row count. Neither is
-  needed at 5 rows and both are ugly at 24, so the right move is to measure
-  heap_caps_get_largest_free_block() on the same flash (STATUS.md already carries that as an
-  action) and decide with a number. A design that needs a measurement before it ships is a
-  cost; a design that needs one and does not say so is a bug.
-  ALSO: browsers render the miniature in Roboto if installed and Arial/Helvetica otherwise -
-  no web font is fetched, so on a machine without Roboto the glass text is metrically close
-  but not identical to the panel's. The shapes, positions and font SIZES are exact.
+  html_escape'd into an attribute, once into a placeholder. The ghost glass is a second call
+  to the same glass emitter with the server's shape, gated on "the override changes the
+  picture". The STALE word inside a busy glass is a conditional <u>STALE</u>.
+  HARD, and this is the real cost: per-row markup goes 738 -> ~1,296 B, and the 24-row page
+  projects to ~34.5 KB against a 24 KB ceiling. Two ways down, both cheap, and mine to name
+  now rather than discover on the device: (1) emit the full editor for the first N rows and
+  glass-plus-verdict only for the rest, which keeps the board complete and drops the tail to
+  ~350 B/row; (2) drop the label-on-background chip and the two "follow" mini-buttons above
+  some row count. Neither is needed at 5 rows and both are ugly at 24, so the right move is
+  to add the debug: component in the same flash, read
+  heap_caps_get_largest_free_block(), and decide with a number - STATUS.md already carries
+  that as an action. A design that needs a measurement before it ships is a cost; a design
+  that needs one and does not say so is a bug.
+  ALSO: the miniature uses Roboto if the operator's machine has it and Arial/Helvetica
+  otherwise - no web font is fetched, so on a machine without Roboto the glass text is
+  metrically close but not identical to the panel's. The shapes, coordinates and font SIZES
+  are exact.
 
 GIVES UP:
-  - Byte budget. See above. This is the expensive variation and it buys the picture with it.
-  - Density. Five glasses at 260px plus five editors is a taller, wider page than a table.
-    At 24 rows this is a long scroll, and the board metaphor weakens the more rows there are.
-  - It commits hard to the 1-bit glass as the identity of a row, which means colour - the
-    thing the person is editing - is deliberately NOT the row's identifier the way it is in
-    the admin console. Colour appears twice per row (two picker swatches, one label-on-
-    background chip) and is honestly labelled "which this 1-bit glass cannot show". Someone
-    who thinks of these rows by their colour will find that cold.
+  - Byte budget. See above. This is the expensive variation, and the picture is what it
+    bought with them.
+  - Density. Five 260px glasses plus five editors is a bigger page than a table. At 24 rows
+    it is a long scroll and the board metaphor weakens the more rows there are; this design
+    is best exactly at the size the real profile is.
+  - It commits to the 1-bit glass as the identity of a row, so colour - the thing being
+    edited - is deliberately NOT the row's identifier the way it is in the admin console.
+    Colour appears twice per row as picker swatches plus one label-on-background chip,
+    honestly captioned "which this 1-bit glass cannot show". Someone who thinks of these
+    rows by their colour will find that cold, and the admin console's contrast ratio is
+    replaced by a luminance readout against 128 because that, not contrast, is what picks
+    the shape here.
   - Three per-row hints live in CSS content, so they are not selectable, not findable with
-    ctrl-F, and skipped by some assistive tech. They are hints that duplicate visible
-    structure, not the only statement of anything - but it is a real trade for bytes.
+    ctrl-F, and skipped by some assistive tech. They duplicate visible structure rather than
+    being the only statement of anything, but it is a real trade made for bytes.
   - <i>, <b>, <s> and <u> are used as generic boxes inside the glass because they are the
-    shortest tags that exist. Semantically that is junk; it is worth about 90 bytes per glass
-    against <span>/<div>, and the glass is decorative-with-a-caption, not content.
+    shortest tags that exist. Semantically that is junk; it saves about 90 bytes per glass
+    against <span>/<div>, and the glass is a captioned picture, not content.
   - No live save. Every action is a full form POST and a full page render, same as today,
     which is what keeps the no-JS story clean and the connection count at one.
+  - The dormant-override section is shown as a labelled empty slot, because the live overlay
+    has no dormant row. The slot states what will appear there and why it is never dropped
+    quietly, rather than inventing a row the sample data does not have.
 -->
