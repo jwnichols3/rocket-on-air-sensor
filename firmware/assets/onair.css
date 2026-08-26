@@ -1,0 +1,4 @@
+/* PLACEHOLDER. The real stylesheet arrives with the #50 redesign.
+   This file exists so the D-69 pipeline - gzip at build time, serve from flash with
+   AsyncWebServerResponseProgmem, guard against drift in `npm run verify` - is proven
+   working before it has anything real to carry. */
