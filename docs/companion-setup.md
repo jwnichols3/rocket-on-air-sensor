@@ -1,102 +1,172 @@
 # Bitfocus Companion setup
 
-Drive the on-air light from a Companion button and show live status feedback on it, using
-only official Bitfocus "generic" connections - no custom Companion module needed. See
-`docs/research/2026-08-05-companion-integration.md` for the full option comparison; this
-doc is just the config steps for the recommended path (push via `generic-websocket`).
+Two ways to drive the on-air light from a Stream Deck. **Use the module.** The
+generic-connection path is kept below as a fallback, corrected - the version of it that
+shipped before #44 described wiring that cannot work.
 
-Companion connections to add (search the in-app connection browser): **Generic HTTP**
-(actions) and **Generic WebSocket** (status feedback).
+---
+
+# 1. The module (recommended)
+
+`companion-module/` in this repo. Sideloaded rather than installed from the store: it is
+specific to this system and upstream submission is deliberately out of scope.
+
+**What it gives you that the generic path does not:** one preset per state, generated from
+the server's own table. Drag them onto a Stream Deck and they already carry the right
+caption and the right colours, because both come from `GET /config/states`. Add a state on
+the server and its button appears - no Companion restart, no re-wiring.
+
+## Build and install
+
+```sh
+npm run build --workspace companion-module
+```
+
+That produces `companion-module/dist/`, which is the module: one bundled `main.js`, a
+`package.json`, and `companion/manifest.json`.
+
+Package it and install it. **Both of these details matter and neither is obvious:**
+
+```sh
+cd companion-module
+rm -rf /tmp/onair-stage && mkdir -p /tmp/onair-stage
+cp -R dist /tmp/onair-stage/rocket-onair
+COPYFILE_DISABLE=1 tar -czf /tmp/rocket-onair.tgz -C /tmp/onair-stage rocket-onair
+```
+
+- **`COPYFILE_DISABLE=1` is required on macOS.** Without it `tar` writes AppleDouble
+  `._*` entries, and the first of them is `._.` - a file with ONE path component. Companion
+  extracts with `strip: 1` and no ignore filter, so that name strips to nothing and the
+  install dies with `EISDIR` pointing at the module directory. Measured, not guessed.
+- **The tarball needs a real top-level directory** (`rocket-onair`), not `.`, and it must
+  contain the directory entries. Companion finds the manifest by taking the first
+  DIRECTORY entry as the prefix to trim; with no directory entries it never finds
+  `companion/manifest.json` and reports "Doesn't look like a valid module".
+
+Then in Companion: **Modules -> Import custom module**, and choose the `.tgz`.
+
+Importing custom modules is only permitted from the local machine, so do it from a browser
+on the Companion host, or over an SSH tunnel:
+
+```sh
+ssh -f -N -L 18000:127.0.0.1:8000 john@<companion-host>
+```
+
+## Configure the connection
+
+Add a connection of type **rocket-onair** and set:
+
+| Field | Value |
+|---|---|
+| Host | the on-air server, e.g. `rocket-studio-m1.local` |
+| Port | `8484` |
+| Passphrase | from `~/.onair/config.json`, under `auth.passphrase` |
+
+**The passphrase is required, not optional.** This module holds a state table, and
+`docs/api-contract.md` is explicit that a table-holder reads the gated endpoints rather than
+`/public/*` - the public pair is a *rendering* view for two dumb browser pages, free to
+change shape, with no `confirmed`, no `hold` and no `source`. Companion normally runs on a
+different host from the server anyway, where D-24's loopback waiver does not apply and the
+passphrase was already mandatory.
+
+The easiest place to read the passphrase is the admin console at `http://<host>:8484/`.
+
+## What you get
+
+**Presets**, under the category **States** - one per row, captioned with the row's `label`
+and coloured with its `color` on `bgcolor`, verbatim. Plus a **Refresh table** utility button.
+
+**Actions**
+
+| Action | What it does |
+|---|---|
+| Set state | `POST /state/{id}?source=companion`. The dropdown is the live table; a custom value is allowed |
+| Refresh the state table now | re-reads `GET /config/states` |
+
+**Feedbacks**
+
+| Feedback | True when |
+|---|---|
+| State is | the light is showing that state |
+| Busy | the current row is busy. This is the server's own flag, not a colour test - THE BUSY RULE (D-32) is what it means |
+| Stale | the server has no fresh evidence for the current state |
+
+**Variables**: `state`, `label`, `busy`, `confirmed`, `hold`, `source`, `stale`,
+`age_seconds`, `table_version`.
+
+## Things worth knowing
+
+- **Presets regenerate when the table changes.** The module watches `tableVersion` on the
+  status stream; when it moves it re-reads the table and re-publishes definitions. No restart.
+- **A placed button is a one-time copy in Companion 5.0.x.** It keeps the preset id it was
+  created with, which is why preset ids are keyed on the immutable row id (D-31) and never on
+  an index (D-34). A button survives rows being renamed or reordered.
+- **A button bound to a row the server no longer has says so.** The server answers `400` with
+  the list of ids that would have worked, and the module logs it:
+  `set state "deleted-row" failed: unknown state 'deleted-row' - valid states: available, on-air, ...`
+- **`apiVersion` is declared by the module, not derived from `@companion-module/base`.** The
+  manifest declares `1.14.0`, which this Companion implements. Do not "fix" it to the base
+  package's version - `2.1.3` asks for an API newer than Companion 5.0.3 has, and the module
+  will not load.
+
+---
+
+# 2. Fallback: generic connections, no module
+
+Kept because it needs nothing built. **The pre-#44 version of this section was wrong in two
+ways**; both are corrected here.
+
+Add **Generic HTTP** (actions) and **Generic WebSocket** (status).
 
 ## Actions: `generic-http`
 
-Base URL `http://<host>:8484`. Two button actions:
+Base URL `http://<host>:8484`. Two actions:
 
-- **On**: Method `POST`, URL `/on?source=companion`
-- **Off**: Method `POST`, URL `/off?source=companion`
+- **On**: `POST` `/on?source=companion`
+- **Off**: `POST` `/off?source=companion`
 
-No body needed. `?source=companion` follows the API's convention for identifying which
-client wrote the state (see `docs/api-contract.md`).
+Add a header to each: `{"Authorization": "Bearer <passphrase>"}`. Note the option id is
+`contenttype` in lower case, and the header field takes a JSON object.
 
-**Add a Header field to each action:** `{"Authorization": "Bearer <passphrase>"}`. This is no
-longer conditional - it was written when `ONAIR_TOKEN` was optional, and D-35 replaced that
-with a passphrase that always exists. Without it you get a `401` from anywhere except
-loopback, where D-24's waiver may apply; set it regardless rather than depending on where
-Companion happens to be running.
+## Status: `generic-websocket`
 
-**Where the passphrase lives** (D-50, and this changed): `~/.onair/config.json`, under
-`auth.passphrase`. It is **not** in `config.env` any more - that file retired as the config
-source and survives only as an env overlay. The easiest place to read or change it is the
-admin console at `http://<host>:8484/admin`.
+Target URL: `ws://<host>:8484/events/ws?passphrase=<passphrase>`
 
-**`/on` and `/off` survived v2, and so did `?source=companion`.** They no longer *name* a
-state - they resolve through the configured shortcut rows (seeded `on-air` and
-`available`), so if you rename or re-point those in the admin UI these buttons follow. An
-unset shortcut is a `409` rather than a guess. And an unprefixed `source` on these routes
-reads as `human:` (D-41), which a Stream Deck press is, so `?source=companion` becomes
-`human:companion` with no change on your side.
+The passphrase goes in the query string because a WebSocket upgrade cannot carry a header.
 
-To reach a row that is not a shortcut - `recording`, say - use `POST /state/{id}`:
+### CORRECTION 1: the module publishes no payload variables on its own
 
-- **Recording**: Method `POST`, URL `/state/recording?source=companion`
+`generic-websocket` publishes exactly one variable by itself: `lastDataReceived`. **Payload
+variables are created by a feedback, and you name them.**
 
-## Status feedback: `generic-websocket`
+Add the feedback **"Update variable with value from WebSocket message"** with:
 
-- **Target URL**: `ws://<host>:8484/events/ws?passphrase=<passphrase>` - the credential is
-  **required**; the bare form gets a `401`. The WS upgrade cannot carry an `Authorization`
-  header the way the HTTP actions can, so it uses a query parameter, as `GET /events` does.
-  `?token=` is still accepted as a synonym, so an existing connection keeps working - only
-  the value's home moved (see above).
-- **Reconnect**: on
-- **Feedback JSON Path**: `intended`
+| Option | Value |
+|---|---|
+| JSON Path | `intended` |
+| Variable | `intended` |
 
-Use `intended`, not `confirmed`. `intended` reflects what was actually requested;
-`confirmed` reflects what the light itself reported back, which is genuine as of D-21 but
-goes to `unknown` whenever the device is unreachable - not what you want a button colour
-keyed to.
+`updateVariables()` creates one variable per subscribed feedback, named exactly what you put
+in **Variable**. No feedback, no variable.
 
-### ⚠️ `level` is gone. If you built the amber feedback, change it.
+### CORRECTION 2: the variable prefix is the CONNECTION LABEL
 
-Earlier versions of this doc told you to add a second feedback on the `level` JSON path:
+Not the module id. If you label the connection `onair`, the expression is `$(onair:intended)`
+- not `$(genericwebsocket:intended)`. The earlier version of this doc used the module id
+throughout, including inside its own warning box about a renamed field, so the replacement it
+offered was also wrong.
 
-```
-$(genericwebsocket:level) == "interruptible"     # NO LONGER WORKS
-```
+### Colour a button from it
 
-**`level` no longer exists.** The three-rung ladder was replaced by an unordered state
-table (D-31), and the field on the wire is now `state`, carrying a **row id**. That
-expression will silently never match - it will not error, the button will just stop going
-amber - so it is worth changing even though nothing looks broken. The replacement:
+Add the internal feedback **Variable: Check value**, with:
 
-```
-$(genericwebsocket:state) == "interruptible"
-```
+| Option | Value |
+|---|---|
+| Variable | `onair:intended` - a **bare name**, not `$(...)`; it is wrapped internally |
+| Operation | `eq` |
+| Value | `on` |
 
-Wire it to an amber background, ordered *above* the `intended` feedback so it wins.
-`interruptible` is a seed row id and is stable; if you rename the row's **label** in the
-admin UI the id does not change, which is the whole reason ids exist (D-34).
+## Why the module is better
 
-**The `intended` feedback below keeps working untouched, and always will.** It is derived
-from the row's `busy` flag, so a row invented next year that means "the camera is live"
-reads as `"on"` without you touching anything. That is the entire point of `intended`
-surviving v2 - a client that has never heard of a row still does something correct, and
-errs toward red.
-
-## Button feedback
-
-Add feedback **"Variable: Check boolean expression"** to the button, expression:
-
-```
-$(genericwebsocket:intended) == "on"
-```
-
-(substitute your connection's actual label if you didn't name it `genericwebsocket`).
-Wire it to override the Background Color element - e.g. red when true, dark/off color
-when false.
-
-## Zero-code fallback
-
-If the WebSocket connection ever proves flaky, skip it: point a Companion "Time
-interval" trigger at a `generic-http` `GET /status` action into a custom variable
-instead - pure Companion configuration, no code, at the cost of poll-interval-bounded
-latency and no built-in staleness detection.
+The fallback hard-codes two states. It cannot show you `interruptible` or `recording`, it
+does not know a row's colours, and every state you add on the server needs hand-wiring here.

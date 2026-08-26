@@ -2569,3 +2569,54 @@ else (state, light control, API) lives on the receiver.
   bytes was reported as evidence it was fine. Byte count is not a rendering, and the two
   suites added in D-73 were aimed entirely at the config page because that was the page I had
   been looking at.
+
+- **D-75 (2026-08-26)** **The Companion module is built, sideloaded and driving the real
+  light (#44) - and it reads the GATED endpoints, against the ticket's own steer.**
+
+  #44 said: *"Design steer: start from `/public/events`. The read half needs no credential at
+  all, so a button can render and react before anyone has typed a passphrase."*
+  `docs/api-contract.md` says the opposite **and names this module while saying it**: "A
+  renderer that holds a table must not use these. The ESP32, Companion and any other client
+  take the state key from the gated endpoints and the look from `GET /config/states`."
+
+  **The contract wins.** It is source of truth, and its reasoning holds: `/public/*` is a
+  *rendering* view for two unauthenticated browser pages, explicitly free to change shape,
+  carrying no `confirmed`, no `hold` and no `source`. A module that generates presets from the
+  table is a table-holder by definition. The zero-configuration story the steer was buying is
+  worth little here anyway - Companion runs on another host, where D-24's loopback waiver does
+  not apply and the passphrase was already mandatory. Proven in the shipped module: it
+  publishes `confirmed`, `hold` and `source`, none of which `/public/*` carries.
+
+  **Three sideloading facts, each of which cost real time and none of which is in any doc:**
+
+  1. **`apiVersion` is declared, not derived.** `runtime.apiVersion` is the author's claim
+     about which host API the module wants; `@companion-module/base` ships no such field.
+     Companion 5.0.3 implements `1.14.0`, `2.1.0`, and a `2.1.2` nightly. The manifest
+     declares **1.14.0**, proven by loading before anything was built on top of it - the
+     skeleton reported its own `"skeleton loaded"` string back through `instances.statuses`.
+  2. **macOS `tar` breaks the sideload, and the error blames the wrong thing.** It writes
+     AppleDouble `._*` entries, the first being `._.` - a file with ONE path component.
+     Companion extracts with `strip: 1` and **no ignore filter**, so that name strips to
+     empty and the install dies with `EISDIR` pointing at the module directory.
+     `COPYFILE_DISABLE=1` suppresses them.
+  3. **The tarball needs directory entries AND a real top-level name.** The manifest finder
+     takes the first DIRECTORY entry as the prefix to trim. A tarball of files only never
+     matches `companion/manifest.json` and reports "Doesn't look like a valid module" - which
+     reads like a manifest problem and is not one. These two requirements pull against each
+     other, and the layout that satisfies both was found by replicating Companion's own two
+     tar steps locally rather than by guessing.
+
+  Also corrected against the ticket: `controls.entities.setOption` takes **`entityId`**, not
+  `id`; and `instances.connections.add` takes `product` as `.optional()`, so passing `null`
+  is a malformed input rather than an absent field.
+
+  **Proven end to end on hardware.** A Companion button press drove the real light: the
+  server recorded `source: human:companion` and `confirmed: on-air` read back from the
+  device; the ESP32 glass went to `BUSY`/`ON AIR`; the module's own stream updated its
+  variables; and the SwiftBar menu bar showed `● ON AIR`. Four surfaces, one press.
+
+  **What the live install cannot prove repeatably is now a test.** "Presets regenerate when
+  `tableVersion` moves" is otherwise only testable by editing Rocket's live state table for
+  the sake of a test, so `companion-module/test/fake-server.mjs` implements just enough of
+  the server to bump the version on demand. Eight tests, no Companion needed, in
+  `npm run verify`.
