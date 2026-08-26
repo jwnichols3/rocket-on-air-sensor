@@ -95,3 +95,41 @@ A single standalone `.html` file, no external requests, that:
 - ends with a `<!-- NOTES ... -->` comment block covering: the concept in two sentences,
   the byte cost (HTML + CSS + JS, measured), how it solves the colour-input trap, what it
   gives up, and how hard it is to generate from C++ string concatenation.
+
+## The earlier description: it does not exist
+
+Rocket said he thought he had described what he wanted this page to look like. Fourteen of
+his messages across every past session in this repo mention the config page; none of them
+describes its appearance. A search for aesthetic language ("look like", "elegant", "mock up",
+"wireframe", "user-friendly") across the same transcripts returns nothing about this page
+either.
+
+So there is no brief to recover, and none is invented here. What follows is the nearest real
+evidence: the house style already shipped on the sibling surface.
+
+## House style, from the admin console
+
+`shots/01-admin-states-for-reference.png` is the state list from the admin console at
+`http://localhost:8484/`. It is the same five rows, edited by the same person, one surface
+away. Its choices are the closest thing to a stated preference that exists:
+
+- **The row's own colours are the identifier.** A chip drawn in `color` on `bgcolor`, with
+  the label in it. Not a swatch beside a name - the name IS the swatch. Reading it takes no
+  legend.
+- **The id sits next to it in monospace, muted.** Machine identity and human identity are
+  both present and are visibly different kinds of thing.
+- **A measured contrast ratio is shown per row** (`6.39:1 AA`), in green when it passes. The
+  console does not leave the operator to guess whether a colour pair is legible.
+- **Badges carry state**, not prose: `LIVE`, `BUSY`, a lock for a protected row.
+- **Actions are per row and on the right**, small, with the destructive one outlined in red.
+- Light background, generous whitespace, one accent colour.
+
+The panel page is not the admin console and should not clone it - it is a different job on a
+different device, and it is dark today for a reason worth keeping. But a design that ignores
+all of this is choosing to, and should say why in its notes. The contrast readout in
+particular is a solved problem here that the panel page currently does not solve at all.
+
+**Note the panel page has a harder version of the same problem.** The admin console shows
+contrast because the state renders on a colour screen. The panel is 1-bit, so contrast is not
+the question - luminance against the 128 threshold is, because that is what picks the SHAPE.
+The panel page's equivalent of the `6.39:1 AA` readout is a luminance readout.
