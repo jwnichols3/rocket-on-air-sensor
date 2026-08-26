@@ -1930,3 +1930,54 @@ else (state, light control, API) lives on the receiver.
   separations matter more, not less: the credential that gates data and the credential that
   gates reconfiguration are still different credentials.
 
+- **D-62 (2026-08-25)** **Companion 5 is fully drivable by an agent, over tRPC. `#46` was
+  never really a human task, and three things `#44` was going to rely on are wrong.**
+  Rocket stood up Companion 5.0.3 on `rocket-clawd` and said the standard protocols were
+  enabled. They are, but the control plane that matters is none of them.
+  **`ws://<companion>:8000/trpc` is the whole API.** The web UI is a tRPC client and nothing
+  more; every capability it has is a procedure an agent can call. Proven on the live
+  install: a query (`appInfo.version`), two subscriptions
+  (`instances.connections.watch`, `instances.modulesStore.watchList` - 816 modules), and
+  **three mutations that changed real state** - `instances.modulesManager.installStoreModule`,
+  `instances.connections.add`, `instances.connections.setConfig`.
+  The REST surface is a decoy: `/api/connections` answers and almost nothing else does
+  (`/api/location/../press`, `/api/custom-variable/..` are all `404` on 5.0.3).
+  **Wire format, measured, because it costs an afternoon otherwise:** inputs are **raw**,
+  not superjson-wrapped. `{"id":1,"jsonrpc":"2.0","method":"query|mutation|subscription",
+  "params":{"path":"a.b.c","input":{...}}}`. A `{"json":...}` wrapper is accepted by
+  procedures that ignore their input and rejected by every typed one, which makes the first
+  wrong guess look like it worked.
+  **Sideloading is an API call, not a GUI drag.** `appInfo.version` reports
+  `customModuleImportAllowed: true`, and `instances.modulesManager.installModuleTar` exists
+  beside the store installer. The on-disk shape of an installed module, which is what a
+  sideload must produce: `companion/manifest.json` + `main.js` + `package.json`, with
+  `runtime: {type: "node22", api: "nodejs-ipc", apiVersion, entrypoint: "../main.js"}`.
+  **CORRECTION 1 - the `~2.1.3` pin in #44 is unsafe.** This host advertises
+  `connectionModuleApiVersion: ["1.14.0","2.1.0","2.1.2-nightly-..."]`. `apiVersion` is
+  **declared by the module author in manifest.json** and is not derived from
+  `@companion-module/base` - 2.1.3 ships no such field. A module declaring `2.1.3` asks for
+  an API newer than anything this Companion implements. The working store module we
+  installed declares `1.12.0`. Pin the manifest to **`2.1.0`** and prove it loads before
+  building on it.
+  **CORRECTION 2 - `$(genericwebsocket:intended)` does not exist.** `docs/companion-setup.md`
+  and #44 both tell you to key feedback on it. The connection publishes exactly one
+  variable, `lastDataReceived`. Payload variables are created **by feedback subscriptions**
+  - you give a feedback a JSON path and the module then creates the variable - and they are
+  prefixed by the **connection label**, not the module name, so on this install the prefix
+  is `onair`. That doc's wiring cannot work as written.
+  **CORRECTION 3 - the upgrade question in #46 is unanswerable there.** `rocket-clawd` is a
+  fresh 5.0.3 install with no 4.x config tree. #44's "sideloading survives an upgrade" is
+  still untested and must not be treated as covered.
+  **The cross-host case is the real one, and it is better news than it looks.** Server on
+  `rocket-studio-m1`, Companion on `rocket-clawd`. The D-24 waiver correctly does not apply,
+  so the passphrase is **mandatory** rather than incidental - a same-host install would have
+  passed #46 without ever exercising the credential path. Measured: `/status` `401`,
+  `/public/status` `200`, `/events/ws` without a passphrase `401`.
+  Live end to end: the connection reports `good/ok`, the server shows an established socket
+  from `10.42.14.147`, and driving `PUT /state` to `on-air` moved `lastDataReceived` on the
+  Companion side within two seconds.
+  **What this changes about the work:** #46 stops being a human ticket. The remaining button
+  and feedback wiring is `controls.entities.add` and `controls.hotPressControl`, which are
+  ordinary mutations. #44's first acceptance criterion - "an agent cannot do this" - was
+  true of the GUI and false of the product.
+
