@@ -18,14 +18,14 @@ at every step boundary, not at the end.
 | 4 | Hunt for Rocket's earlier description of what he wanted | done - **it does not exist**. House style taken from the admin console instead |
 | 5 | Workflow: 4 variations, prototyped as standalone HTML | done - `variants/`, all four pass the fatal checks |
 | 6 | Screen-capture each variation | done - `shots/`, and sent to Rocket on Discord |
-| 7 | Judge panel, scored | running - `wf_73d4d4ec-30b`, 3 lenses |
-| 8 | Implement the winner in `onair_page.h` | not started |
-| 8a | **D-70 appearance**: 3 skins + dark/light, one stylesheet, NVS-persisted | not started |
-| 9 | `npm run verify` green | not started |
-| 10 | `npm run firmware:compile` green | not started |
-| 11 | OTA flash + capture the real page from the device | not started |
-| 12 | Prove the light still works | not started |
-| 13 | Decisions into `CONTEXT.md` | not started |
+| 7 | Judge panel, scored | done - `JUDGING.md`, D-71. B wins by 0.67/210, conditional on A's emitter |
+| 8 | Implement the winner in `onair_page.h` | done |
+| 8a | **D-70 appearance**: 3 skins + dark/light, one stylesheet, NVS-persisted | done |
+| 9 | `npm run verify` green | done - 311/311, twice |
+| 10 | `npm run firmware:compile` green | done - flash 60.5% |
+| 11 | OTA flash + capture the real page from the device | done - `shots/live-*.png` |
+| 12 | Prove the light still works | done - `confirmed:"on-air"`, Render=BUSY |
+| 13 | Decisions into `CONTEXT.md` | done - D-68..D-72 |
 | 14 | Discord DM readout | kickoff + four variations sent; winner and final readout pending |
 
 ## Artifacts
@@ -114,3 +114,28 @@ could be host-compiled and tested directly; the handlers cannot, since they need
 request types. Decide the shape of this at implementation time. A device-dependent test must
 NOT go into `test:deploy` - that glob runs on every `verify` and the panel is not always
 reachable, and this repo does not skip quietly.
+
+
+## Shipped. Measured on the device, 2026-08-26.
+
+| | before | after |
+|---|---|---|
+| `GET /onair/config`, 5 rows | 6,840 B | **3,151 B** |
+| ...with an editor open | n/a | 4,846 B |
+| `GET /onair` | 2,655 B | **904 B** |
+| inline CSS paid per request | 1,890 B | **0** |
+| flash assets, gzipped | none | 8,173 B, immutable-cached |
+| largest free heap block | unknown, floor 24.7 KB | **110,592 B** |
+| flash used | - | 60.5% of 1.79 MB |
+
+The two carried-forward measurements are both resolved. `<details name=...>` was never
+needed, so its Baseline question is moot.
+
+## What is still worth doing
+
+- **The test gap is still open.** Nothing tests the generated HTML, and this session found
+  three defects on the device that the compile and 311 passing tests could not see. The
+  invariants are listed above; `luminance()`, `html_escape()` and `parse_hex_color_strict()`
+  are pure and host-testable today.
+- The JS is not exercised by anything. The guarded colour mirror - the thing standing
+  between an operator and a silently pinned override - has no test at all.
