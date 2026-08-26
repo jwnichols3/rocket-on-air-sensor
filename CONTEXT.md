@@ -1981,3 +1981,40 @@ else (state, light control, API) lives on the receiver.
   ordinary mutations. #44's first acceptance criterion - "an agent cannot do this" - was
   true of the GUI and false of the product.
 
+- **D-63 (2026-08-25)** **The menu bar is a renderer, so THE BUSY RULE governs it too.**
+  Implements D-26 and the agent half of
+  [#18](https://github.com/jwnichols3/rocket-on-air-sensor/issues/18).
+  `deploy/swiftbar/onair.5s.sh` is an ordinary script that prints text. SwiftBar runs it
+  every five seconds and draws stdout, symlinked in from `~/SwiftBarPlugins`.
+  **Three pictures, for the same reason the panel has three (D-54, D-57).** Unreachable
+  draws `⚠ on-air?` and offers Start; a stale calm row draws `NO DATA`; only fresh evidence
+  draws a calm marker. A blank or calm menu bar on an unreachable service is a false OFF
+  with extra steps, and false OFF is the invariant this system exists to protect.
+  A stale BUSY row still draws busy - staleness never makes the picture calmer.
+  **It carries no credential, and that is D-24 paying for itself.** Every request is to
+  loopback, where the waiver applies. That is the whole reason this is a hundred lines and
+  not three hundred: no token to store, no token to rotate, nothing in a plist.
+  **It reads TWO endpoints because D-42 split them.** `/status` carries the semantics and
+  the pin but no presentation; `/public/status` is resolved for rendering and carries the
+  `label` and colours. Neither alone is enough to draw an honest menu bar.
+  **`hold` is the pinned ROW ID, not who pinned it** (`state.ts`: `hold: string | null`).
+  The first draft said "HELD by on-air", which reads as a person. It says "Pinned to" now.
+  **Releasing a pin is deliberately NOT offered.** It is a `PUT /state` with `hold:false`,
+  and the CLI has no verb for it; `reset-state` is not that verb - it also clears the
+  message and restarts the service. Offering it would have been a far bigger hammer than
+  the label implied, so the item links to the admin console instead.
+  **Output sanitising is load-bearing, not hygiene.** SwiftBar splits a line on `|` and
+  treats what follows as parameters, including `bash=`. `message` is 200 characters of
+  operator text (`PUT /message`), and `label` and `source` are operator-supplied too. Every
+  value is stripped of `|` and newlines, and a colour only reaches a parameter if it is
+  exactly `#rrggbb`. The test asserts the property that matters - **every `bash=` in a
+  parameter position points at our own script** - rather than the weaker "does the string
+  `bash=` appear", which passes for the wrong reason.
+  **Also: `onair sudoers`.** The rule that makes all of this work was unreachable on the one
+  host that wanted it. `install --sudoers` was the only way to get it, and `cmd_install`
+  runs `launchctl bootstrap` first, which exits non-zero on an already-loaded service and
+  aborts the script under `set -e`. Now its own verb. `render_sudoers` is split out so the
+  scope of the grant - seven exact subcommands, one label, no wildcards - is asserted by a
+  test that needs no root. Installed on this host and verified narrow: `launchctl print`
+  is permitted, `cat` is refused, and `onair restart` now runs with no password and no TTY.
+
