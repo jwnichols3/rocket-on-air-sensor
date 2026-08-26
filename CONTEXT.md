@@ -2158,3 +2158,34 @@ else (state, light control, API) lives on the receiver.
   `RowLabel` back to `AVAILABLE`. `npm run verify` green - 311 node, 128 deploy, firmware
   compiles and configures.
 
+- **D-67 (2026-08-26)** **Both directions of the Companion integration are proven on real
+  hardware. `#46` is closed and `#44` rests on no assumption about the transport.**
+  Completes D-65, which had the read path.
+  **A Companion button press drove the light.** `controls.hotPressControl` on the button ->
+  `POST /on?source=companion` -> server `available` to `on-air` -> the panel drew `BUSY` /
+  `ON AIR`, `$(onair:intended)` went `"on"`, and the menu bar drew `● ON AIR`. The state
+  carried `source=human:companion`, which is the action's own query parameter, so it was
+  genuinely the button and not something else moving the state.
+  **Two API traps worth the record, because both cost a cycle and both were silent.**
+  `generic-http`'s header option is a JSON **object** (`{"Authorization":"Bearer ..."}`), not
+  an array of key/value pairs, and the content-type option id is **`contenttype`**, lower
+  case. The first attempt got both wrong, the action fired, and the server answered `401` -
+  and `setOption` had returned `true` for both, because **it does not validate option ids
+  against the definition**: a wrong id is stored and silently ignored. A mutation returning
+  success is not evidence the option exists.
+  `controls.hotPressControl` takes `location`, not `controlId`, unlike nearly every other
+  `controls.*` procedure - and a wrong shape yields the same undifferentiated
+  `Invalid or malformed input`.
+  **What is NOT observed, stated rather than glossed:** the button's colour. The
+  `internal:variable_value` feedback is on the button with the right options and white-on-red
+  style overrides, and that is verified structurally. But `importExport.controlPreview`
+  returns `null` and `controls.watchControl` returns the control DEFINITION, which is
+  byte-identical whether the feedback is true or false - diffed across a real state change to
+  confirm. Companion applying a true boolean feedback's style is its core behaviour and the
+  wiring is right, but no pixels were seen and the claim is not made.
+  **An operational note that nearly became a false alarm:** `[esphome-driver] GET 401` and
+  several `fetch failed` lines appeared in the service log during this work. They were the
+  OTA reflash window, not a credential fault - confirmed by a live round trip returning
+  `confirmed: on-air` and `confirmed: available`, which is read back from the device itself.
+  Log lines from a reboot window look exactly like a broken credential.
+
