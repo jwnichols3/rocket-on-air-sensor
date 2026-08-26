@@ -2176,13 +2176,29 @@ else (state, light control, API) lives on the receiver.
   `controls.hotPressControl` takes `location`, not `controlId`, unlike nearly every other
   `controls.*` procedure - and a wrong shape yields the same undifferentiated
   `Invalid or malformed input`.
-  **What is NOT observed, stated rather than glossed:** the button's colour. The
-  `internal:variable_value` feedback is on the button with the right options and white-on-red
-  style overrides, and that is verified structurally. But `importExport.controlPreview`
-  returns `null` and `controls.watchControl` returns the control DEFINITION, which is
-  byte-identical whether the feedback is true or false - diffed across a real state change to
-  confirm. Companion applying a true boolean feedback's style is its core behaviour and the
-  wiring is right, but no pixels were seen and the claim is not made.
+  **CORRECTED, same day.** The paragraph here originally said the button's colour was wired
+  but not observed, because `importExport.controlPreview` returned `null` and
+  `controls.watchControl` returns the control DEFINITION, which is byte-identical whether a
+  feedback is true or false (diffed across a real state change to confirm). **Both were the
+  wrong place to look.** The rendered image comes from a different procedure -
+  `subscription preview.graphics.location` with `{"location":{pageNumber,row,column}}` -
+  which returns a 288x288 PNG as a data URI. Decoding it and driving the REAL server state:
+
+  | real state | `$(onair:intended)` | dominant colour of the rendered button |
+  |---|---|---|
+  | available | `off` | `#000000` 98.2% |
+  | **on-air** | `on` | **`#FF0000` 80.2%** |
+  | available | `off` | `#000000` 98.2% |
+
+  So the whole chain is observed as pixels: server state -> WebSocket -> Companion variable
+  -> internal feedback -> render. The residual 18% black at match is the text layer; the 1.2%
+  `#FFC600` is a status icon present in every frame including the baseline.
+  **`replaceStyleOverride` is not needed and the recipe should not call it.** `entities.add`
+  does the layered work itself: it passes `control.layeredStyleSelectedElementIds()` into
+  `createEntityItem`, which for a Boolean feedback carrying a `feedbackStyle` runs
+  `ConvertBooleanFeedbackStyleToOverrides`. The entity comes back already carrying
+  `box0.color` and `text0.color`. `op` also defaults to `eq`, and the feedback's `variable`
+  option takes a **bare name** (`onair:intended`), not `$(...)` - it is wrapped internally.
   **An operational note that nearly became a false alarm:** `[esphome-driver] GET 401` and
   several `fetch failed` lines appeared in the service log during this work. They were the
   OTA reflash window, not a credential fault - confirmed by a live round trip returning
