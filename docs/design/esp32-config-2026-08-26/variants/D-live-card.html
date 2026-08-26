@@ -1,0 +1,184 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>On-Air panel - configuration</title><style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{--c:#e8eaed;--b:#181c20;--dim:#8b959e;--ln:#242a30;margin:0;padding:1.1rem;background:#0d0f11;color:#e8eaed;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:46rem;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:.8rem;flex-wrap:wrap;margin:0 0 .55rem}
+h1{font-size:.76rem;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin:0;font-weight:600}
+.pf{font-size:.8rem;color:var(--dim)}
+.pf code{color:#c3ccd4}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+a{color:#8fbcd8}
+button{font:inherit;font-size:.82rem;padding:.32rem .72rem;border-radius:6px;cursor:pointer;background:var(--c);color:var(--b);border:1px solid var(--c);font-weight:600}
+.gh{background:transparent;color:var(--c);font-weight:400;opacity:.85}
+.gh:hover{opacity:1}
+.bn{border:1px solid;border-radius:8px;padding:.55rem .8rem;margin:0 0 .8rem;font-size:.92rem}
+.bn b{letter-spacing:.1em;font-size:.68rem;border:1px solid;border-radius:99px;padding:.05rem .45rem;margin-right:.45rem;vertical-align:.05rem}
+.pn{border-color:#8a7433;background:#241e10;color:#f0d79a}
+.ok{border-color:#2f6b45;background:#112119;color:#8fd6a3}
+.eb{border-color:#7a3b3b;background:#241313;color:#ff9f9f}
+.lg i{font-style:normal}
+.lg{font-size:.83rem;color:var(--dim);margin:0 0 .7rem}
+details{border:1px solid var(--ln);border-radius:8px;padding:.45rem .75rem;margin:0 0 .9rem;font-size:.85rem;color:#aeb7bf}
+summary{cursor:pointer;color:#e8eaed;font-size:.81rem;letter-spacing:.04em}
+details p{margin:.5rem 0 0}
+.tb{margin:0 0 1rem}
+
+/* THE CARD IS THE PREVIEW: --b is the background being edited, every glyph on it is --c */
+.r{display:flex;flex-wrap:wrap;gap:0 .5rem;background:var(--b);color:var(--c);border-radius:10px;padding:.55rem .7rem .65rem;margin:0 0 .6rem;outline:1px solid color-mix(in srgb,var(--c) 32%,transparent);outline-offset:-1px}
+.r>*{width:100%}
+.hd{display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap;margin:0 0 .42rem}
+.lb{font-size:1.55rem;font-weight:700;letter-spacing:.03em;line-height:1.05;margin-right:.2rem}
+.lb.sm{font-size:1rem;letter-spacing:.08em}
+.hd code{font-size:.76rem;opacity:.72}
+.bg{font-size:.62rem;letter-spacing:.09em;font-weight:700;border:1px solid;border-radius:99px;padding:.06rem .45rem;opacity:.75}
+.on{opacity:1;background:var(--c);color:var(--b)}
+.ovb{display:none}
+.ov .ovb{display:inline}
+.dt .sv::after{content:" \00b7 unsaved";font-weight:400;opacity:.75}
+.dt .sv{box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 35%,transparent)}
+.r>button{width:auto;margin:.5rem .4rem 0 0}
+
+.f{display:grid;grid-template-columns:7.4rem 1fr;align-items:center;gap:.45rem;background:color-mix(in srgb,var(--c) 11%,transparent);border-radius:7px;padding:.24rem .42rem;margin:0 0 .26rem}
+.f:has(input[type=color]){grid-template-columns:6.6rem auto minmax(0,1fr);width:calc(50% - .25rem)}
+@media(max-width:38rem){.f:has(input[type=color]){width:100%}}
+.f>label{display:flex;align-items:center;gap:.4rem;font-size:.72rem;letter-spacing:.07em;text-transform:uppercase;cursor:pointer;user-select:none;font-weight:600}
+.f input[type=checkbox]{accent-color:var(--c);margin:0;width:.95rem;height:.95rem;flex:none}
+.f input:not([type]){font:inherit;font-size:.88rem;width:100%;min-width:0;background:color-mix(in srgb,var(--b) 45%,#000 55%);color:var(--c);border:1px solid color-mix(in srgb,var(--c) 32%,transparent);border-radius:5px;padding:.18rem .38rem}
+.f input[pattern]{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem}
+.f input:user-invalid{border-color:#ff6b6b;outline:1px solid #ff6b6b}
+.f input[type=color]{width:2.6rem;height:1.7rem;padding:0;border:1px solid color-mix(in srgb,var(--c) 40%,transparent);border-radius:5px;background:none;cursor:pointer}
+.f:has(input[type=checkbox]:not(:checked)) input:not([type=checkbox]):not([type=color]){opacity:.42}
+.f:has(input[type=checkbox]:not(:checked)) input[type=color]{border-style:dashed;cursor:not-allowed}
+.f:has(input[type=checkbox]:not(:checked))>label{opacity:.62}
+
+/* LUMINANCE METER: the firmware's own integer Rec.601 value against the 128 threshold */
+.mw{display:grid;grid-template-columns:minmax(6.5rem,1fr) auto;gap:.6rem;align-items:start;margin:.5rem 0 0}
+.m{position:relative;height:.55rem;margin:.35rem 0 .9rem;border-radius:99px;background:linear-gradient(90deg,color-mix(in srgb,var(--c) 13%,transparent) 0 50.2%,color-mix(in srgb,var(--c) 30%,transparent) 50.2% 100%)}
+.m::before{content:"";position:absolute;left:50.2%;top:-.26rem;bottom:-.26rem;width:2px;background:var(--c)}
+.m::after{content:"128 threshold";position:absolute;left:50.2%;top:.7rem;transform:translateX(-50%);font-size:.6rem;letter-spacing:.05em;opacity:.75;white-space:nowrap}
+.m i{position:absolute;top:50%;width:.72rem;height:.72rem;margin:-.36rem 0 0 -.36rem;border-radius:50%;background:var(--c);box-shadow:0 0 0 2px var(--b)}
+.rd{display:flex;align-items:center;gap:.4rem;font-size:.76rem;letter-spacing:.03em;padding-top:.2rem}
+.bz{opacity:.5}
+/* the three SHAPES the glass can draw, in miniature */
+.sh{display:inline-block;width:1.7rem;height:1rem;border:1px solid var(--c);position:relative;flex:none}
+.hv::before{content:"";position:absolute;inset:2px;border:1px solid var(--c)}
+.lt{border:0}
+.lt::before{content:"";position:absolute;left:50%;top:50%;width:.92rem;height:.92rem;margin:-.46rem 0 0 -.46rem;border-radius:50%;border:.19rem solid var(--c)}
+.bk{background:var(--c)}
+.fl{font-size:.78rem;margin:.55rem 0 0;padding:.32rem .5rem;border-radius:6px;background:color-mix(in srgb,var(--c) 13%,transparent);border-left:3px solid var(--c)}
+.ns{font-size:.78rem;color:#f0d79a;border:1px solid #8a7433;border-radius:7px;padding:.4rem .6rem;margin:0 0 .8rem;display:block}
+.dm{--b:#15181b;--c:#98a2ab;background:repeating-linear-gradient(45deg,#15181b 0 6px,#1a1e22 6px 12px)}
+footer{font-size:.8rem;color:var(--dim);margin:1.4rem 0 0;border-top:1px solid var(--ln);padding-top:.7rem}
+</style></head><body><main>
+
+<header><h1>Panel configuration</h1><span class=pf>Profile <code>v11</code> &middot; 5 rows &middot; all editable here (page cap 24)</span></header>
+
+<p class="bn pn"><b>PENDING</b>The panel is busy applying this &mdash; the change <strong>may still be landing</strong>. This page cannot tell you whether it took. <a href="/onair/config">Reload</a> in a moment to see the result.</p>
+
+<p class=lg><strong><i id=oc>2</i> of 5 rows are overridden on this panel.</strong> Tick a field to override it here; untick to follow the server. Each card is drawn in the colours it is setting.</p>
+
+<details><summary>What this page can and cannot change</summary>
+<p>Local edits are <strong>presentation only</strong> &mdash; label, text colour, background &mdash; and apply to this panel alone. Whether a row is <code>busy</code>, and which rows exist at all, is always the server's. The panel keeps pulling the profile, so a row the server adds later arrives with the server's own look and needs nothing done to it.</p>
+<p>Background brightness picks the calm SHAPE on this 128&times;64 1-bit glass. Luminance is the firmware's own integer Rec.601 value, <code>(299&times;R + 587&times;G + 114&times;B) / 1000</code>, truncated: <strong>128 or over draws the heavy double frame, under it the open ring</strong>. The meter on each card is that exact number. Colour never reaches a busy row &mdash; a busy row is a solid block with the label knocked out whatever its colours are, because a dark red and a dark green have near-identical luminance and a false OFF is the one error that matters.</p>
+<p>This page edits at most the first 24 rows of the profile. If the profile is longer, a banner here names the total and says the rest still render on the panel and must be edited in the admin console.</p>
+</details>
+
+<noscript><span class=ns><strong>JavaScript is off.</strong> Every card still shows its true colours, its true luminance and its true SHAPE &mdash; the panel rendered them. What stops working: the tickboxes and the colour pickers are inert, and nothing updates as you type. Type a hex into the text field to override (blank = follow the server), and use <em>Follow server</em> to remove a row's overrides.</span></noscript>
+
+<form class=tb method=post><button name=action value=refresh>Refresh profile from server</button></form>
+
+<form class="r ov" method=post style="--c:#ffffff;--b:#0b6e2e">
+<input type=hidden name=id value=available>
+<div class=hd><b class=lb>FREE</b><code>available</code><b class=bg>CALM</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=f><label><input type=checkbox checked>Label</label><input name=label maxlength=64 placeholder=AVAILABLE value=FREE></div>
+<div class=f><label><input type=checkbox>Text</label><input type=color value="#ffffff" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#ffffff"></div>
+<div class=f><label><input type=checkbox>Background</label><input type=color value="#0b6e2e" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#0b6e2e"></div>
+<div class=mw><div class=m><i style=left:28.6%></i></div><span class=rd><i class="sh lt"></i><span class=mr>lum <b>73</b>/255 &middot; under 128 &middot; CALM LIGHT, open ring</span></span></div>
+<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+</form>
+
+<form class=r method=post style="--c:#ffffff;--b:#c1121f">
+<input type=hidden name=id value=on-air>
+<div class=hd><b class=lb>ON AIR</b><code>on-air</code><b class=bg>BUSY &middot; SERVER'S</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=f><label><input type=checkbox>Label</label><input name=label maxlength=64 placeholder="ON AIR"></div>
+<div class=f><label><input type=checkbox>Text</label><input type=color value="#ffffff" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#ffffff"></div>
+<div class=f><label><input type=checkbox>Background</label><input type=color value="#c1121f" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#c1121f"></div>
+<div class="mw bz"><div class=m><i style=left:27.8%></i></div><span class=rd><i class="sh bk"></i><span class=mr>lum <b>71</b>/255 &middot; not consulted &middot; BUSY, solid block</span></span></div>
+<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+</form>
+
+<form class="r ov" method=post style="--c:#1a1a1a;--b:#3b5bdb">
+<input type=hidden name=id value=interruptible>
+<div class=hd><b class="lb sm">INTERRUPTIBLE</b><code>interruptible</code><b class=bg>CALM</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=f><label><input type=checkbox>Label</label><input name=label maxlength=64 placeholder=INTERRUPTIBLE></div>
+<div class=f><label><input type=checkbox>Text</label><input type=color value="#1a1a1a" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#1a1a1a"></div>
+<div class=f><label><input type=checkbox checked>Background</label><input type=color value="#3b5bdb" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#e8a317" value="#3b5bdb"></div>
+<div class=mw><div class=m><i style=left:37.6%></i></div><span class=rd><i class="sh lt"></i><span class=mr>lum <b>96</b>/255 &middot; under 128 &middot; CALM LIGHT, open ring</span></span></div>
+<p class=fl>This override <strong>changes the SHAPE</strong>. The server's <code>#e8a317</code> is luminance 167 and draws the heavy double frame. Your <code>#3b5bdb</code> is 96 and draws the open ring instead.</p>
+<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+</form>
+
+<form class=r method=post style="--c:#ffffff;--b:#6a0dad">
+<input type=hidden name=id value=recording>
+<div class=hd><b class=lb>RECORDING</b><code>recording</code><b class=bg>BUSY &middot; SERVER'S</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=f><label><input type=checkbox>Label</label><input name=label maxlength=64 placeholder=RECORDING></div>
+<div class=f><label><input type=checkbox>Text</label><input type=color value="#ffffff" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#ffffff"></div>
+<div class=f><label><input type=checkbox>Background</label><input type=color value="#6a0dad" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#6a0dad"></div>
+<div class="mw bz"><div class=m><i style=left:23.1%></i></div><span class=rd><i class="sh bk"></i><span class=mr>lum <b>59</b>/255 &middot; not consulted &middot; BUSY, solid block</span></span></div>
+<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+</form>
+
+<form class=r method=post style="--c:#ff00ff;--b:#1a1a1a">
+<input type=hidden name=id value=unknown>
+<div class=hd><b class=lb>NO DATA</b><code>unknown</code><b class=bg>BUSY &middot; SERVER'S</b><b class="bg on ovb">OVERRIDDEN</b></div>
+<div class=f><label><input type=checkbox>Label</label><input name=label maxlength=64 placeholder="NO DATA"></div>
+<div class=f><label><input type=checkbox>Text</label><input type=color value="#ff00ff" disabled><input name=color maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#ff00ff"></div>
+<div class=f><label><input type=checkbox>Background</label><input type=color value="#1a1a1a" disabled><input name=bgcolor maxlength=7 pattern=#[0-9a-fA-F]{6} placeholder="#1a1a1a"></div>
+<div class="mw bz"><div class=m><i style=left:10.2%></i></div><span class=rd><i class="sh bk"></i><span class=mr>lum <b>26</b>/255 &middot; not consulted &middot; BUSY, solid block</span></span></div>
+<button class=sv name=action value=save>Save</button><button class=gh name=action value=clear>Follow server</button>
+</form>
+
+<h1 style=margin:1.3rem_0_.55rem>Dormant overrides</h1>
+<form class="r dm" method=post>
+<input type=hidden name=id value=standby>
+<div class=hd><b class="lb sm">STANDBY</b><code>standby</code><b class=bg>DORMANT</b></div>
+<p class=fl>This override is stored on the panel, but the server's profile has no such row, so it applies to nothing. It is shown because an override that quietly stopped applying is the failure this page exists to prevent.</p>
+<button class=gh name=action value=clear>Clear this row</button>
+</form>
+
+<form class=tb style=margin-top:1rem method=post><button class=gh name=action value=clearall>Clear all overrides</button></form>
+
+<footer>The server passphrase is not shown here and cannot be read back from this device at all (D-55). Set it on the ESPHome dashboard, where the field is write-only. <a href="/onair">Back to status</a> &middot; <a href="/">ESPHome dashboard</a></footer>
+
+</main><script>
+var H=/^#[0-9a-fA-F]{6}$/,Q=function(e,s){return e.querySelector(s)};
+function lum(h){var n=parseInt(h.slice(1),16);return(299*(n>>16&255)+587*(n>>8&255)+114*(n&255))/1000|0}
+function sig(f){return[].map.call(f.querySelectorAll('.f input:not([type=color])'),function(i){return i.type=='checkbox'?i.checked:i.value}).join('|')}
+function up(f){
+ var ov=0,c,b;
+ [].forEach.call(f.querySelectorAll('.f input:not([type])'),function(w){
+  var d=w.closest('.f'),k=Q(d,'input[type=checkbox]'),p=Q(d,'input[type=color]'),v=k.checked?w.value.trim():'';
+  w.disabled=!k.checked;if(p)p.disabled=!k.checked;if(k.checked)ov=1;
+  if(w.name!='label'&&!H.test(v))v='';
+  var e=v||w.placeholder;
+  if(p&&H.test(e))p.value=e;
+  if(w.name=='label'){var l=Q(f,'.lb');l.textContent=e;l.classList.toggle('sm',e.length>8)}
+  else if(w.name=='color')c=e;else b=e;
+ });
+ f.style.setProperty('--c',c);f.style.setProperty('--b',b);
+ f.classList.toggle('ov',!!ov);
+ var n=lum(b),z=Q(f,'.mw').classList.contains('bz');
+ Q(f,'.m i').style.left=(n*100/255).toFixed(1)+'%';
+ Q(f,'.sh').className='sh '+(z?'bk':n>=128?'hv':'lt');
+ Q(f,'.mr').innerHTML='lum <b>'+n+'</b>/255 · '+(z?'not consulted · BUSY, solid block':n>=128?'128 or over · CALM HEAVY, double frame':'under 128 · CALM LIGHT, open ring');
+ f.classList.toggle('dt',f.dataset.s!==undefined&&sig(f)!=f.dataset.s);
+}
+function all(){[].forEach.call(document.querySelectorAll('form.r:not(.dm)'),up);
+ Q(document,'#oc').textContent=document.querySelectorAll('form.r.ov').length}
+all();[].forEach.call(document.querySelectorAll('form.r:not(.dm)'),function(f){f.dataset.s=sig(f)});
+addEventListener('input',function(e){
+ var f=e.target.closest('form.r');if(!f)return;
+ if(e.target.type=='color')Q(e.target.closest('.f'),'input:not([type])').value=e.target.value;
+ all()});
+</script></body></html>

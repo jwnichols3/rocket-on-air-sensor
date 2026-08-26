@@ -1,0 +1,358 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>On-Air panel - configuration</title><style>
+:root{color-scheme:dark;--bg:#0f1113;--pn:#15181c;--ln:#262c33;--fg:#e8eaed;--mu:#8b959e;--acc:#79d0ff;--lit:#cfe9ff;--off:#04070b;--ok:#8fd6a3;--wa:#ffca6b;--er:#ff8f8f}
+*{box-sizing:border-box}
+body{margin:0;padding:1.1rem;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:76rem;margin:0 auto}
+h1{font-size:.78rem;letter-spacing:.15em;text-transform:uppercase;color:var(--mu);margin:0 0 .5rem}
+h2{font:600 .95rem/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
+a{color:var(--acc)}
+p{margin:0}
+button,.btn{font:inherit;font-size:.85rem;background:#1d2126;color:var(--fg);border:1px solid #333a41;border-radius:6px;padding:.35rem .8rem;cursor:pointer;text-decoration:none;display:inline-block}
+button:hover,.btn:hover{background:#262c33}
+button.ghost{background:none;color:var(--mu)}
+input{font:inherit;background:#0b0d0f;color:var(--fg);border:1px solid #333a41;border-radius:5px;padding:.3rem .45rem;font-size:.85rem;width:100%}
+input:user-invalid{border-color:var(--er);color:var(--er)}
+
+/* --- top chrome ------------------------------------------------------- */
+.top{display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:baseline;margin:0 0 .8rem}
+.top form{margin:0}
+.prof{color:var(--mu);font-size:.85rem}
+.prof b{color:var(--fg);font-weight:600}
+.banner{border:1px solid;border-radius:6px;padding:.55rem .85rem;margin:0 0 .8rem;font-size:.9rem}
+.banner.pend{border-color:#6b5522;background:#221c0d;color:var(--wa)}
+.banner.ok{border-color:#2f6b45;background:#0f1d15;color:var(--ok)}
+.banner.err{border-color:#6b2f2f;background:#1d0f0f;color:var(--er)}
+.rule{color:var(--mu);font-size:.83rem;margin:0 0 .9rem;max-width:62rem}
+.rule b{color:var(--fg);font-weight:600}
+.sum{font-size:.83rem;color:var(--mu);margin:0 0 .6rem}
+.sum b{color:var(--acc);font-weight:600}
+
+/* --- the board -------------------------------------------------------- */
+.board{display:grid;gap:.8rem;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));margin:0 0 1.2rem}
+.card{border:1px solid var(--ln);border-radius:9px;background:var(--pn);padding:.75rem;display:flex;flex-direction:column;gap:.5rem}
+.card.ov{border-color:#3c6e8c;box-shadow:inset 3px 0 0 var(--acc)}
+.card.dirty h2::after{content:"unsaved";font:600 .6rem/1.6 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase;color:#0f1113;background:var(--wa);border-radius:99px;padding:0 .45rem}
+.p{font:600 .6rem/1.6 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase;font-style:normal;border-radius:99px;padding:0 .45rem;border:1px solid var(--acc);color:var(--acc)}
+.p.s{border-color:#3a424a;color:var(--mu)}
+
+/* --- the glass: 128x64 1-bit SH1106, drawn at the firmware's own coords -- */
+.gw{width:260px;height:132px;border:2px solid #22272e;border-radius:6px;background:var(--off);overflow:hidden;flex:none}
+.gw.sm{width:132px;height:68px}
+.g{position:relative;display:block;width:128px;height:64px;transform:scale(2);transform-origin:0 0;font:400 14px/1 Roboto,Helvetica Neue,Arial,sans-serif;color:var(--lit)}
+.gw.sm .g{transform:none}
+.g::before{content:"";position:absolute}
+.g b,.g s,.g u{position:absolute;font-weight:inherit;font-style:normal;text-decoration:none}
+.g b{left:64px;top:24px;transform:translate(-50%,-50%);white-space:nowrap}
+.g b.lg{font:700 30px/1 Roboto,Helvetica Neue,Arial,sans-serif}
+.g u{font-size:11px}
+.g s{left:0;top:49px;width:128px;height:15px;border-top:1px solid var(--lit);font-size:11px}
+.g s::before{content:var(--ip);position:absolute;left:0;top:2px}
+.g s::after{content:var(--db);position:absolute;right:1px;top:2px}
+/* 0 BUSY - filled_rectangle(0,0,128,48), label knocked out, STALE at y=44 */
+.g[data-shape="0"]::before{left:0;top:0;width:128px;height:48px;background:var(--lit)}
+.g[data-shape="0"] b{color:var(--off)}
+.g[data-shape="0"] u{left:64px;top:36px;transform:translateX(-50%);color:var(--off)}
+/* 1 CALM HEAVY - rectangle(0,0,128,48) + rectangle(2,2,124,44) */
+.g[data-shape="1"]::before{left:0;top:0;width:128px;height:48px;border:1px solid var(--lit);box-shadow:inset 0 0 0 1px var(--off),inset 0 0 0 2px var(--lit)}
+/* 2 CALM LIGHT - filled_circle(64,24,22) minus filled_circle(64,24,15) */
+.g[data-shape="2"]::before{left:42px;top:2px;width:44px;height:44px;border:7px solid var(--lit);border-radius:50%}
+.g[data-shape="2"] b{font:400 11px/1 Roboto,Helvetica Neue,Arial,sans-serif}
+/* 3 NO DATA / 6 NO CONFIG - hatch every 4px, y=0..14 */
+.g[data-shape="3"]::before,.g[data-shape="6"]::before{left:0;top:0;width:128px;height:15px;background:repeating-linear-gradient(90deg,var(--lit) 0 1px,transparent 1px 4px)}
+.g[data-shape="3"] b,.g[data-shape="6"] b{top:26px;font:400 14px/1 Roboto,Helvetica Neue,Arial,sans-serif}
+.g[data-shape="6"] u{left:64px;top:42px;transform:translateX(-50%)}
+/* 4 UNKNOWN KEY - filled_rectangle(0,0,128,16), key at (2,20), hatch y=40..47 */
+.g[data-shape="4"]::before{left:0;top:0;width:128px;height:16px;background:var(--lit)}
+.g[data-shape="4"]::after{content:"";position:absolute;left:0;top:40px;width:128px;height:8px;background:repeating-linear-gradient(90deg,var(--lit) 0 1px,transparent 1px 4px)}
+.g[data-shape="4"] b{top:8px;color:var(--off);font:400 14px/1 Roboto,Helvetica Neue,Arial,sans-serif}
+.g[data-shape="4"] u{left:2px;top:20px}
+
+/* --- verdict, luminance, flip ------------------------------------------ */
+.vd{font:600 .82rem/1.4 system-ui,sans-serif;letter-spacing:.02em;margin:.15rem 0 0}
+.vd span{color:var(--mu);font-weight:400}
+.lum{position:relative;height:6px;border-radius:3px;background:#1b1f24;margin:.3rem 0 .2rem}
+.lum i{display:block;height:100%;border-radius:3px;background:var(--lit)}
+.lum::after{content:"";position:absolute;left:50.2%;top:-2px;bottom:-2px;width:1px;background:#79848d}
+.lt{font-size:.75rem;color:var(--mu)}
+.lt b{color:var(--fg)}
+.flip{font-size:.78rem;color:var(--wa);margin:.3rem 0 0}
+.ghost{display:flex;gap:.5rem;align-items:center;margin:.15rem 0 0}
+.ghost p{font-size:.72rem;color:var(--mu);line-height:1.35}
+.card.bad .gw{opacity:.3}
+.card.bad .vd::after{content:" - not a valid #rrggbb; nothing will be saved";color:var(--er);font-weight:400}
+
+/* --- the editor -------------------------------------------------------- */
+.ed{display:flex;flex-direction:column;gap:.45rem;margin:0;border-top:1px solid var(--ln);padding-top:.55rem}
+.fl{font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);display:block;margin:0 0 .15rem}
+.cr{display:flex;gap:.35rem;align-items:center}
+.cr>span{font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);width:3.6rem;flex:none}
+.cr input[type=color]{width:2rem;height:1.85rem;padding:1px;flex:none;background:#0b0d0f;cursor:pointer}
+.cr .fs{font-size:.7rem;padding:.25rem .45rem;flex:none;background:none;color:var(--mu)}
+.chip{display:inline-block;font:600 .72rem/1.6 system-ui,sans-serif;letter-spacing:.06em;border-radius:4px;padding:0 .5rem;border:1px solid #333a41}
+.cc{display:flex;gap:.45rem;align-items:center;font-size:.72rem;color:var(--mu)}
+.n{color:var(--mu);font-size:.75rem;line-height:1.45;margin:.15rem 0 0}
+.card .n::before{content:"Calm. Background luminance picks the shape - 128 or over draws the double frame, under it the open ring."}
+.card.b .n::before{content:"Busy. The shape is keyed on busy alone, which is the server's. Colour gets no vote here and never reaches this glass; the label is knocked out of the block."}
+.card.fx .n::before{content:"The firmware draws this picture itself. Label and colour are stored and still travel with the row, but they never reach this glass."}
+.acts{display:flex;gap:.4rem;margin-top:.15rem}
+
+/* --- tail -------------------------------------------------------------- */
+details{border:1px solid var(--ln);border-radius:9px;padding:.6rem .75rem;margin:0 0 1rem;background:var(--pn)}
+summary{cursor:pointer;font-size:.85rem;color:var(--mu)}
+.strip{display:flex;flex-wrap:wrap;gap:1rem;margin-top:.8rem}
+.strip figure{margin:0;width:132px}
+.strip figcaption{font-size:.7rem;color:var(--mu);line-height:1.35;margin-top:.25rem}
+.dorm{border:1px dashed var(--ln);border-radius:9px;padding:.6rem .75rem;margin:0 0 1rem;color:var(--mu);font-size:.8rem}
+.dorm b{color:var(--fg);font-weight:600;letter-spacing:.09em;text-transform:uppercase;font-size:.7rem}
+footer{color:var(--mu);font-size:.78rem;line-height:1.55;margin-top:1.2rem;border-top:1px solid var(--ln);padding-top:.7rem}
+@media (prefers-reduced-motion:no-preference){.card{transition:border-color .15s}}
+</style></head>
+<body style="--ip:'IP: 10.42.12.77';--db:'-58dBm'">
+<main>
+
+<h1>On-air panel &middot; what this glass will draw</h1>
+
+<div class=top>
+<p class=prof>Profile <b>v11</b>, <b>5 rows</b>, pulled from the server.</p>
+<form method=post action=/onair/config><button name=action value=refresh>Refresh profile from server</button></form>
+</div>
+
+<p class="banner pend">PENDING - the panel is busy applying this - reload in a moment to see the result. It may still be landing. <a href=/onair/config>Reload</a></p>
+
+<p class=rule><b>Presentation only.</b> Label and the two colours are this panel's own. Which states exist, and which of them are busy, stay the server's and are not editable here. The panel keeps pulling, so a row the server adds later arrives with the server's look and needs nothing done to it.</p>
+
+<p class=sum><b>2 of 5</b> states are overridden on this panel: <b>available</b> (label), <b>interruptible</b> (background). The rest follow the server.</p>
+
+<div class=board>
+
+<!-- ============ available : override label FREE, colours follow ========= -->
+<article class="card ov" data-sl=AVAILABLE data-sc=#ffffff data-sb=#0b6e2e data-b=0 data-s0=2>
+<h2><code>available</code><i class="p s">calm</i><i class=p>overridden here</i></h2>
+<div class=gw><i class=g data-shape=2><b>FREE</b><s></s></i></div>
+<p class=vd>CALM LIGHT <span>open ring</span></p>
+<div class=lum><i style=width:28.6%></i></div>
+<p class=lt>background luminance <b>73</b> &middot; the line is 128</p>
+<p class=flip hidden></p>
+<div class=ghost><div class="gw sm"><i class=g data-shape=2><b>AVAILABLE</b><s></s></i></div><p>The server's own picture, for comparison. Your label is the only difference.</p></div>
+<form class=ed method=post action=/onair/config>
+<input type=hidden name=id value=available>
+<label><span class=fl>Label</span><input name=label maxlength=64 placeholder=AVAILABLE value=FREE></label>
+<div class=cr><span>Text</span><input type=color value=#ffffff aria-label="text colour picker"><input name=color pattern="#[0-9a-fA-F]{6}" placeholder=#ffffff aria-label="text colour hex"><button type=button class=fs>follow</button></div>
+<div class=cr><span>Backg.</span><input type=color value=#0b6e2e aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#0b6e2e aria-label="background colour hex"><button type=button class=fs>follow</button></div>
+<p class=cc>as colour: <b class=chip style="color:#ffffff;background:#0b6e2e">FREE</b> <span>which this 1-bit glass cannot show</span></p>
+<p class=n></p>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+</form>
+</article>
+
+<!-- ============ on-air : no override, busy ============================== -->
+<article class="card b" data-sl="ON AIR" data-sc=#ffffff data-sb=#c1121f data-b=1 data-s0=0>
+<h2><code>on-air</code><i class="p s">busy</i><i class="p s">following server</i></h2>
+<div class=gw><i class=g data-shape=0><b class=lg>ON AIR</b><s></s></i></div>
+<p class=vd>BUSY <span>solid block</span></p>
+<form class=ed method=post action=/onair/config>
+<input type=hidden name=id value=on-air>
+<label><span class=fl>Label</span><input name=label maxlength=64 placeholder="ON AIR"></label>
+<div class=cr><span>Text</span><input type=color value=#ffffff aria-label="text colour picker"><input name=color pattern="#[0-9a-fA-F]{6}" placeholder=#ffffff aria-label="text colour hex"><button type=button class=fs>follow</button></div>
+<div class=cr><span>Backg.</span><input type=color value=#c1121f aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#c1121f aria-label="background colour hex"><button type=button class=fs>follow</button></div>
+<p class=cc>as colour: <b class=chip style="color:#ffffff;background:#c1121f">ON AIR</b> <span>which this 1-bit glass cannot show</span></p>
+<p class=n></p>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+</form>
+</article>
+
+<!-- ============ interruptible : override bg, FLIPS the shape ============ -->
+<article class="card ov" data-sl=INTERRUPTIBLE data-sc=#1a1a1a data-sb=#e8a317 data-b=0 data-s0=1>
+<h2><code>interruptible</code><i class="p s">calm</i><i class=p>overridden here</i></h2>
+<div class=gw><i class=g data-shape=2><b>INTERRUPTIBLE</b><s></s></i></div>
+<p class=vd>CALM LIGHT <span>open ring</span></p>
+<div class=lum><i style=width:37.6%></i></div>
+<p class=lt>background luminance <b>96</b> &middot; the line is 128</p>
+<p class=flip>This override crosses the 128 line: the picture changes from CALM HEAVY to CALM LIGHT.</p>
+<div class=ghost><div class="gw sm"><i class=g data-shape=1><b>INTERRUPTIBLE</b><s></s></i></div><p>The server's own picture: <code>#e8a317</code>, luminance 167, the heavy double frame.</p></div>
+<form class=ed method=post action=/onair/config>
+<input type=hidden name=id value=interruptible>
+<label><span class=fl>Label</span><input name=label maxlength=64 placeholder=INTERRUPTIBLE></label>
+<div class=cr><span>Text</span><input type=color value=#1a1a1a aria-label="text colour picker"><input name=color pattern="#[0-9a-fA-F]{6}" placeholder=#1a1a1a aria-label="text colour hex"><button type=button class=fs>follow</button></div>
+<div class=cr><span>Backg.</span><input type=color value=#3b5bdb aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#e8a317 value=#3b5bdb aria-label="background colour hex"><button type=button class=fs>follow</button></div>
+<p class=cc>as colour: <b class=chip style="color:#1a1a1a;background:#3b5bdb">INTERRUPTIBLE</b> <span>which this 1-bit glass cannot show</span></p>
+<p class=n></p>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+</form>
+</article>
+
+<!-- ============ recording : no override, busy, 9-char label = small ===== -->
+<article class="card b" data-sl=RECORDING data-sc=#ffffff data-sb=#6a0dad data-b=1 data-s0=0>
+<h2><code>recording</code><i class="p s">busy</i><i class="p s">following server</i></h2>
+<div class=gw><i class=g data-shape=0><b>RECORDING</b><s></s></i></div>
+<p class=vd>BUSY <span>solid block</span></p>
+<form class=ed method=post action=/onair/config>
+<input type=hidden name=id value=recording>
+<label><span class=fl>Label</span><input name=label maxlength=64 placeholder=RECORDING></label>
+<div class=cr><span>Text</span><input type=color value=#ffffff aria-label="text colour picker"><input name=color pattern="#[0-9a-fA-F]{6}" placeholder=#ffffff aria-label="text colour hex"><button type=button class=fs>follow</button></div>
+<div class=cr><span>Backg.</span><input type=color value=#6a0dad aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#6a0dad aria-label="background colour hex"><button type=button class=fs>follow</button></div>
+<p class=cc>as colour: <b class=chip style="color:#ffffff;background:#6a0dad">RECORDING</b> <span>which this 1-bit glass cannot show</span></p>
+<p class=n></p>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+</form>
+</article>
+
+<!-- ============ unknown : the reserved landing row, always NO DATA ====== -->
+<article class="card b fx" data-sl="NO DATA" data-sc=#ff00ff data-sb=#1a1a1a data-b=1 data-s0=3 data-fx=3>
+<h2><code>unknown</code><i class="p s">busy</i><i class="p s">following server</i></h2>
+<div class=gw><i class=g data-shape=3><b>NO DATA</b><s></s></i></div>
+<p class=vd>NO DATA <span>hatch band</span></p>
+<form class=ed method=post action=/onair/config>
+<input type=hidden name=id value=unknown>
+<label><span class=fl>Label</span><input name=label maxlength=64 placeholder="NO DATA"></label>
+<div class=cr><span>Text</span><input type=color value=#ff00ff aria-label="text colour picker"><input name=color pattern="#[0-9a-fA-F]{6}" placeholder=#ff00ff aria-label="text colour hex"><button type=button class=fs>follow</button></div>
+<div class=cr><span>Backg.</span><input type=color value=#1a1a1a aria-label="background colour picker"><input name=bgcolor pattern="#[0-9a-fA-F]{6}" placeholder=#1a1a1a aria-label="background colour hex"><button type=button class=fs>follow</button></div>
+<p class=cc>as colour: <b class=chip style="color:#ff00ff;background:#1a1a1a">NO DATA</b> <span>which this 1-bit glass cannot show</span></p>
+<p class=n></p>
+<div class=acts><button name=action value=save>Save</button><button class=ghost name=action value=clear>Follow server</button></div>
+</form>
+</article>
+
+</div>
+
+<div class=dorm><b>Dormant overrides</b> &middot; none right now. An override whose row the server later removes is kept and shown here, as its own dark glass with a Clear control - never dropped quietly, because an override that stopped applying without saying so is the one failure nobody notices.</div>
+
+<details>
+<summary>Three more pictures this panel can draw, that no row above can produce</summary>
+<div class=strip>
+<figure><div class="gw sm"><i class=g data-shape=4><b>UNKNOWN KEY</b><u>onair.focus</u><s></s></i></div><figcaption>UNKNOWN KEY. The server named a state this build has no row for. The key is on the glass so a skew is diagnosable without a laptop.</figcaption></figure>
+<figure><div class="gw sm"><i class=g data-shape=6><b>NO CONFIG</b><u>10.42.12.9:8484</u><s></s></i></div><figcaption>NO CONFIG. No profile has ever arrived. Different from NO DATA: this panel has never heard the vocabulary.</figcaption></figure>
+<figure><div class="gw sm"><i class=g data-shape=0><b class=lg>ON AIR</b><u>STALE</u><s></s></i></div><figcaption>BUSY, gone stale. A busy row keeps its block and says so; a calm row that goes stale is refused and drawn NO DATA instead.</figcaption></figure>
+</div>
+</details>
+
+<form method=post action=/onair/config style=margin-bottom:1rem><button class=ghost name=action value=clearall>Clear all overrides on this panel</button></form>
+
+<footer>
+<p>This board shows at most 24 states. A profile with more still pulls in full and still renders on the panel; the page says so here when it bounds, and the rest are edited in the admin console.</p>
+<p>The server passphrase is not shown here and cannot be read back from this device at all (D-55). Set it on the ESPHome dashboard, where the field is write-only. <a href=/onair>Back to status</a> &middot; <a href=/>ESPHome dashboard</a></p>
+</footer>
+
+</main>
+<script>
+(function(){
+var N={0:'BUSY',1:'CALM HEAVY',2:'CALM LIGHT',3:'NO DATA'},
+D={0:'solid block',1:'double frame',2:'open ring',3:'hatch band'},
+H=/^#[0-9a-fA-F]{6}$/,A=function(l,f){[].forEach.call(l,f)};
+function L(h){return((299*parseInt(h.substr(1,2),16)+587*parseInt(h.substr(3,2),16)+114*parseInt(h.substr(5,2),16))/1000)|0}
+function V(i,d){return i&&i.value.trim()||d}
+A(document.querySelectorAll('.card'),function(c){
+var d=c.dataset,g=c.querySelector('.g'),b=g.querySelector('b'),
+li=c.querySelector('[name=label]'),ci=c.querySelector('[name=color]'),bi=c.querySelector('[name=bgcolor]'),
+vd=c.querySelector('.vd'),bar=c.querySelector('.lum i'),lt=c.querySelector('.lt'),
+fl=c.querySelector('.flip'),ch=c.querySelector('.chip');
+function up(){
+var lab=V(li,d.sl),fg=V(ci,d.sc),bg=V(bi,d.sb),ok=H.test(fg)&&H.test(bg);
+c.classList.toggle('bad',!ok);
+ch.textContent=lab;
+if(ok){ch.style.color=fg;ch.style.background=bg}
+var s=d.fx?+d.fx:d.b=='1'?0:H.test(bg)?(L(bg)>=128?1:2):+d.s0;
+if(!d.fx){b.textContent=lab;b.className=lab.length<=8?'lg':''}
+g.setAttribute('data-shape',s);
+vd.innerHTML=N[s]+' <span>'+D[s]+'</span>';
+if(bar&&H.test(bg)){var v=L(bg);bar.style.width=(v/2.55).toFixed(1)+'%';lt.innerHTML='background luminance <b>'+v+'</b> · the line is 128'}
+if(fl){fl.hidden=s==+d.s0;if(!fl.hidden)fl.textContent='This override crosses the 128 line: the picture changes from '+N[+d.s0]+' to '+N[s]+'.'}
+A(c.querySelectorAll('input[type=color]'),function(p){var t=p.nextElementSibling,v=t.value.trim()||(t.name=='color'?d.sc:d.sb);if(H.test(v))p.value=v})
+}
+c.addEventListener('input',function(e){var t=e.target;if(t.type=='color')t.nextElementSibling.value=t.value;c.classList.add('dirty');up()});
+c.addEventListener('click',function(e){if(!e.target.classList.contains('fs'))return;e.target.previousElementSibling.value='';c.classList.add('dirty');up()});
+up()});
+})();
+</script>
+</body></html>
+<!-- NOTES
+CONCEPT: The page is a board of the panel's own glass, drawn five times - each state as a
+miniature 128x64 1-bit SH1106 rendered in CSS at the firmware's own pixel coordinates,
+showing the exact shape the display lambda will draw, diagnostics band included. Editing
+happens under the miniature it changes and the miniature changes as you type, so the 1-bit
+consequence stops being a paragraph at the top of the page and becomes the picture you are
+already looking at.
+
+BYTES: html=13091 css=5455 js=1503 total=20049
+  Measured on the real file with the NOTES block removed: total 20,049 B; the <style>...
+  </style> element is 5,455 B and the <script>...</script> element is 1,503 B, leaving
+  13,091 B of markup. Split the way the envelope doc splits it: CSS and JS are pool B
+  (flash, gzipped, immutable-cached, ~0 heap), so the per-request heap cost is the markup
+  only. Of that markup: fixed chrome (head, banner, rule, summary, dormant slot, the
+  three-picture <details>, footer) is 4,132 B and the five cards are 8,959 B - 1,792 B for
+  each of the two overridden cards, 1,125 B avg for the three that follow the server.
+  Today's page is 3,148 B chrome + 738 B/row.
+  THIS IS OVER BUDGET AND I AM NOT HIDING IT. The envelope allows 4 KB chrome + 900 B/row
+  with a 24 KB hard ceiling; at MAX_ROWS_RENDERED=24 this design projects to
+  4,132 + 24 x 1,150 = ~31.7 KB, needing a reserve() near 34 KB contiguous against a floor
+  that is only proven to 24.7 KB. See C++ COST for the two ways down.
+
+COLOUR TRAP: solved by giving the native picker no name. Each colour is a pair: an
+<input type=color> with NO name attribute, and next to it the text input that actually
+carries name=color / name=bgcolor with pattern="#[0-9a-fA-F]{6}" and the server's value as
+placeholder. The picker is a viewfinder that writes into the text input; it is structurally
+incapable of posting anything, with or without JavaScript, so it can never turn "follow the
+server" into "override to black". Empty text field still means follow the server, exactly as
+today. The "follow" button beside each field blanks the text input and re-syncs the picker
+to the server value; the row's "Follow server" button is the real action=clear submit.
+No form on this page carries a field named busy - busy appears only as a class and as prose.
+
+NO-JS: everything the page is for still works. All five miniatures, the shapes, the label
+text, the label font size (30px bold at <=8 chars, 14px above), the luminance bar and
+readout, the "this override crosses the 128 line" warning, the ghost of the server's own
+picture, the override/following badges, the PENDING banner, Refresh, Save, Follow server and
+Clear all are server-rendered and submit as ordinary forms. What is lost: live preview while
+typing, the "unsaved" pill, the invalid-hex dimming, and the "follow" mini-buttons (which are
+type=button and go inert - you clear the text field by hand instead, and the row-level
+"Follow server" still works). The colour pickers still open and still show the current value;
+they just stop writing into the text field, so with JS off you type the hex. Nothing silently
+lies with JS off, because the server-rendered state is the truth and JS only re-derives it.
+
+C++ COST: moderate, with one honest problem.
+  EASY: the whole glass is <i class=g data-shape=N><b>LABEL</b><s></s></i> - about 62 bytes,
+  one std::string append, no per-shape branching in the emitter. Every primitive is a CSS
+  ::before on [data-shape]: the double frame is one border plus a two-layer inset box-shadow,
+  the open ring is one 7px border on a 44px circle, the hatch is a repeating-linear-gradient.
+  The diagnostics band is one empty <s>, with the IP and dBm strings injected once per page
+  as --ip/--db custom properties on <body> instead of five times in the markup. The three
+  repeated per-shape notes are CSS content on .card / .card.b / .card.fx, so a 16-byte
+  <p class=n></p> carries them - which is also why the note is no longer printed five times.
+  compute_view() already returns the Shape enum and those enum values ARE the data-shape
+  numbers, so the emitter writes the int straight in. luminance() already exists.
+  MEDIUM: render_row_form() has to emit both the data-* mirror of the server row
+  (data-sl/sc/sb/b/s0) and the visible fields, so every server value is written twice - once
+  escaped into an attribute, once into a placeholder. Needs care with html_escape on labels.
+  The ghost glass is a second call to the same glass emitter with the server's shape, gated
+  on "the override changes the picture".
+  HARD, and this is the real cost: per-row bytes go 738 -> ~1,150. The 24-row projection
+  (~31.7 KB) exceeds the 24 KB ceiling and the reserve() would have to grow past what is
+  proven safe on the device. Two ways down, both cheap and both mine to name rather than
+  discover later: (1) emit the editor only for the first N rows and the glass-plus-verdict
+  for the rest, which keeps the board complete and drops the tail to ~350 B/row; (2) drop the
+  per-row colour chip and the two "follow" mini-buttons above some row count. Neither is
+  needed at 5 rows and both are ugly at 24, so the right move is to measure
+  heap_caps_get_largest_free_block() on the same flash (STATUS.md already carries that as an
+  action) and decide with a number. A design that needs a measurement before it ships is a
+  cost; a design that needs one and does not say so is a bug.
+  ALSO: browsers render the miniature in Roboto if installed and Arial/Helvetica otherwise -
+  no web font is fetched, so on a machine without Roboto the glass text is metrically close
+  but not identical to the panel's. The shapes, positions and font SIZES are exact.
+
+GIVES UP:
+  - Byte budget. See above. This is the expensive variation and it buys the picture with it.
+  - Density. Five glasses at 260px plus five editors is a taller, wider page than a table.
+    At 24 rows this is a long scroll, and the board metaphor weakens the more rows there are.
+  - It commits hard to the 1-bit glass as the identity of a row, which means colour - the
+    thing the person is editing - is deliberately NOT the row's identifier the way it is in
+    the admin console. Colour appears twice per row (two picker swatches, one label-on-
+    background chip) and is honestly labelled "which this 1-bit glass cannot show". Someone
+    who thinks of these rows by their colour will find that cold.
+  - Three per-row hints live in CSS content, so they are not selectable, not findable with
+    ctrl-F, and skipped by some assistive tech. They are hints that duplicate visible
+    structure, not the only statement of anything - but it is a real trade for bytes.
+  - <i>, <b>, <s> and <u> are used as generic boxes inside the glass because they are the
+    shortest tags that exist. Semantically that is junk; it is worth about 90 bytes per glass
+    against <span>/<div>, and the glass is decorative-with-a-caption, not content.
+  - No live save. Every action is a full form POST and a full page render, same as today,
+    which is what keeps the no-JS story clean and the connection count at one.
+-->

@@ -1,0 +1,118 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><link rel=icon href="data:,"><title>Panel overrides</title><style>
+*{box-sizing:border-box}
+body{margin:0;padding:1rem;background:#0f1113;color:#e8eaed;font:15px/1.5 system-ui,sans-serif}
+main{max-width:37rem;margin:auto}
+h1{font:600 1.3rem/1.25 system-ui;margin:0 0 .3rem}
+h2{font:600 .7rem/1 system-ui;letter-spacing:.13em;text-transform:uppercase;color:#8b959e;margin:1.3rem 0 .5rem;border-bottom:1px solid #262c33;padding:0 0 .4rem}
+p{margin:.35rem 0}
+a{color:#7cc6ff}
+s{color:#8b959e}
+code{font-family:ui-monospace,Menlo,monospace;font-size:.88em}
+.m{color:#8b959e;font-size:.82rem}
+.pend,.flip{border:1px solid #7a6a3b;background:#241f12;color:#e8ca8f;border-radius:6px;padding:.5rem .7rem}
+.flip{font-size:.82rem;margin:.6rem 0 0}
+button{font:inherit;background:#1d2126;color:#e8eaed;border:1px solid #3a424a;border-radius:6px;padding:.35rem .7rem;cursor:pointer}
+button:hover{background:#262c33}
+.dg{border-color:#7a3b3b;color:#ff8f8f}
+.hd,.bar,.row,.acts{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+.bar{margin:.7rem 0 1.2rem}
+.row{align-items:flex-start;gap:.9rem;margin:.5rem 0}
+.card{border:1px solid #2b323a;border-left:3px solid #5ec8d8;border-radius:8px;padding:.7rem .8rem;margin:0 0 .8rem}
+.chip{border-radius:4px;padding:.1rem .45rem;font-size:.85rem;font-weight:600}
+.tag{font-size:.62rem;letter-spacing:.09em;border:1px solid #444d55;border-radius:3px;padding:.1rem .3rem;color:#8b959e}
+.ov{border-color:#5ec8d8;color:#5ec8d8}
+.d{flex:1 1 14rem;display:grid;grid-template-columns:3.2rem 1fr;gap:.15rem .5rem;font-size:.82rem;align-content:start}
+.d i{color:#8b959e;font-style:normal}
+.sw{display:inline-block;width:.65rem;height:.65rem;border-radius:2px;border:1px solid #666;vertical-align:-1px;margin-right:.25rem}
+label{display:block;font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;color:#8b959e;margin:.45rem 0 0}
+.pick{margin:0;padding:.3rem;border-radius:6px;text-transform:none;letter-spacing:0;font-size:.85rem;color:#e8eaed}
+.pick:has(:checked){background:#171b1f;outline:1px solid #3a424a}
+input{display:block;width:100%;margin-top:.15rem;font:inherit;font-size:.9rem;background:#0b0d0f;color:#e8eaed;border:1px solid #333a41;border-radius:5px;padding:.3rem .45rem}
+input[type=radio]{width:auto;margin:0;accent-color:#5ec8d8}
+input:user-invalid{border-color:#ff8f8f}
+.f3{display:grid;grid-template-columns:1fr 7.5rem 7.5rem;gap:.5rem}
+.acts{margin-top:.6rem}
+summary{cursor:pointer;padding:.4rem 0}
+.g{position:relative;width:128px;height:64px;background:#000;color:#fff;border-radius:2px;font:11px/1 system-ui,sans-serif;flex:0 0 auto}
+.g u,.g s{text-decoration:none;color:#fff}
+.g u{position:absolute;left:0;right:0;top:49px;border-top:1px solid #fff;display:flex;justify-content:space-between;padding:2px 0 0}
+.g b{position:absolute;left:0;right:0;top:24px;transform:translateY(-50%);text-align:center;font-weight:400}
+.lg{font-size:14px}
+.ring{position:absolute;left:42px;top:2px;width:44px;height:44px;border:7px solid #fff;border-radius:50%}
+.hv{position:absolute;left:0;top:0;width:128px;height:48px;border:1px solid #fff}
+.hv:before{content:"";position:absolute;left:1px;top:1px;right:1px;bottom:1px;border:1px solid #fff}
+.cap{font-size:.66rem;letter-spacing:.07em;color:#8b959e;margin:.15rem 0 0}
+</style></head><body><main>
+
+<p class=pend><b>PENDING</b> — the panel is busy applying this and it may still be landing. Nothing below is confirmed until you <a href=/onair/config>Reload</a>.</p>
+
+<h1>2 of 5 rows are overridden on this panel.</h1>
+<p class=m>Profile v11, 5 rows. The other 3 follow the server exactly. Overrides are <b>presentation only</b> and live on this panel alone — the server owns <code>busy</code> and owns which rows exist.</p>
+
+<form class=bar method=post>
+<button class=dg name=action value=clearall>Clear all overrides — put this panel back</button>
+<button name=action value=refresh>Refresh profile from server</button>
+</form>
+
+<h2>Overridden here · 2</h2>
+<p class=m>Empty a field to follow the server again. The grey text in each box is the server’s own value.</p>
+
+<form class=card method=post><input type=hidden name=id value=available>
+<p class=hd><b class=chip style=background:#0b6e2e;color:#ffffff>FREE</b><code>available</code><span class=tag>calm</span><span class="tag ov">label overridden</span></p>
+<div class=row>
+<div class=d>
+<i>label</i><span><b>FREE</b> <s>AVAILABLE</s></span>
+<i>colour</i><span><i class=sw style=background:#ffffff></i>#ffffff on <i class=sw style=background:#0b6e2e></i>#0b6e2e, both the server’s</span>
+<i>glass</i><span>bg lum 73 &lt; 128 → CALM LIGHT, the open ring</span>
+</div>
+<div><div class=g><i class=ring></i><b>FREE</b><u>IP: 10.42.12.77<s>-58dBm</s></u></div><p class=cap>THIS PANEL · 128×64, 1px per pixel</p></div>
+</div>
+<div class=f3>
+<label>label<input name=label maxlength=64 value="FREE" placeholder="AVAILABLE"></label>
+<label>text<input name=color maxlength=7 pattern="#[0-9a-fA-F]{6}" placeholder="#ffffff"></label>
+<label>bg<input name=bgcolor maxlength=7 pattern="#[0-9a-fA-F]{6}" placeholder="#0b6e2e"></label>
+</div>
+<p class=acts><button name=action value=save>Save</button><button class=dg name=action value=clear>Clear this row</button></p>
+</form>
+
+<form class=card method=post><input type=hidden name=id value=interruptible>
+<p class=hd><b class=chip style=background:#3b5bdb;color:#1a1a1a>INTERRUPTIBLE</b><code>interruptible</code><span class=tag>calm</span><span class="tag ov">bg overridden</span></p>
+<div class=row>
+<div class=d>
+<i>label</i><span>INTERRUPTIBLE, server’s</span>
+<i>colour</i><span><i class=sw style=background:#1a1a1a></i>#1a1a1a server’s, on <i class=sw style=background:#3b5bdb></i>#3b5bdb <s>#e8a317</s></span>
+<i>glass</i><span>bg lum 96 &lt; 128, was 167</span>
+</div>
+<div class=hd>
+<div><div class=g><i class=hv></i><b class=lg>INTERRUPTIBLE</b><u>IP: 10.42.12.77<s>-58dBm</s></u></div><p class=cap>SERVER · lum 167</p></div>
+<div><div class=g><i class=ring></i><b>INTERRUPTIBLE</b><u>IP: 10.42.12.77<s>-58dBm</s></u></div><p class=cap>THIS PANEL · lum 96</p></div>
+</div>
+</div>
+<p class=flip><b>SHAPE FLIP.</b> Your background is dimmer than the server’s, so this row stopped drawing the heavy double frame and draws the open ring. A consequence of the colour, not a fault.</p>
+<div class=f3>
+<label>label<input name=label maxlength=64 placeholder="INTERRUPTIBLE"></label>
+<label>text<input name=color maxlength=7 pattern="#[0-9a-fA-F]{6}" placeholder="#1a1a1a"></label>
+<label>bg<input name=bgcolor maxlength=7 pattern="#[0-9a-fA-F]{6}" value="#3b5bdb" placeholder="#e8a317"></label>
+</div>
+<p class=acts><button name=action value=save>Save</button><button class=dg name=action value=clear>Clear this row</button></p>
+</form>
+
+<h2>Following the server · 3</h2>
+<details><summary>Untouched — <code>on-air</code>, <code>recording</code>, <code>unknown</code>. Open to start overriding one.</summary>
+<form method=post>
+<label class="pick hd"><input type=radio name=id value=on-air required><b class=chip style=background:#c1121f;color:#ffffff>ON AIR</b><code>on-air</code><span class=tag>busy</span><span class=m>#ffffff on #c1121f · lum 71</span></label>
+<label class="pick hd"><input type=radio name=id value=recording><b class=chip style=background:#6a0dad;color:#ffffff>RECORDING</b><code>recording</code><span class=tag>busy</span><span class=m>#ffffff on #6a0dad · lum 59</span></label>
+<label class="pick hd"><input type=radio name=id value=unknown><b class=chip style=background:#1a1a1a;color:#ff00ff>NO DATA</b><code>unknown</code><span class=tag>busy</span><span class=m>#ff00ff on #1a1a1a · lum 26</span></label>
+<p class=m>All three are <b>busy</b> — the server’s call, not editable here. Busy draws the solid block with the label knocked out and never consults colour, so a colour override on these three changes nothing on the glass today. Pick a row, fill only what you want overridden, leave the rest empty.</p>
+<div class=f3>
+<label>label<input name=label maxlength=64 placeholder="follow the server"></label>
+<label>text<input name=color maxlength=7 pattern="#[0-9a-fA-F]{6}" placeholder="follow"></label>
+<label>bg<input name=bgcolor maxlength=7 pattern="#[0-9a-fA-F]{6}" placeholder="follow"></label>
+</div>
+<p class=acts><button name=action value=save>Override the picked row</button></p>
+</form>
+</details>
+
+<p class=m style=margin-top:1.4rem>All 5 rows shown; this page edits at most 24. The passphrase is not shown here and cannot be read back from this device (D-55) — set it on the ESPHome dashboard. <a href=/onair>Back to status</a> · <a href=/>ESPHome dashboard</a></p>
+
+</main></body></html>

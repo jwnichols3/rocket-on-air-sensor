@@ -1,0 +1,296 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>On-Air panel - configuration</title><style>
+:root{color-scheme:dark;--bg:#0f1113;--fg:#e8eaed;--mut:#8b959e;--dim:#5d666e;--line:#252b31;--card:#171a1e;--ac:#8ab4ff}
+*{box-sizing:border-box}
+body{margin:0;padding:1.1rem;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:52rem;margin:0 auto}
+h1{font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--mut);margin:0 0 .5rem;font-weight:600}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em}
+a{color:var(--ac)}
+p{margin:.4rem 0}
+.note{color:var(--mut);font-size:.85rem}
+button,.btn{font:inherit;font-size:.85rem;background:#1d2126;color:var(--fg);border:1px solid #333a41;border-radius:6px;padding:.32rem .7rem;cursor:pointer;text-decoration:none;display:inline-block;white-space:nowrap;flex:none}
+button:hover,.btn:hover{background:#262c33}
+button.g{background:none;color:var(--mut)}
+button.p{background:var(--ac);border-color:var(--ac);color:#0b1220;font-weight:600}
+.ban{border:1px solid;border-radius:6px;padding:.5rem .8rem;margin:0 0 .9rem;font-size:.9rem}
+.ban.ok{border-color:#2f6b45;color:#8fd6a3}
+.ban.err{border-color:#7a3b3b;color:#ff8f8f}
+.ban.pend{border-color:#7a6a3b;color:#e8ca8f;background:#1c1810}
+.bar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.9rem 0 .5rem}
+.bar form{margin:0}
+.bar .sp{flex:1}
+/* --- the list ------------------------------------------------------------ */
+ol.l{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.hd,.r{display:grid;grid-template-columns:3px 10.5rem 3.6rem 1fr 4.2rem 9rem;gap:.6rem;align-items:center;padding:.42rem .7rem .42rem 0}
+.hd{font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--line);padding-top:.35rem;padding-bottom:.35rem}
+.r{color:inherit;text-decoration:none;border-top:1px solid var(--line)}
+ol.l>li:first-child .r,ol.l>li:first-child .hd{border-top:0}
+.r:hover{background:#14181c}
+.r .rail{align-self:stretch;background:transparent;border-radius:0 2px 2px 0}
+.r.o .rail{background:var(--ac)}
+.r.sel{background:#191e25}
+.chip{display:block;border-radius:5px;padding:.3rem .1rem;text-align:center;font-weight:700;font-size:.76rem;letter-spacing:.05em;color:var(--c);background:var(--b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.loc{font-size:.6rem;letter-spacing:.09em;font-weight:700;color:#0b1220;background:var(--ac);border-radius:3px;padding:.1rem .3rem;text-align:center}
+.id{color:var(--mut);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem;overflow:hidden;text-overflow:ellipsis}
+.bz{font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.bz.y{color:#ff9d9d}.bz.n{color:var(--dim)}
+.dr{font-size:.78rem;color:var(--mut);white-space:nowrap}
+.dr b{color:var(--fg);font-weight:600}
+.dr s{color:var(--dim)}
+.sg{display:inline-block;width:11px;height:11px;vertical-align:-1px;margin-right:.3rem;border:1.5px solid currentColor}
+.sg.l{border-radius:50%;border-width:3px}
+.sg.h{box-shadow:inset 0 0 0 1.5px var(--bg),inset 0 0 0 3px currentColor;border-width:1.5px}
+.sg.b{background:currentColor}
+/* --- the one editor ------------------------------------------------------ */
+li.ed{background:#14181d;border-top:1px solid var(--ac)}
+.edh{display:flex;gap:.6rem;align-items:center;padding:.6rem .7rem;border-bottom:1px solid var(--line)}
+.edh .chip{width:10.5rem;flex:none}
+.edh .sp{flex:1}
+.edb{display:grid;grid-template-columns:1fr auto;gap:1.1rem;padding:.8rem .7rem;align-items:start}
+.f{margin:0 0 .7rem}
+.f>label{display:block;font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);margin:0 0 .22rem}
+.tag{float:right;font-size:.6rem;letter-spacing:.08em;border:1px solid;border-radius:99px;padding:0 .4rem;text-transform:uppercase}
+.f .tag{color:var(--ac);border-color:var(--ac)}
+.f .tag:before{content:"overridden here"}
+.f:has(input:placeholder-shown) .tag{color:var(--dim);border-color:var(--line)}
+.f:has(input:placeholder-shown) .tag:before{content:"follows server"}
+.ctl{display:flex;gap:.4rem;align-items:center}
+.ctl input{flex:1;min-width:0;font:inherit;font-size:.9rem;background:#0b0d0f;color:var(--fg);border:1px solid #333a41;border-radius:5px;padding:.3rem .5rem}
+.ctl input::placeholder{color:var(--dim)}
+.ctl input:user-invalid{border-color:#a44}
+.cf .ctl input{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;flex:none;width:7.2rem}
+.sw{position:relative;width:1.9rem;height:1.9rem;flex:none;border-radius:5px;border:1px solid #444d55;background:var(--s)}
+.sw input{position:absolute;inset:0;width:100%;height:100%;opacity:0;padding:0;border:0;cursor:pointer}
+.sw input::-webkit-color-swatch-wrapper{padding:0}
+.acts{display:flex;gap:.5rem;align-items:center;margin-top:.9rem;flex-wrap:wrap}
+.acts .u{font-size:.75rem;color:var(--ac);display:none}
+form.dirty .acts .u{display:inline}
+/* --- the glass ----------------------------------------------------------- */
+.prev{width:256px}
+.glass{position:relative;width:256px;height:128px;background:#000;border:1px solid #333a41;border-radius:4px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;--lit:#dfe9ff}
+.glass>*{position:absolute}
+.blk,.fr,.fr2,.ring{display:none}
+.s0 .blk{display:block;left:0;top:0;width:256px;height:96px;background:var(--lit)}
+.s1 .fr{display:block;left:0;top:0;width:256px;height:96px;border:2px solid var(--lit)}
+.s1 .fr2{display:block;left:4px;top:4px;width:248px;height:88px;border:2px solid var(--lit)}
+.s2 .ring{display:block;left:84px;top:4px;width:88px;height:88px;border:14px solid var(--lit);border-radius:50%}
+.lb{left:0;top:0;width:100%;height:96px;display:flex;align-items:center;justify-content:center;color:var(--lit);font-weight:700;letter-spacing:.06em;font-size:20px}
+.lg .lb{font-size:32px}
+.s0 .lb{color:#000}
+.band{left:0;top:98px;width:100%;height:30px;border-top:2px solid var(--lit);display:flex;justify-content:space-between;align-items:center;padding:0 3px;color:var(--lit);font-size:11px}
+.cap{font-size:.72rem;color:var(--dim);margin:.35rem 0 .5rem}
+.lum{font-size:.8rem;color:var(--mut);margin:.5rem 0 .2rem}
+.lum b{color:var(--fg)}
+.flip{font-size:.78rem;color:#e8ca8f;margin:.2rem 0}
+.arw{color:var(--dim);text-align:center;font-size:.72rem;margin:.3rem 0}
+/* --- misc ---------------------------------------------------------------- */
+.dorm{display:grid;grid-template-columns:3px 10.5rem 4.6rem 1fr auto;gap:.6rem;align-items:center;padding:.42rem .7rem .42rem 0;border-top:1px solid var(--line);margin:0}
+.dorm .rail{align-self:stretch;background:#5d666e}
+.dorm .chip{background:none;color:var(--dim);border:1px dashed #3a424a}
+foot,footer{display:block;margin-top:1.4rem;border-top:1px solid var(--line);padding-top:.7rem}
+@media(max-width:44rem){
+.hd{display:none}
+.r{grid-template-columns:3px 9rem 3.4rem 1fr;row-gap:.2rem}
+.r .bz,.r .dr{grid-column:2/5}
+.edb{grid-template-columns:1fr}
+.prev{width:100%;max-width:256px}
+}
+</style></head><body><main>
+
+<h1>On-Air panel &middot; configuration</h1>
+
+<p class="ban pend"><strong>PENDING</strong> &middot; the panel is busy applying this &mdash; the change may still be landing. Reload in a moment to see the result. <a href="/onair/config">Reload</a></p>
+
+<p class="note">Presentation only, and only on this panel. Whether a row is <b>busy</b>, and which rows exist at all, are the server's and are shown here read-only. Blank a field to follow the server again.</p>
+
+<div class="bar">
+  <span class="note">Profile v11 &middot; 5 rows &middot; showing all 5 (cap 24)</span>
+  <span class="sp"></span>
+  <form method="post" action="/onair/config"><button name="action" value="refresh">Refresh profile from server</button></form>
+  <form method="post" action="/onair/config"><button class="g" name="action" value="clearall">Clear all overrides</button></form>
+</div>
+
+<ol class="l">
+<li><div class="hd"><span></span><span>Panel draws</span><span></span><span>Id</span><span>Busy</span><span>Glass shape</span></div></li>
+
+<li><a class="r o" href="/onair/config?edit=available" data-v="available|0|AVAILABLE|#ffffff|#0b6e2e|FREE||">
+<span class="rail"></span><span class="chip" style="--c:#ffffff;--b:#0b6e2e">FREE</span><span class="loc">LOCAL</span><span class="id">available</span><span class="bz n">calm</span><span class="dr"><i class="sg l"></i>ring <b>73</b></span></a></li>
+
+<li><a class="r" href="/onair/config?edit=on-air" data-v="on-air|1|ON AIR|#ffffff|#c1121f|||">
+<span class="rail"></span><span class="chip" style="--c:#ffffff;--b:#c1121f">ON AIR</span><span></span><span class="id">on-air</span><span class="bz y">busy</span><span class="dr"><i class="sg b"></i>block <s>71</s></span></a></li>
+
+<li><a class="r o sel" href="/onair/config?edit=interruptible" data-v="interruptible|0|INTERRUPTIBLE|#1a1a1a|#e8a317|||#3b5bdb">
+<span class="rail"></span><span class="chip" style="--c:#1a1a1a;--b:#3b5bdb">INTERRUPTIBLE</span><span class="loc">LOCAL</span><span class="id">interruptible</span><span class="bz n">calm</span><span class="dr"><i class="sg l"></i>ring <b>96</b> <s>was heavy</s></span></a></li>
+
+<li class="ed" id="ed"><form method="post" action="/onair/config">
+<input type="hidden" name="id" value="interruptible">
+<div class="edh"><span class="chip" style="--c:#1a1a1a;--b:#3b5bdb">INTERRUPTIBLE</span><code>interruptible</code><span class="note">busy: no &mdash; the server's, not editable here</span><span class="sp"></span><a class="btn" href="/onair/config">Close</a></div>
+<div class="edb">
+<div>
+  <div class="f"><label for="fl">Label <span class="tag"></span></label><div class="ctl"><input id="fl" name="label" maxlength="64" placeholder="INTERRUPTIBLE" value=""></div></div>
+  <div class="f cf"><label for="fc">Text colour <span class="tag"></span></label><div class="ctl"><span class="sw" style="--s:#1a1a1a"></span><input id="fc" name="color" maxlength="7" pattern="#[0-9a-fA-F]{6}" spellcheck="false" placeholder="#1a1a1a" value=""></div></div>
+  <div class="f cf"><label for="fb">Background <span class="tag"></span></label><div class="ctl"><span class="sw" style="--s:#3b5bdb"></span><input id="fb" name="bgcolor" maxlength="7" pattern="#[0-9a-fA-F]{6}" spellcheck="false" placeholder="#e8a317" value="#3b5bdb"></div></div>
+  <div class="acts"><button class="p" name="action" value="save">Save</button><button class="g" name="action" value="clear">Clear this row</button><span class="u">unsaved</span></div>
+</div>
+<div class="prev">
+  <p class="cap">What the 128&times;64 glass draws</p>
+  <div class="glass s2" id="gl"><div class="blk"></div><div class="fr"></div><div class="fr2"></div><div class="ring"></div><div class="lb" id="lb">INTERRUPTIBLE</div><div class="band"><span>IP: 10.42.12.77</span><span>-58dBm</span></div></div>
+  <p class="lum">Background luminance <b id="lv">96</b> &middot; under 128 &rarr; <b id="ls">open ring</b></p>
+  <p class="flip" id="fl2">The server's <code>#e8a317</code> is 167, which draws the heavy double frame. This override flips the shape.</p>
+  <p class="cap">Colour never reaches the glass. Only its brightness does, and only to pick the shape &mdash; busy rows ignore it entirely.</p>
+</div>
+</div>
+</form></li>
+
+<li><a class="r" href="/onair/config?edit=recording" data-v="recording|1|RECORDING|#ffffff|#6a0dad|||">
+<span class="rail"></span><span class="chip" style="--c:#ffffff;--b:#6a0dad">RECORDING</span><span></span><span class="id">recording</span><span class="bz y">busy</span><span class="dr"><i class="sg b"></i>block <s>59</s></span></a></li>
+
+<li><a class="r" href="/onair/config?edit=unknown" data-v="unknown|1|NO DATA|#ff00ff|#1a1a1a|||">
+<span class="rail"></span><span class="chip" style="--c:#ff00ff;--b:#1a1a1a">NO DATA</span><span></span><span class="id">unknown</span><span class="bz y">busy</span><span class="dr"><i class="sg b"></i>block <s>26</s></span></a></li>
+
+<li><form class="dorm" method="post" action="/onair/config"><input type="hidden" name="id" value="focus-mode">
+<span class="rail"></span><span class="chip">DEEP WORK</span><span class="loc" style="background:#5d666e;color:#0f1113">DORMANT</span><span class="note">stored here, but profile v11 has no <code>focus-mode</code> row, so it applies to nothing</span><button class="g" name="action" value="clear">Clear</button></form></li>
+</ol>
+
+<p class="note" style="margin-top:.6rem">This page edits at most 24 rows. When a profile has more, the extras are still pulled and still drawn on the panel &mdash; they just say so here and are edited in the admin console instead.</p>
+
+<footer>
+<p class="note">The server passphrase is not shown here and cannot be read back from this device at all (D-55). Set it on the ESPHome dashboard, where the field is write-only.</p>
+<p class="note"><a href="/onair">Back to status</a> &middot; <a href="/">ESPHome dashboard</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var ed=document.getElementById('ed'),f=ed.firstElementChild;
+var L=document.getElementById('fl'),C=document.getElementById('fc'),B=document.getElementById('fb');
+var GL=document.getElementById('gl'),LB=document.getElementById('lb'),LV=document.getElementById('lv'),LS=document.getElementById('ls'),FL=document.getElementById('fl2');
+var srv={},busy=0,base='';
+function lum(h){var n=parseInt(h.slice(1),16);return Math.floor((299*(n>>16&255)+587*(n>>8&255)+114*(n&255))/1000)}
+function ok(v){return /^#[0-9a-fA-F]{6}$/.test(v)}
+function eff(i){return i.value.trim()||i.placeholder}
+// Build the picker + follow-server control in JS ONLY, so no-JS never sees a
+// colour input that could post #000000 as an override.
+[C,B].forEach(function(i){
+  var sw=i.previousElementSibling,p=document.createElement('input');
+  p.type='color';sw.appendChild(p);
+  var r=document.createElement('button');r.type='button';r.className='g';r.textContent='Follow server';
+  i.parentNode.appendChild(r);
+  r.onclick=function(){i.value='';draw()};
+  p.oninput=function(){i.value=p.value;draw()};
+  i._p=p;i._s=sw;
+});
+function draw(){
+  [C,B].forEach(function(i){var v=eff(i);if(ok(v)){i._p.value=v;i._s.style.setProperty('--s',v)}});
+  var bg=eff(B),l=eff(L)||'',n=ok(bg)?lum(bg):0;
+  var sh=busy?0:(n>=128?1:2);
+  GL.className='glass s'+sh+(l.length<=8?' lg':'');
+  LB.textContent=l;LV.textContent=n;
+  LS.textContent=busy?'solid block (busy)':(n>=128?'heavy double frame':'open ring');
+  var s=lum(srv.b),o=B.value.trim();
+  FL.style.display=(!busy&&ok(o)&&(s>=128)!=(n>=128))?'':'none';
+  FL.innerHTML="The server's <code>"+srv.b+"</code> is "+s+", which draws the "+(s>=128?'heavy double frame':'open ring')+". This override flips the shape.";
+  f.className=(L.value+'|'+C.value+'|'+B.value)!==base?'dirty':'';
+  var c=ed.previousElementSibling.firstElementChild;
+  if(c&&c.classList.contains('r')){
+    var ch=c.querySelector('.chip');ch.textContent=l;
+    ch.style.setProperty('--c',eff(C));ch.style.setProperty('--b',bg);
+  }
+}
+function open(a){
+  var v=a.dataset.v.split('|');
+  srv={l:v[2],c:v[3],b:v[4]};busy=v[1]=='1';
+  f.querySelector('[name=id]').value=v[0];
+  L.placeholder=v[2];L.value=v[5];
+  C.placeholder=v[3];C.value=v[6];
+  B.placeholder=v[4];B.value=v[7];
+  var h=f.querySelector('.edh');
+  h.children[1].textContent=v[0];
+  h.children[2].innerHTML='busy: '+(busy?'yes':'no')+" — the server's, not editable here";
+  base=L.value+'|'+C.value+'|'+B.value;
+  document.querySelectorAll('.r.sel').forEach(function(x){x.className=x.className.replace(' sel','')});
+  a.className+=' sel';
+  a.parentNode.parentNode.insertBefore(ed,a.parentNode.nextSibling);
+  draw();
+}
+document.querySelectorAll('a.r').forEach(function(a){
+  a.onclick=function(e){e.preventDefault();open(a)};
+});
+[L,C,B].forEach(function(i){i.oninput=draw});
+open(document.querySelector('a.r.sel')||document.querySelector('a.r'));
+})();
+</script>
+</body></html>
+<!-- NOTES
+CONCEPT: One list, one editor. Every row collapses to a single scannable line - the label
+drawn in its own colours, the id, the server-owned busy flag, and the shape the 1-bit glass
+will actually draw with its luminance - and exactly one row at a time expands in place into
+the only editor on the page, so the repeated prose and the five Save/Clear pairs exist once.
+
+BYTES: html=8619 css=4525 js=2496 total=15640
+(Measured on the real file minus this NOTES block: total 15640 B; the <style> element's inner
+text is 4525 B and the <script> element's inner text is 2496 B, so markup+chrome is 8619 B.
+In production CSS and JS move to pool B - one flash-served, gzipped, immutable-cached asset
+each, ~7 KB gz combined - and pool A pays only the markup. Pool A breakdown: fixed chrome
+(head, banner, note, bar, header line, cap note, footer) ~2.6 KB; a list row averages 305 B
+against 738 B for a row form today; the single editor is ~1.9 KB and is emitted once.
+5 rows -> ~6.0 KB, about the 6,840 B the page costs today. At MAX_ROWS_RENDERED=24 ->
+2.6 + 24*0.305 + 1.9 = ~11.8 KB against ~20.9 KB today, so the reserve() can drop from
+3000 + 24*900 to about 5000 + 24*350, roughly 13.4 KB contiguous instead of 24.7 KB.
+That halving is the whole point of the bet.)
+
+COLOUR TRAP: the only element that ever carries name="color"/name="bgcolor" is a plain text
+input with pattern="#[0-9a-fA-F]{6}", empty by default, placeholder showing the server's
+value. There is no <input type=color> in the served HTML at all - the picker and the
+"Follow server" button are created by JS and appended, and the picker is given no name, so
+it cannot be serialised even if scripting is on. The picker only ever writes into the text
+input (touching it is an explicit act of overriding, which is the correct semantic);
+"Follow server" blanks that input. So #000000 can never be posted by default, with or
+without JS. Which state a field is in is shown without JS too: a CSS :has()
++ :placeholder-shown rule flips the per-field pill between "follows server" and
+"overridden here" as you type.
+
+NO-JS: everything essential works. Clicking a row follows href="/onair/config?edit=<id>" and
+the firmware renders the same page with that row's editor expanded - the JS only removes the
+round trip. Save, Clear this row, Clear all overrides, Refresh and Close are plain form
+posts and links. The follows-server / overridden-here pills are pure CSS. The glass
+miniature, the luminance number and the shape sentence are server-rendered for the row's
+current values, so they are correct on load; what is lost is that they stop updating live as
+you type, and the colour swatch beside each field becomes a static square showing the current
+value rather than a picker. That is an acceptable trade: with JS off the page degrades to
+exactly today's honest text-field behaviour plus a correct static preview, and never to a
+wrong one.
+
+C++ COST: low, and lower than what it replaces. The list row is one flat append with six
+substitutions (id, effective colours, effective label, busy, luminance, shape word) - all
+values config_page() already has or that compute_view()/the luminance helper already
+produce, and the two override flags it needs are the same o->has_* it reads today. The
+editor is emitted once, inside the row loop, guarded by
+`if (r.id == param(request,"edit"))` - and getParam() already reads URL query strings
+(web_server_idf.cpp:598-618 falls through to find_query_value_), so `?edit=` needs no new
+plumbing; config_page() just takes the id as an argument. The glass miniature is the only
+new-looking thing and it is the cheapest part: all geometry lives in the stylesheet, so C++
+picks one of three class names (s0/s1/s2), optionally adds `lg` when strlen(label) <= 8, and
+writes the label text. Hard parts, honestly: (1) config_page() gains a parameter and the
+GET handler must pass it through, and an `edit` id that matches nothing must fall back to
+"no row open" rather than silently opening the first; (2) the editor markup has to be
+emitted between two <li> elements inside the loop, so the loop body is now
+`row(); if (selected) editor();` rather than one call - trivial but easy to get wrong when
+the selected row is also the last one; (3) the data-v attribute is a hand-rolled
+pipe-delimited packing of eight fields and MUST be escaped, and a label containing '|' or a
+quote would corrupt it - html_escape() covers the quote, and '|' needs either escaping or a
+different delimiter. Worth flagging: that attribute is the one genuinely new failure mode.
+
+GIVES UP: (1) You cannot see two editors at once, and you cannot compare two rows' fields
+side by side - the list is the comparison surface and it deliberately carries only what fits
+on one line. (2) With JS off, opening a row costs a round trip to the panel, which is a
+device that serialises requests and can be blocked for up to 2 s by a concurrent POST.
+(3) There is no per-row miniature; only the open row previews its glass, so "show me what
+all five look like" is answered by the shape glyph and luminance number, not by five
+pictures. (4) The busy rows' luminance is shown struck through rather than hidden, which
+costs a few bytes to say a thing that does not matter, because hiding it invites the
+question "does my colour do nothing here?". (5) The house style's contrast ratio readout is
+dropped entirely: on 1-bit glass contrast between fg and bg is not what picks the shape,
+luminance against 128 is, so the readout is a luminance readout instead. (6) A dormant
+override gets a one-line row with a Clear button, not an editor - editing presentation for
+a row that draws nothing would be a lie about what the panel will do.
+-->
