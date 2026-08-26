@@ -2537,3 +2537,35 @@ else (state, light control, API) lives on the receiver.
   it is: `parse_table()` (the JSON shim is a stub - and that path has a continuous real signal
   in `text_sensor/ConfigPull`, which the HTML never had); the display lambda, which lives in
   YAML and needs the panel; and concurrency, since the host has one thread and the device two.
+
+- **D-74 (2026-08-26)** **The status page regressed when D-72 moved the stylesheet, and a
+  test now enforces the thing #50 only asked for in prose.** Found while answering "what
+  next", by rendering a page I had changed and never looked at.
+
+  `page_head()` moved the CSS to a flash asset and the status page kept emitting the class
+  names it always had. In the new stylesheet `.shape` is the *row-line column* - 0.78rem,
+  muted - and `.note` does not exist at all. So **`NO DATA`, the one word that page exists to
+  say, rendered smaller than its own body text**, visually subordinate to the sentence
+  explaining it. The page was still truthful; it just whispered the headline.
+
+  #50 said, in as many words, that if a shared `page_head()` changed underneath it the status
+  page "must be re-checked, not redesigned". Nothing enforced that, and I did not do it.
+  A note in a ticket is not a check.
+
+  **So the test is the general form, not the specific bug.** It reads
+  `firmware/assets/onair.css` and asserts that **every class the status page emits has a
+  rule** - so adding a class without adding a rule fails on a laptop rather than on the
+  glass. Checking for `.shapeword` specifically would only have caught the bug I had already
+  found.
+
+  Also covered now, because the status page had no test of any kind: that a rendered row is
+  headlined by its own LABEL and not by the shape name (right, and the reason the first
+  expectation I wrote was wrong); that `unknown` short-circuits to NO_DATA here exactly as on
+  the glass; that a **stale calm row reads as NO DATA and never still describes itself as
+  calm** - THE BUSY RULE (D-32) on the page rather than on the panel; and that the page shows
+  no credential and offers no control that changes anything (D-57).
+
+  The lesson worth keeping: **D-72 measured the status page and never rendered it.** 904
+  bytes was reported as evidence it was fine. Byte count is not a rendering, and the two
+  suites added in D-73 were aimed entirely at the config page because that was the page I had
+  been looking at.

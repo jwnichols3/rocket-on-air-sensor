@@ -503,6 +503,92 @@ static void test_byte_budget() {
 }
 
 // =========================================================================================
+// 8b. THE STATUS PAGE
+//
+// Added after it regressed. D-72 moved the stylesheet out of the generated HTML and the
+// status page kept emitting class names the new stylesheet does not define, so `NO DATA` -
+// the one word that page exists to say - rendered SMALLER than its own body text. #50 said
+// in as many words that the status page must be re-checked if page_head() changed under it.
+// Nothing enforced that, so now something does: every class this page emits must have a rule.
+// =========================================================================================
+static void test_status_page() {
+  begin("every class the status page emits exists in the stylesheet");
+  seed_table();
+  std::string h = onair::status_page();
+  // Read the real stylesheet rather than a copy of the class list, so adding a class to the
+  // page without adding a rule fails here instead of on the glass.
+  FILE *f = fopen("../assets/onair.css", "rb");
+  CHECK_MSG(f != nullptr, "cannot open firmware/assets/onair.css");
+  if (f == nullptr)
+    return;
+  std::string css;
+  char buf[4096];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+    css.append(buf, n);
+  fclose(f);
+
+  size_t at = 0;
+  size_t seen = 0;
+  while ((at = h.find("class=\"", at)) != std::string::npos) {
+    size_t vs = at + strlen("class=\"");
+    std::string value = h.substr(vs, h.find('"', vs) - vs);
+    at = vs;
+    // A class attribute can hold several; check each.
+    size_t start = 0;
+    while (start < value.size()) {
+      size_t sp = value.find(' ', start);
+      std::string one = value.substr(start, sp == std::string::npos ? std::string::npos : sp - start);
+      start = (sp == std::string::npos) ? value.size() : sp + 1;
+      if (one.empty())
+        continue;
+      seen++;
+      CHECK_MSG(has(css, "." + one), "the status page emits class \"" + one + "\" and no rule defines it");
+    }
+  }
+  CHECK_MSG(seen > 0, "the status page should carry classes at all");
+
+  begin("the status word is the page's headline, not a table column");
+  CHECK_MSG(has(h, "class=\"shapeword "),
+            "NO DATA must use .shapeword (2rem) and not .shape, which is the row-line column");
+  CHECK(!has(h, "class=\"shape "));
+
+  begin("the status page shows no credential and offers no control that changes anything");
+  CHECK_MSG(!has(h, "<form"), "it is read-only by design (D-57)");
+  CHECK(!has(h, "password"));
+  CHECK(!has(h, "passphrase"));
+
+  begin("it links its own stylesheet, and carries no inline style");
+  CHECK(has(h, "<link rel=\"stylesheet\" href=\"/onair.css\">"));
+  CHECK(!has(h, "<style"));
+
+  begin("it reports the same shape the glass is showing");
+  // Both call compute_view(). A status page that could be calm about something the panel
+  // was not would be worse than no status page.
+  // For a row it DRAWS, the headline is that row's label - the shape name appears only on
+  // the off-nominal branches, which is right: an operator reads the panel by its words.
+  seed_table();
+  onair::held().key = "on-air";
+  std::string busy = onair::status_page();
+  CHECK_MSG(has(busy, "ON AIR"), "a rendered row is headlined by its own label");
+  CHECK_MSG(has(busy, "Busy. The light is on."), "and the sub-line says what that means");
+
+  seed_table();
+  onair::held().key = "unknown";
+  CHECK_MSG(has(onair::status_page(), "NO DATA"),
+            "unknown short-circuits to NO_DATA here exactly as it does on the glass");
+
+  // The branch that matters most: stale evidence for a CALM row must never read as calm.
+  seed_table();
+  onair::held().key = "available";
+  esphome::g_millis += onair::STALE_MS + 1000;
+  std::string stale = onair::status_page();
+  CHECK_MSG(has(stale, "NO DATA"), "a stale calm row is NO DATA - THE BUSY RULE (D-32)");
+  CHECK_MSG(!has(stale, "Not busy."), "and it must not still be describing itself as calm");
+  esphome::g_millis -= onair::STALE_MS + 1000;
+}
+
+// =========================================================================================
 // 9. REGISTRATION: what is open and what is behind the credential
 // =========================================================================================
 static void test_registration() {
@@ -574,6 +660,7 @@ int main() {
   test_appearance();
   test_bounds_and_banners();
   test_byte_budget();
+  test_status_page();
   test_registration();
   test_staging();
 

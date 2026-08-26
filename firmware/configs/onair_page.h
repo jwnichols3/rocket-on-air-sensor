@@ -304,7 +304,7 @@ inline std::string status_page() {
 
   // THE HEADLINE IS compute_view's ANSWER, not a rephrasing of it. Same function the
   // display lambda calls, so this page cannot be calm about something the glass is not.
-  h += "<p class=\"shape ";
+  h += "<p class=\"shapeword ";
   h += tone;
   h += "\">";
   if (s.view.shape == Shape::BUSY || s.view.shape == Shape::CALM_HEAVY ||
@@ -381,7 +381,7 @@ inline std::string status_page() {
   }
   h += "</dl>";
   h += "<p><a class=\"btn\" href=\"/onair/config\">Configure</a></p>";
-  h += "<p class=\"note\">Read-only. Nothing on this page changes anything, and no "
+  h += "<p class=\"m\">Read-only. Nothing on this page changes anything, and no "
        "credential of any kind appears on it.</p>";
   page_foot(h);
   return h;
