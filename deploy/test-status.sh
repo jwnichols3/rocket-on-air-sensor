@@ -69,8 +69,11 @@ check "the detail fields are read from launchctl print" \
 check "sudo could not be used -> unknown, not no" \
   "$(status_line noticket 0 | cut -d' ' -f1-3)" "supervised: unknown -"
 
-check "and it says how to fix it" \
-  "$(status_line noticket 0 | grep -c -- '--sudoers')" "1"
+# It must name the verb that WORKS here. `install --sudoers` aborts at `launchctl
+# bootstrap` on a host where the daemon is already running - which is every host that has
+# this problem - so pointing at it was advice that could not be followed.
+check "and it names a verb that works"  "$(status_line noticket 0 | grep -c 'onair sudoers')" "1"
+check "not the one that cannot"         "$(status_line noticket 0 | grep -c -- 'install --sudoers')" "0"
 
 check "unknown prints no made-up detail fields" \
   "$(status_line noticket 0 | grep -c 'pid=')" "0"

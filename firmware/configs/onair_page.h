@@ -32,6 +32,10 @@ namespace onair {
 
 inline constexpr const char *HTML_TYPE = "text/html; charset=utf-8";
 
+/// How many rows the config page will draw. See config_page for why there is a limit at all.
+/// Well above any table a person maintains by hand, well below what exhausts the heap.
+inline constexpr size_t MAX_ROWS_RENDERED = 24;
+
 inline std::string html_escape(const std::string &in) {
   std::string out;
   out.reserve(in.size() + 16);
@@ -99,29 +103,67 @@ inline std::string param(AsyncWebServerRequest *request, const char *name) {
  * iteration takes, so reaching the timeout means something is wedged, and saying so beats
  * a page that reports a success it did not observe.
  */
-inline bool submit(Command c, std::string &note) {
+/// What submit() actually observed. Three outcomes, not two - see below.
+enum class Submitted { APPLIED, FAILED, PENDING };
+
+/**
+ * Hands a command to the main loop and waits, briefly, for the verdict.
+ *
+ * THREE OUTCOMES, because two were a lie. The earlier version waited 3 s and, on expiry,
+ * told the operator the change had not been applied - while leaving it staged, so the main
+ * loop applied and PERSISTED it moments later. The page stated the opposite of what
+ * happened, and the operator, seeing the old values, would post again.
+ *
+ * The 3 s was not an unlucky number, it was the wrong model: it was sized against "the
+ * ~16 ms a loop iteration takes", but the same firmware parks the main loop for up to 5 s
+ * inside `http_request.get` on every config pull. So the budget expired in a HEALTHY case -
+ * a slow server - not only a wedged one.
+ *
+ * Now: wait 2 s, which covers every case where the loop is free. On expiry, if the loop has
+ * not TAKEN the command yet, cancel it atomically and say so - that answer is true. If it
+ * has been taken, the change is in flight and cannot honestly be called either way, so say
+ * THAT and let the next render report the outcome from `held().last`.
+ *
+ * The shorter wait also matters on its own: esp-idf dispatches every request from one httpd
+ * task, so for as long as this blocks, the device serves no HTTP at all - including the
+ * server's state writes.
+ */
+inline Submitted submit(Command c, std::string &note) {
   {
     esphome::LockGuard guard(held().lock);
     if (held().cmd.armed) {
       note = "another change is still being applied - try again";
-      return false;
+      return Submitted::FAILED;
     }
     c.armed = true;
+    c.taken = false;
     c.done = false;
     c.ok = false;
     c.note.clear();
     held().cmd = c;
   }
-  for (int i = 0; i < 300; i++) {
+  for (int i = 0; i < 200; i++) {
     vTaskDelay(pdMS_TO_TICKS(10));
     esphome::LockGuard guard(held().lock);
     if (held().cmd.done) {
       note = held().cmd.note;
-      return held().cmd.ok;
+      return held().cmd.ok ? Submitted::APPLIED : Submitted::FAILED;
     }
   }
-  note = "the panel did not apply the change within 3 s";
-  return false;
+  esphome::LockGuard guard(held().lock);
+  if (held().cmd.done) {
+    note = held().cmd.note;
+    return held().cmd.ok ? Submitted::APPLIED : Submitted::FAILED;
+  }
+  if (!held().cmd.taken) {
+    // Never started. Cancelling is safe, and "not applied" is then TRUE.
+    held().cmd.armed = false;
+    note = "the panel was busy - nothing was changed. Try again.";
+    return Submitted::FAILED;
+  }
+  // In flight. We do not know the outcome and will not guess at it.
+  note = "the panel is busy applying this - reload in a moment to see the result";
+  return Submitted::PENDING;
 }
 
 // ---- shared chrome -----------------------------------------------------------------
@@ -157,6 +199,7 @@ inline void page_head(std::string &h, const char *title) {
        ".banner{border-radius:6px;padding:.6rem .9rem;margin:0 0 1rem;border:1px solid}"
        ".banner.ok{border-color:#2f6b45;color:#8fd6a3}"
        ".banner.err{border-color:#7a3b3b;color:#ff8f8f}"
+       ".banner.pending{border-color:#7a6a3b;color:#e8ca8f}"
        ".swatch{display:inline-block;width:.8rem;height:.8rem;border-radius:3px;"
        "border:1px solid #555;vertical-align:-1px;margin-right:.25rem}"
        "</style></head><body><main>";
@@ -354,15 +397,17 @@ inline void render_row_form(std::string &h, const Row &pulled, const Override *o
   h += "</form>";
 }
 
-inline std::string config_page(const std::string &banner, bool ok) {
+inline std::string config_page(const std::string &banner, Submitted outcome) {
   std::string h;
   page_head(h, "On-Air panel - configuration");
   h += "<h1>Panel configuration</h1>";
   if (!banner.empty()) {
     h += "<p class=\"banner ";
-    h += ok ? "ok" : "err";
+    h += outcome == Submitted::APPLIED ? "ok" : (outcome == Submitted::PENDING ? "pending" : "err");
     h += "\">";
     h += html_escape(banner);
+    if (outcome == Submitted::PENDING)
+      h += " <a href=\"/onair/config\">Reload</a>";
     h += "</p>";
   }
 
@@ -396,7 +441,25 @@ inline std::string config_page(const std::string &banner, bool ok) {
   } else {
     h += "<p class=\"note\">Profile v" + html_escape(version) + ", " +
          std::to_string((unsigned) table.size()) + " rows.</p>";
+    // BOUNDED, and it says so when it bounds. The page is built into one contiguous
+    // std::string and sent whole (HTTPD_RESP_USE_STRLEN), and each row costs ~800 bytes of
+    // markup. A table near the pull's 8 kB ceiling is ~60-80 rows, so an unbounded page can
+    // reach ~50 kB and a geometric realloc needs ~96 kB contiguous - on a device where the
+    // largest free block is routinely less. ESP-IDF builds C++ with exceptions off, so a
+    // failed allocation is abort(), which reboots the panel that is driving the light.
+    //
+    // Reserved up front to avoid the doubling entirely, and capped. Silent truncation would
+    // be worse than the cap: an operator would think a row had vanished.
+    h.reserve(h.size() + 3000 + MAX_ROWS_RENDERED * 900);
+    size_t drawn = 0;
     for (const auto &r : table) {
+      if (drawn++ >= MAX_ROWS_RENDERED) {
+        h += "<p class=\"banner err\">This profile has " + std::to_string((unsigned) table.size()) +
+             " rows and this page shows the first " + std::to_string((unsigned) MAX_ROWS_RENDERED) +
+             ". The rest are still pulled and still render on the panel - they just cannot be "
+             "edited here. Edit them in the admin console instead.</p>";
+        break;
+      }
       const Override *o = nullptr;
       for (const auto &candidate : overlay) {
         if (candidate.id == r.id) {
@@ -440,8 +503,41 @@ inline std::string config_page(const std::string &banner, bool ok) {
   return h;
 }
 
-/// Validates a POST and stages it. Returns false with a note the page can show.
-inline bool handle_action(AsyncWebServerRequest *request, std::string &note) {
+/**
+ * Validates a POST and stages it.
+ *
+ * THE ORIGIN CHECK IS A CSRF DEFENCE, and it is needed because HTTP Basic is not one. A
+ * browser that has authenticated to this device attaches the credential to ANY request it
+ * makes to it, including a form POST from a page on another site. D-23 raised exactly this
+ * objection about cookies; basic auth has the same property.
+ *
+ * A cross-origin form POST carries an `Origin` header naming the attacker's site, and a
+ * same-origin one either omits it or names this device. So: reject any POST whose Origin is
+ * present and is not us. This is the same reasoning D-24 applies on the server, and it costs
+ * one header read - no token, no session, no state.
+ */
+inline bool origin_is_ours(AsyncWebServerRequest *request) {
+  esphome::optional<std::string> origin = request->get_header("Origin");
+  if (!origin.has_value() || origin.value().empty())
+    return true;  // A curl client, or a same-origin GET-like post. Nothing to spoof with.
+  esphome::optional<std::string> host = request->get_header("Host");
+  if (!host.has_value() || host.value().empty())
+    return false;
+  // Origin is scheme://host[:port]; compare the authority against the Host we were reached
+  // on, which is what the browser would have used for a same-origin request.
+  const std::string &o = origin.value();
+  size_t sep = o.find("://");
+  if (sep == std::string::npos)
+    return false;
+  return o.substr(sep + 3) == host.value();
+}
+
+/// Validates a POST and stages it.
+inline Submitted handle_action(AsyncWebServerRequest *request, std::string &note) {
+  if (!origin_is_ours(request)) {
+    note = "refused: this request came from another site";
+    return Submitted::FAILED;
+  }
   std::string action = param(request, "action");
   Command c;
 
@@ -457,7 +553,7 @@ inline bool handle_action(AsyncWebServerRequest *request, std::string &note) {
   c.id = trim(param(request, "id"));
   if (c.id.empty() || c.id.size() > 32) {
     note = "that row id is not one this panel can address";
-    return false;
+    return Submitted::FAILED;
   }
 
   if (action == "clear") {
@@ -466,7 +562,7 @@ inline bool handle_action(AsyncWebServerRequest *request, std::string &note) {
   }
   if (action != "save") {
     note = "unknown action";
-    return false;
+    return Submitted::FAILED;
   }
 
   // REFUSED RATHER THAN IGNORED. Dropping a `busy` field silently would let a caller
@@ -474,14 +570,14 @@ inline bool handle_action(AsyncWebServerRequest *request, std::string &note) {
   // is not negotiable here.
   if (request->hasParam("busy")) {
     note = "busy is the server's - it cannot be set from this panel";
-    return false;
+    return Submitted::FAILED;
   }
 
   {
     esphome::LockGuard guard(held().lock);
     if (!held().have || find(held().table, c.id) == nullptr) {
       note = "no such row in the server's profile - rows are not added locally";
-      return false;
+      return Submitted::FAILED;
     }
   }
 
@@ -490,7 +586,7 @@ inline bool handle_action(AsyncWebServerRequest *request, std::string &note) {
   if (!label.empty()) {
     if (label.size() > 64) {
       note = "a label is at most 64 characters";
-      return false;
+      return Submitted::FAILED;
     }
     c.has_label = true;
     c.label = label;
@@ -499,7 +595,7 @@ inline bool handle_action(AsyncWebServerRequest *request, std::string &note) {
   if (!color.empty()) {
     if (!parse_hex_color_strict(color, c.color)) {
       note = "text colour must look like #rrggbb";
-      return false;
+      return Submitted::FAILED;
     }
     c.has_color = true;
   }
@@ -507,7 +603,7 @@ inline bool handle_action(AsyncWebServerRequest *request, std::string &note) {
   if (!bgcolor.empty()) {
     if (!parse_hex_color_strict(bgcolor, c.bgcolor)) {
       note = "background must look like #rrggbb";
-      return false;
+      return Submitted::FAILED;
     }
     c.has_bgcolor = true;
   }
@@ -535,15 +631,26 @@ class Page : public AsyncWebHandler {
       return;
     }
     std::string note;
-    bool ok = true;
+    Submitted outcome = Submitted::APPLIED;
     if (request->method() == HTTP_POST) {
-      ok = handle_action(request, note);
+      outcome = handle_action(request, note);
+    } else {
+      // A plain GET reports the outcome of a command that finished after its own request
+      // had to stop waiting. Consumed, so it is shown once and does not haunt every reload.
+      esphome::LockGuard guard(held().lock);
+      if (held().last.present) {
+        note = held().last.note;
+        outcome = held().last.ok ? Submitted::APPLIED : Submitted::FAILED;
+        held().last.present = false;
+      }
     }
-    // Rendered here rather than redirected to. A 302 would keep reload from re-posting,
-    // but it would also mean parking the result somewhere shared between requests, and the
-    // result is the one thing on this page that must not be somebody else's.
-    std::string body = config_page(note, ok);
-    request->send(ok ? 200 : 400, HTML_TYPE, body.c_str());
+    std::string body = config_page(note, outcome);
+    // PENDING wants 202, and this transport cannot say it: ESPHome's init_response_ maps
+    // only 200/204/400/401/404/409/422 and sends 500 for anything else (measured on
+    // 2026.8.0). A 500 would be a worse lie than a 200, because it claims the request
+    // failed when it may well be landing. So 200, and the amber banner carries the truth.
+    int status = outcome == Submitted::FAILED ? 400 : 200;
+    request->send(status, HTML_TYPE, body.c_str());
   }
 
  protected:

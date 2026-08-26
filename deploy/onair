@@ -642,7 +642,12 @@ cmd_setup() {
     ' "$CONFIG_FILE" > "$carried"
   fi
 
+  # THE HEADER LIVES INSIDE THE MARKERS. It used to sit above them, so the marker-based
+  # strip above never removed it and every run appended another copy - ten lines a time,
+  # measured. Anything this function writes has to be inside the block it knows how to
+  # remove, or "idempotent" is only true of the part someone remembered to test.
   {
+    echo "# >>> managed by 'onair setup' - rerun it to change these"
     echo "# $CONFIG_FILE - the onair ENV OVERLAY."
     echo "#"
     echo "# NOT the service's configuration. The config document is ~/.onair/config.json"
@@ -653,7 +658,6 @@ cmd_setup() {
     echo "#"
     echo "# ONAIR_TOKEN here overrides auth.passphrase, so a line left in this file will"
     echo "# keep reverting a rotation done in the console. 'onair setup' never writes one."
-    echo "# >>> managed by 'onair setup' - rerun it to change these"
     printf 'ONAIR_PORT="%s"\n' "$new_port"
     printf 'ONAIR_STATE_FILE="%s"\n' "$new_state"
     echo "# <<< end managed - everything below is yours and setup does not touch it"
@@ -775,7 +779,10 @@ cmd_status() {
   if [[ "$supervised" == unknown ]]; then
     # The detail fields are meaningless here - nothing was read - so they are not
     # printed. A line of `unknown`s reads like an answer and this is not one.
-    echo "supervised: unknown - could not ask (needs a sudo ticket, or 'onair install --sudoers')"
+    # `sudo onair sudoers`, NOT `install --sudoers`: on a host where the daemon is already
+    # running, install aborts at `launchctl bootstrap` before it ever writes the rule. This
+    # line pointed at the broken path in the very commit that documented it as broken.
+    echo "supervised: unknown - could not ask (needs a sudo ticket, or 'sudo onair sudoers')"
   else
     echo "supervised: $supervised (state=$state pid=$pid last-exit=$last_exit disabled=$disabled)"
   fi

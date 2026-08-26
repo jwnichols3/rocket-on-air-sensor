@@ -83,10 +83,18 @@ check "so does the operator's comment"  "$(grep -c "a comment the operator wrote
 check "the managed port is rewritten"   "$(grep '^ONAIR_PORT=' "$CONFIG_FILE")" 'ONAIR_PORT="8484"'
 check "and not duplicated"              "$(grep -c '^ONAIR_PORT=' "$CONFIG_FILE")" "1"
 
-# Idempotence: a second run must not stack another managed block on the first.
+# Idempotence, asserted on the WHOLE FILE and not just the marker. The earlier version
+# counted `managed by`, which appears once - while the ten-line header ABOVE the marker was
+# appended again on every run, because the marker-based strip could not reach it. The file
+# grew by ten lines a run and the test was green. Compare bytes.
 ONAIR_PORT=8484 run_setup
-check "re-running does not duplicate the managed block" \
-  "$(grep -c 'managed by' "$CONFIG_FILE")" "1"
+before="$(cat "$CONFIG_FILE")"
+ONAIR_PORT=8484 run_setup
+ONAIR_PORT=8484 run_setup
+check "three more runs change nothing at all" \
+  "$([[ "$before" == "$(cat "$CONFIG_FILE")" ]] && echo identical || echo CHANGED)" "identical"
+check "one header, not one per run"     "$(grep -c 'the onair ENV OVERLAY' "$CONFIG_FILE")" "1"
+check "one managed marker"              "$(grep -c 'managed by' "$CONFIG_FILE")" "1"
 check "nor the carried keys"            "$(grep -c '^ONAIR_LIGHT_HOST=' "$CONFIG_FILE")" "1"
 
 echo

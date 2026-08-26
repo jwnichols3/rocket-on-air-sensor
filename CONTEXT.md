@@ -2104,3 +2104,57 @@ else (state, light control, API) lives on the receiver.
   names a JSON path, the operator chooses its NAME, and the prefix is the **connection
   label**. `docs/companion-setup.md` is wrong on both counts and is corrected as part of #44.
 
+- **D-66 (2026-08-26)** **Six more defects, from a four-dimension review workflow over the
+  same day's work.** Twelve agents: four finders, each finding then handed to an independent
+  skeptic told to refute it. Eight findings examined, six survived. Amends D-57 and D-63.
+  **THE PAGE LIED ABOUT WHETHER A CHANGE WAS APPLIED, and the number was not unlucky - the
+  MODEL was wrong.** `submit()` waited 3 s and, on expiry, told the operator the change had
+  not been applied - while leaving it staged, so the main loop applied and **persisted it to
+  NVS** moments later. The page stated the opposite of what happened, and an operator seeing
+  the old values would post again. The 3 s was sized against *"the ~16 ms a loop iteration
+  takes"*, but the same firmware parks the main loop for up to **5 s** inside
+  `http_request.get` on every config pull. **The budget therefore expired in a healthy case -
+  a slow server - not only a wedged one.** A comment justified a number against one part of
+  the system while another part of the same file made it unachievable.
+  **The fix is a third outcome, because two were the lie.** `Submitted::{APPLIED, FAILED,
+  PENDING}`. The wait drops to 2 s, which covers every case where the loop is free. On
+  expiry, if the loop has not TAKEN the command it is cancelled atomically and "nothing was
+  changed" is then TRUE; if it has been taken, the page says so and the next render reports
+  the real outcome from `held().last`. A new `taken` flag carries that distinction, because
+  `armed` could not express "in flight" and that ambiguity was the bug.
+  **The shorter wait matters on its own:** esp-idf dispatches every request from ONE httpd
+  task, so for as long as a handler blocks, the device serves no HTTP at all - including the
+  server's state writes.
+  **PENDING wants `202` and this transport cannot say it.** ESPHome's `init_response_` maps
+  only 200/204/400/401/404/409/422 and sends **500** for anything else. A 500 claims the
+  request failed when it may be landing, which is a worse lie than a 200, so it is 200 with
+  an amber banner. Checked before shipping the status code, not after.
+  **The device config page had no CSRF defence, and HTTP Basic is not one.** A browser
+  authenticated to the panel attaches the credential to ANY request it makes to it,
+  including a form POST from another site - which is exactly D-23's objection to cookies,
+  and basic auth has the same property. Now: a POST whose `Origin` is present and is not
+  this device is refused. Same reasoning as D-24 on the server, and it costs one header
+  read - no token, no session, no state. Verified live: foreign Origin `400 refused`, own
+  Origin `200 saved`, no Origin (curl, the driver) `200 saved`.
+  **The config page was unbounded.** It is built into one contiguous `std::string` and sent
+  whole, ~800 bytes of markup per row, on a device where the 8 kB pull ceiling permits
+  ~60-80 rows. A geometric realloc would need ~96 kB contiguous, and ESP-IDF builds C++ with
+  exceptions off, so a failed allocation is `abort()` - a reboot of the panel driving the
+  light. Now reserved up front and capped at 24 rows, and **it says when it caps**: silent
+  truncation would read as a row having vanished.
+  **`onair setup` appended its own header on every run.** The header sat ABOVE the managed
+  marker, so the marker-based strip could not reach it: ten lines a run, measured 14 → 24 →
+  34. The header now lives inside the markers. **The test was green throughout** because it
+  counted the marker, which appears once, and never the file. It compares bytes now.
+  **`onair status` pointed at a command that cannot work here** - `install --sudoers`, in the
+  very commit that documented why it aborts on a running host. Now `sudo onair sudoers`.
+  **Two findings were refuted, and one refutation is an artefact worth naming:** the claim
+  that the SwiftBar plugin trusts the server's `stale` flag was refuted because that verifier
+  read the code **after** D-64 fixed it. Refuted-because-already-fixed and
+  refuted-because-never-real are different, and a review run against a moving tree cannot
+  tell them apart. The other refutation was substantive: `parse_table` was said to drop
+  `Row::busy`'s safe default, and the stated trigger was wrong about ArduinoJson.
+  Live after: CSRF verified in three directions, overrides cleared back to zero,
+  `RowLabel` back to `AVAILABLE`. `npm run verify` green - 311 node, 128 deploy, firmware
+  compiles and configures.
+

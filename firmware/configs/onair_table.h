@@ -104,7 +104,25 @@ struct Command {
   bool has_color{false};
   bool has_bgcolor{false};
   bool armed{false};
+  /// TRUE once the main loop has taken a copy and is applying it. The HTTP side uses this
+  /// to tell "not started yet" from "in flight": only the first can be safely cancelled.
+  bool taken{false};
   bool done{false};
+  bool ok{false};
+  std::string note;
+};
+
+/**
+ * The outcome of the LAST command to finish, kept so a page render can report it.
+ *
+ * Needed because the HTTP side cannot always wait for the answer. The main loop can be
+ * parked for up to 5 s inside `http_request.get` (the config pull), during which `pump()`
+ * does not run - so a page action that arrives at the wrong moment cannot be confirmed
+ * inside any budget the httpd task can reasonably block for. Reporting THAT honestly, and
+ * showing the real outcome on the next render, beats guessing either way.
+ */
+struct LastResult {
+  bool present{false};
   bool ok{false};
   std::string note;
 };
@@ -163,6 +181,7 @@ struct Held {
   uint32_t last_write_ms{0};
   /// Staged page action, and the one-shot flag that asks the main loop to run the pull.
   Command cmd;
+  LastResult last;
   bool refresh_requested{false};
   /**
    * Guards `table`, `overlay`, `cmd` and the two mirrors against the HTTP task.
@@ -673,6 +692,10 @@ inline void pump() {
     esphome::LockGuard guard(held().lock);
     if (!held().cmd.armed)
       return;
+    // Marked BEFORE the lock is dropped. Between here and the store below the command is
+    // in flight and the HTTP side must not cancel it; `armed` alone cannot express that,
+    // which is how a timed-out request could report failure for a change that then landed.
+    held().cmd.taken = true;
     local = held().cmd;
   }
   bool ok = true;
@@ -680,9 +703,15 @@ inline void pump() {
   apply_command(local, ok, note);
   esphome::LockGuard guard(held().lock);
   held().cmd.armed = false;
+  held().cmd.taken = false;
   held().cmd.ok = ok;
   held().cmd.note = note;
   held().cmd.done = true;
+  // Kept for the next page render, which is the only way the operator hears about a
+  // command that finished after their request had to give up waiting.
+  held().last.present = true;
+  held().last.ok = ok;
+  held().last.note = note;
 }
 
 /// One-shot: true once per Refresh press on the page. Main loop only.
