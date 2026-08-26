@@ -58,7 +58,7 @@ FAKE
 
 write_state() { cat > "$SCRATCH/state.json"; }
 
-run_plugin() { ONAIR_PORT="$PORT" ONAIR_LIGHT_HOST="10.0.0.5" "$PLUGIN"; }
+run_plugin() { ONAIR_PORT="$PORT" ONAIR_LIGHT_HOST="${HOSTILE_HOST:-10.0.0.5}" "$PLUGIN"; }
 title() { run_plugin | head -1; }
 
 # ---------------------------------------------------------------------------------------
@@ -148,7 +148,7 @@ out="$(run_plugin)"
 # that every parameter-position `bash=` points at our own script. Asserted directly, because
 # the weaker "does the string appear" check passes for the wrong reason.
 check "every bash= parameter points at onair"  \
-  "$(printf '%s' "$out" | grep '|' | grep -oE 'bash=[^ ]+' | grep -vc "bash=.*deploy/onair$")" "0"
+  "$(printf '%s' "$out" | grep '|' | grep -oE 'bash="[^"]+"' | grep -vc 'deploy/onair"$')" "0"
 check "no pipe survives in the message line"   "$(printf '%s' "$out" | grep 'Message:' | grep -c '|')" "0"
 check "so the message line carries no params"  "$(printf '%s' "$out" | grep -c '^Message:.*|')" "0"
 check "a newline cannot add a menu line"       "$(printf '%s' "$out" | grep -c '^second line')" "0"
@@ -163,6 +163,102 @@ write_state <<'JSON'
 JSON
 check "bad colour is dropped, not passed on"  "$(title | grep -c 'color=')" "0"
 check "and the title still renders"           "$(title | grep -c '○ Available')" "1"
+
+echo
+echo "== the host is a parameter value, so it is a command-injection surface =="
+# `light.host` is validated by the server only as a non-empty string and is writable via
+# PUT /admin/config. It lands in an `href=` PARAMETER, and SwiftBar splits parameters on
+# whitespace - so spaces in it become further parameters, including `bash=`.
+#
+# THE FIXTURE IS THE POINT. This suite already asserted "every bash= points at onair", and
+# that assertion was correct - it just never saw a hostile host, because run_plugin
+# hardcoded a safe one. An assertion is only as good as the worst input it is given.
+write_state <<'JSON'
+{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
+              "source":"auto:x","confirmed":"available","message":null},
+ "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+JSON
+out="$(HOSTILE_HOST='h bash=/bin/sh param1=-c param2=whoami terminal=false' run_plugin)"
+check "no injected bash= parameter"           \
+  "$(printf '%s' "$out" | grep '|' | grep -oE 'bash="[^"]+"' | grep -vc 'deploy/onair')" "0"
+check "the hostile host is dropped entirely"  "$(printf '%s' "$out" | grep -c 'Panel status')" "0"
+# Anchored: the settings link ends in /onair/config and matches a bare substring too.
+check "a good host is still linked"           "$(run_plugin | grep -c 'href=http://10.0.0.5/onair$')" "1"
+
+echo
+echo "== a dead renderer says so; it never goes blank =="
+# Blank IS the false OFF. Any unhandled exception, or a /usr/bin/python3 that is a stub on a
+# Mac without Command Line Tools, would otherwise emit nothing at all.
+write_state <<'JSON'
+[1, 2, 3]
+JSON
+# The fake serves whatever is in the file, so /status now answers with an ARRAY.
+out="$(ONAIR_PORT="$PORT" "$PLUGIN")"
+check "still prints a title"                  "$([[ -n "$out" ]] && echo yes || echo no)" "yes"
+check "and it is the warning, not a state"    "$(printf '%s' "$out" | head -1 | grep -c '⚠')" "1"
+
+echo
+echo "== staleness is DERIVED, never trusted =="
+# The contract defines stale as ageSeconds > 90. Reading the flag instead fails OPEN on the
+# calm side: every miss - a rename, version skew, something else on the port - reads false,
+# and false means calm.
+write_state <<'JSON'
+{"/status":  {"state":"available","busy":false,"hold":null,"ageSeconds":99999,
+              "source":"auto:x","confirmed":"available","message":null},
+ "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+JSON
+check "old evidence is stale without the flag" "$(title | grep -c 'NO DATA')" "1"
+
+write_state <<'JSON'
+{"/status":  {"state":"available","busy":false,"hold":null,
+              "source":"auto:x","confirmed":"available","message":null},
+ "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+JSON
+check "a MISSING ageSeconds is stale"          "$(title | grep -c 'NO DATA')" "1"
+
+# ...and a lying flag cannot make old evidence look fresh either.
+write_state <<'JSON'
+{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":99999,
+              "source":"auto:x","confirmed":"available","message":null},
+ "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+JSON
+check "a false stale flag does not override"   "$(title | grep -c 'NO DATA')" "1"
+
+echo
+echo "== the two payloads are two requests =="
+# A state change between them would pair one row's busy with another row's colour.
+write_state <<'JSON'
+{"/status":  {"state":"on-air","busy":true,"stale":false,"hold":null,"ageSeconds":1,
+              "source":"auto:x","confirmed":"on-air","message":null},
+ "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+JSON
+check "mismatched rows: no borrowed colour"    "$(title | grep -c 'color=')" "0"
+check "and it falls back to the row id"        "$(title | grep -c 'ON-AIR')" "1"
+
+echo
+echo "== labels are operator text, and land at column 0 =="
+write_state <<'JSON'
+{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
+              "source":"auto:x","confirmed":"available","message":null},
+ "/public/status": {"state":"available","label":"   ","bgcolor":"#0b6e2e"}}
+JSON
+# A label of three spaces is legal - the server validates length, never content - and would
+# otherwise erase the state word from the menu bar entirely.
+check "a whitespace label never empties the title" "$(title | grep -c 'available')" "1"
+
+write_state <<'JSON'
+{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
+              "source":"auto:x","confirmed":"available","message":null},
+ "/public/status": {"state":"available","label":"--Sub","bgcolor":"#0b6e2e"}}
+JSON
+# SwiftBar reads a leading `--` as a submenu child rather than a top-level line.
+# `---` is SwiftBar's own separator. What must not appear is a line starting with exactly
+# two dashes, which SwiftBar reads as a submenu child.
+check "no menu line begins with --"            "$(run_plugin | grep -cE '^--([^-]|$)')" "0"
+
+echo
+echo "== the action paths survive a checkout containing a space =="
+check "bash= values are quoted"                "$(run_plugin | grep -c 'bash="')" "3"
 
 echo
 echo "-- $PASS passed, $FAIL failed --"

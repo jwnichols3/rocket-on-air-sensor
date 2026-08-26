@@ -50,6 +50,43 @@ for verb in load unload remove submit setenv; do
 done
 
 echo
+echo "== SYNTAX IS NOT SCOPE: a truncated rule is BROADER, and visudo cannot tell =="
+# In sudoers, a command with NO arguments matches ANY arguments. So a write that stops after
+# the command path grants `launchctl bootstrap system /tmp/anything.plist` - root code
+# execution - and `visudo -cf` reports it as parsed OK. A partial write is therefore the
+# dangerous outcome, not the safe one, which is the opposite of the usual intuition.
+TRUNC="$SCRATCH/truncated"
+printf '%s\n' "$TARGET_USER ALL=(root) NOPASSWD: $LAUNCHCTL" > "$TRUNC"
+visudo -cf "$TRUNC" >/dev/null 2>&1
+check "visudo ACCEPTS the truncated rule"      "$?" "0"
+sudoers_is_narrow "$TRUNC" 2>/dev/null
+check "and the scope check REJECTS it"         "$?" "1"
+
+# The same shape, but truncated mid-list rather than at the first command.
+printf '%s\n' "$TARGET_USER ALL=(root) NOPASSWD: $LAUNCHCTL bootstrap system $PLIST_PATH, \\" > "$TRUNC"
+printf '%s\n' "  $LAUNCHCTL bootout $T" >> "$TRUNC"
+sudoers_is_narrow "$TRUNC" 2>/dev/null
+check "a short but valid rule is rejected too" "$?" "1"
+
+printf '%s\n' "$TARGET_USER ALL=(root) NOPASSWD: ALL" > "$TRUNC"
+sudoers_is_narrow "$TRUNC" 2>/dev/null
+check "NOPASSWD: ALL is rejected"              "$?" "1"
+
+printf '%s\n' "$TARGET_USER ALL=(root) NOPASSWD: $LAUNCHCTL bootstrap system *" > "$TRUNC"
+sudoers_is_narrow "$TRUNC" 2>/dev/null
+check "a wildcard is rejected"                 "$?" "1"
+
+sudoers_is_narrow "$RULE" 2>/dev/null
+check "the real rendered rule passes"          "$?" "0"
+
+echo
+echo "== render_sudoers checks the write, not just the result =="
+# An unchecked `cat >` is how a truncated rule gets written in the first place - a full disk,
+# a full /tmp. Rendering into a path that cannot be written must fail, not fall through.
+render_sudoers "$SCRATCH/no-such-dir/rule" 2>/dev/null
+check "an unwritable destination fails"        "$?" "1"
+
+echo
 echo "== the verb refuses to run unprivileged =="
 # Non-root must not silently do nothing, and must not try. It exits, so run it in a subshell.
 out="$( (cmd_sudoers) 2>&1 )"; rc=$?

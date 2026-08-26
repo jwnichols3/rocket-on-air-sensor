@@ -2018,3 +2018,57 @@ else (state, light control, API) lives on the receiver.
   test that needs no root. Installed on this host and verified narrow: `launchctl print`
   is permitted, `cat` is refused, and `onair restart` now runs with no password and no TTY.
 
+- **D-64 (2026-08-26)** **Nine defects found by an adversarial review of the same day's work,
+  four of them confirmed by reproduction before a line was changed.** Amends D-63.
+  Recorded because the *classes* recur, not because the fixes are interesting.
+  **1. An assertion is only as good as the worst input it is given.** `test-swiftbar.sh`
+  already asserted *"every `bash=` parameter points at our own script"*, and that assertion
+  was correct. It never fired, because the fixture hardcoded a safe `ONAIR_LIGHT_HOST`.
+  `light.host` is validated by the server only as a non-empty string and is writable through
+  `PUT /admin/config`; it reached an `href=` parameter without passing through `safe()`, and
+  SwiftBar splits parameters on whitespace. A host of
+  `h bash=/bin/sh param1=-c param2=whoami` produced **two working `bash=` parameters** - a
+  menu item that runs a command when clicked. The right test already existed. The wrong
+  fixture is what hid it.
+  **2. Blank output is the false OFF.** Everything accumulated into one list and was printed
+  once at the end, so ANY exception - or a `/usr/bin/python3` that is a Command Line Tools
+  stub - produced **empty stdout and a blank menu bar**. Measured: a `/status` returning a
+  JSON array gave `rc=1, stdout=''`. The `⚠` branch only ever covered "the response did not
+  parse", never "the renderer died". Now the body writes to a file and the wrapper prints a
+  warning if it is empty. (macOS ships bash 3.2, which mishandles a heredoc inside `$( )` -
+  hence a temp file rather than command substitution. Measured.)
+  **3. A trusted `stale` flag fails OPEN, on the calm side.** The plugin read
+  `status["stale"]` instead of deriving it, so every way of missing that key - a rename,
+  version skew, something else answering the port - resolved to `False`, and `False` means
+  calm. Measured: `ageSeconds: 99999` with no `stale` key drew a **calm menu bar on 27-hour
+  old evidence**. The firmware never did this: `compute_view` computes staleness and treats
+  "nothing since boot" as stale. The plugin now derives it, and a missing or non-numeric
+  `ageSeconds` is stale - of the two guesses only the calm one can be a false OFF.
+  **4. SYNTAX IS NOT SCOPE, and a truncated sudoers rule is BROADER.** `render_sudoers` did
+  not check the write's exit status, and validated only with `visudo -cf`. A write that
+  stops after the command path leaves
+  `john ALL=(root) NOPASSWD: /bin/launchctl`, which **`visudo -cf` reports as parsed OK** -
+  verified - and in sudoers a command with no arguments matches ANY arguments. That single
+  line grants `launchctl bootstrap system /tmp/anything.plist`: root code execution. A
+  partial write was the DANGEROUS outcome, not the safe one, which inverts the usual
+  intuition about truncation. Now: the write's status is checked, and `sudoers_is_narrow`
+  asserts on the bytes about to be installed - seven grants, all argument-bearing, no
+  wildcard, no `NOPASSWD: ALL` - because the scope assertions previously existed only in a
+  test, against a file the test rendered itself, never against what was being installed.
+  **Also fixed, lower:** `urlopen(timeout=)` bounds each socket operation and not the run, so
+  a drip-feeding server hung the plugin indefinitely (a wall-clock `SIGALRM` now bounds it,
+  and loopback is taken out of any proxy); the two status endpoints are two requests, so
+  presentation is used only when both agree on the row; a whitespace-only `label` erased the
+  state word from the menu bar and a leading `--` turned a line into a submenu child; the
+  emitted `bash=` path is quoted so a checkout containing a space still works; and the
+  service-control items say so when the sudoers rule is absent, rather than failing
+  invisibly with no TTY.
+  **What the reviewer found nothing in, stated because silence is not evidence:** the root
+  check on `cmd_sudoers`, the scope of the intended rule, `TARGET_USER` interpolation (only
+  read from `SUDO_USER` when already root), `hex_color`, `safe()`'s `|`/newline stripping,
+  and symlink resolution under `~/SwiftBarPlugins`.
+  **One more, worth its own line:** three assertions in the suite went stale *because of the
+  fixes* - quoting the `bash=` values broke the regex that checked them. Tests drift when the
+  code they pin changes shape, and a green suite is not proof that its assertions still mean
+  what they meant.
+

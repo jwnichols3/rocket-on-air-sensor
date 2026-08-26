@@ -434,9 +434,39 @@ EOF
 # nothing outside DEST is touched. Split out of install_sudoers so the SCOPE of the rule -
 # the thing that makes it safe to install at all - can be asserted by a test that needs no
 # root and installs nothing.
+# sudoers_is_narrow FILE - true only if every granted command carries its arguments.
+#
+# THIS IS NOT A SYNTAX CHECK, and that distinction is the whole point. `visudo -cf` accepts
+#
+#     john ALL=(root) NOPASSWD: /bin/launchctl
+#
+# as "parsed OK" - and in sudoers a command with NO arguments matches ANY arguments, so that
+# one line grants `launchctl bootstrap system /tmp/anything.plist`, which is root code
+# execution. A truncated write is therefore BROADER than the intended rule, not narrower,
+# and visudo structurally cannot tell them apart. Measured, not assumed.
+sudoers_is_narrow() {
+  local file="$1" mentions verbs
+  mentions="$(grep -oE "$LAUNCHCTL[^,]*" "$file" | wc -l | tr -d ' ')"
+  verbs="$(grep -oE "$LAUNCHCTL [a-z]+" "$file" | wc -l | tr -d ' ')"
+  # Seven grants, every one of them carrying a subcommand.
+  if [[ "$mentions" != 7 || "$verbs" != 7 ]]; then
+    echo "onair: refusing to install a sudoers rule with $mentions grants ($verbs with arguments), expected 7/7" >&2
+    return 1
+  fi
+  if grep -q '\*' "$file"; then
+    echo "onair: refusing to install a sudoers rule containing a wildcard" >&2
+    return 1
+  fi
+  if grep -qE 'NOPASSWD:[[:space:]]*ALL' "$file"; then
+    echo "onair: refusing to install a sudoers rule granting ALL" >&2
+    return 1
+  fi
+  return 0
+}
+
 render_sudoers() {
   local dest="$1"
-  cat > "$dest" <<EOF
+  if ! cat > "$dest" <<EOF
 # Managed by 'onair sudoers'. Scopes passwordless sudo to exactly the
 # launchctl subcommands the onair CLI issues against $LABEL - nothing broader.
 # Remove with: sudo rm $SUDOERS_FILE
@@ -448,8 +478,18 @@ $TARGET_USER ALL=(root) NOPASSWD: $LAUNCHCTL bootstrap system $PLIST_PATH, \\
   $LAUNCHCTL enable $T, \\
   $LAUNCHCTL disable $T
 EOF
+  then
+    # An unchecked write is how a TRUNCATED rule gets installed - out of disk, a full /tmp -
+    # and a truncated rule is the broad one. See sudoers_is_narrow.
+    echo "onair: could not write the sudoers file" >&2
+    return 1
+  fi
   if ! visudo -cf "$dest" >/dev/null 2>&1; then
     echo "onair: generated sudoers file failed visudo -cf, not installing" >&2
+    return 1
+  fi
+  # Syntax is not scope. Both, in that order, and only then is it safe to install.
+  if ! sudoers_is_narrow "$dest"; then
     return 1
   fi
   return 0
