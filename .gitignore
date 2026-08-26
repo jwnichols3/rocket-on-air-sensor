@@ -40,3 +40,4 @@ server/public/admin/index.html
 # $APPDIR/public/admin/. `sudo deploy/onair update` moves the entry point under server/,
 # after which this copy is dead and can be deleted.
 /public/admin/
+.playwright-mcp/
