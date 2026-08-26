@@ -78,6 +78,60 @@ struct Override {
 
 using Overlay = std::vector<Override>;
 
+/**
+ * How the device-served PAGES look (D-70). Not how the glass looks.
+ *
+ * This is the one place the distinction has to be airtight, because "theme" is a word that
+ * invites exactly the wrong assumption on a device whose whole job is rendering a state.
+ * A skin changes the stylesheet the browser gets. It has no path to `compute_view()`, no
+ * path to the display lambda, and no vote in which SHAPE is drawn - luminance still picks
+ * the double frame from the open ring, and nothing here can alter that.
+ *
+ * Stored on the DEVICE rather than in the browser, for the same reason the overlay is: it
+ * describes this panel. An appearance living in one browser's localStorage would mean the
+ * panel looks different depending on who opened it, with no way to see what it is set to.
+ * The accepted cost is that it is shared - one person's choice changes it for everyone.
+ */
+enum class Skin : uint8_t { TABLE = 0, COLORFUL = 1, TECHNICAL = 2 };
+enum class Mode : uint8_t { DARK = 0, LIGHT = 1 };
+
+struct Appearance {
+  Skin skin{Skin::TECHNICAL};
+  Mode mode{Mode::DARK};
+};
+
+/// The attribute values the stylesheet keys on. Kept next to the enums so a new skin cannot
+/// be added without a name, and returning a fixed literal for an out-of-range value means a
+/// corrupted NVS byte degrades to a working page rather than an empty attribute.
+inline const char *skin_name(Skin s) {
+  switch (s) {
+    case Skin::TABLE:
+      return "table";
+    case Skin::COLORFUL:
+      return "colorful";
+    default:
+      return "technical";
+  }
+}
+
+inline const char *mode_name(Mode m) { return m == Mode::LIGHT ? "light" : "dark"; }
+
+/// Parses a posted value. Returns false for anything unrecognised rather than falling back
+/// to a default: a POST naming a skin this firmware does not have is a caller error, and
+/// storing something else while reporting success is how a setting silently does nothing.
+inline bool parse_skin(const std::string &text, Skin &out) {
+  if (text == "table") { out = Skin::TABLE; return true; }
+  if (text == "colorful") { out = Skin::COLORFUL; return true; }
+  if (text == "technical") { out = Skin::TECHNICAL; return true; }
+  return false;
+}
+
+inline bool parse_mode(const std::string &text, Mode &out) {
+  if (text == "dark") { out = Mode::DARK; return true; }
+  if (text == "light") { out = Mode::LIGHT; return true; }
+  return false;
+}
+
 /// Not a resource limit - the whole record is under a kilobyte. It is the size of a table
 /// somebody edits by hand, and a bound is what lets the NVS record be a fixed-size POD.
 inline constexpr size_t MAX_OVERRIDES = 8;
@@ -91,7 +145,7 @@ inline constexpr size_t MAX_OVERRIDES = 8;
  * correct task to make wait: the loop that drives the display never stops for a browser.
  */
 struct Command {
-  enum Kind : uint8_t { NONE = 0, SAVE, CLEAR, CLEAR_ALL, REFRESH };
+  enum Kind : uint8_t { NONE = 0, SAVE, CLEAR, CLEAR_ALL, REFRESH, APPEARANCE };
   Kind kind{NONE};
   std::string id;
   std::string label;
@@ -103,6 +157,9 @@ struct Command {
   bool has_label{false};
   bool has_color{false};
   bool has_bgcolor{false};
+  /// Only meaningful for APPEARANCE. Validated on the HTTP side before staging.
+  Skin skin{Skin::TECHNICAL};
+  Mode mode{Mode::DARK};
   bool armed{false};
   /// TRUE once the main loop has taken a copy and is applying it. The HTTP side uses this
   /// to tell "not started yet" from "in flight": only the first can be safely cancelled.
@@ -175,10 +232,16 @@ struct Held {
 
   /// The local presentation overlay (#33). Persisted, unlike the table - see save_overlay.
   Overlay overlay;
+  /// How the served pages look (D-70). Persisted. Nothing to do with the glass.
+  Appearance appearance;
   /// Mirrors of the two entity values the device-served page needs. The page runs on the
   /// httpd task and cannot reach an ESPHome `id()`; the main loop publishes them here.
   std::string key;
   uint32_t last_write_ms{0};
+  /// The diagnostics band the glass draws (y>=49). Mirrored for the same reason as `key`:
+  /// the page runs on the httpd task and cannot reach an ESPHome `id()`.
+  std::string ip;
+  std::string db;
   /// Staged page action, and the one-shot flag that asks the main loop to run the pull.
   Command cmd;
   LastResult last;
@@ -451,6 +514,64 @@ inline void load_overlay() {
   held().overlay = std::move(next);
 }
 
+/// Its own record, not a field bolted onto StoredOverlay. Bumping OVERLAY_MAGIC to add a
+/// byte would discard every stored override on the upgrade, and an appearance is not worth
+/// that. Separate keys also mean a corrupted appearance cannot take the overrides with it.
+struct StoredAppearance {
+  uint16_t magic;
+  uint8_t skin;
+  uint8_t mode;
+};
+
+inline constexpr uint16_t APPEARANCE_MAGIC = 0x3401;
+
+inline esphome::ESPPreferenceObject &appearance_pref() {
+  // First CALL, not static-init. Same reasoning as passphrase_pref().
+  static esphome::ESPPreferenceObject pref =
+      esphome::global_preferences->make_preference<StoredAppearance>(0x0A17C341);
+  return pref;
+}
+
+/// A record this firmware does not recognise leaves the built-in default in place, which is
+/// dark/technical - a working page. Out-of-range bytes are refused the same way, because a
+/// skin index that does not exist would render an attribute the stylesheet has no rule for.
+inline void load_appearance() {
+  StoredAppearance stored{};
+  if (!appearance_pref().load(&stored))
+    return;
+  if (stored.magic != APPEARANCE_MAGIC || stored.skin > 2 || stored.mode > 1) {
+    ESP_LOGW("onair", "appearance record not recognised (magic %04x) - using the default",
+             stored.magic);
+    return;
+  }
+  held().appearance.skin = (Skin) stored.skin;
+  held().appearance.mode = (Mode) stored.mode;
+  ESP_LOGI("onair", "appearance: %s / %s", skin_name(held().appearance.skin),
+           mode_name(held().appearance.mode));
+}
+
+/// Read back and verified, for the same reason save_overlay is: ESPHome's save() only
+/// QUEUES, and a blob write can fail on page fragmentation with space apparently free.
+inline bool save_appearance(std::string &note) {
+  StoredAppearance stored{};
+  stored.magic = APPEARANCE_MAGIC;
+  stored.skin = (uint8_t) held().appearance.skin;
+  stored.mode = (uint8_t) held().appearance.mode;
+  if (!appearance_pref().save(&stored)) {
+    note = "could not stage the appearance for saving";
+    return false;
+  }
+  esphome::global_preferences->sync();
+  StoredAppearance check{};
+  if (!appearance_pref().load(&check) || check.magic != APPEARANCE_MAGIC ||
+      check.skin != stored.skin || check.mode != stored.mode) {
+    note = "the appearance did not read back - it is not stored";
+    return false;
+  }
+  note = "appearance saved";
+  return true;
+}
+
 /**
  * Writes the overlay to NVS and PROVES it landed. Never assumes.
  *
@@ -625,10 +746,13 @@ inline void install_table(Table &next, const std::string &version, const std::st
 }
 
 /// Mirrors the two entity values the page needs into `held()`. Main loop only.
-inline void publish_context(const std::string &key, uint32_t last_write_ms) {
+inline void publish_context(const std::string &key, uint32_t last_write_ms,
+                            const std::string &ip, const std::string &db) {
   esphome::LockGuard guard(held().lock);
   held().key = key;
   held().last_write_ms = last_write_ms;
+  held().ip = ip;
+  held().db = db;
 }
 
 /// Applies a staged command. Main loop only; the lock is held only across the mutation,
@@ -676,6 +800,17 @@ inline void apply_command(const Command &c, bool &ok, std::string &note) {
       o->has_bgcolor = c.has_bgcolor;
       o->bgcolor = c.bgcolor;
       break;
+    }
+    case Command::APPEARANCE: {
+      {
+        esphome::LockGuard guard(held().lock);
+        held().appearance.skin = c.skin;
+        held().appearance.mode = c.mode;
+      }
+      // Returns rather than breaking: the shared tail below writes the OVERLAY, and an
+      // appearance change must not rewrite that record. Two settings, two NVS keys.
+      ok = save_appearance(note);
+      return;
     }
     default:
       ok = false;

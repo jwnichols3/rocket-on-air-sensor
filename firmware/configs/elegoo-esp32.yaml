@@ -16,6 +16,7 @@ esphome:
   # component argument ever came down to.
   includes:
     - onair_table.h
+    - onair_assets.h
     - onair_page.h
   on_boot:
     # setup_priority::LATE - runs strictly after every component setup(). The template
@@ -32,6 +33,9 @@ esphome:
           // The local presentation overlay (#33). Persisted, unlike the table - a row the
           // operator renamed survives a reboot, the vocabulary it renames does not.
           onair::load_overlay();
+          // How the served PAGES look (D-70). Nothing to do with the glass - a skin has no
+          // path to compute_view() and no vote in which SHAPE is drawn.
+          onair::load_appearance();
           // Priority -100 runs after every component setup(), and web_server's is
           // WIFI - 1, so the server is up and a handler added now attaches to it live.
           onair::install_pages();
@@ -429,8 +433,13 @@ interval:
   - interval: 100ms
     then:
       - lambda: |-
+          char dbbuf[12] = "";
+          if (id(wifi_signal_db).has_state())
+            snprintf(dbbuf, sizeof(dbbuf), "%.0fdBm", id(wifi_signal_db).state);
           onair::publish_context(id(presence_key).has_state() ? id(presence_key).state : std::string(),
-                                 id(last_write_ms));
+                                 id(last_write_ms),
+                                 id(ip_address).has_state() ? id(ip_address).state : std::string("connecting..."),
+                                 dbbuf);
           onair::pump();
       - if:
           condition:
@@ -485,7 +494,21 @@ font:
     id: status_huge
     size: 30
 
+# The envelope research for #50 could establish only a FLOOR for contiguous heap - 24.7 KB,
+# because the config page's reserve() succeeds on hardware - and no ceiling. Pool A's budget
+# was therefore an estimate, and an estimate is a poor thing to have between a page and
+# abort(). This costs a few hundred bytes and turns it into a measurement.
+debug:
+  update_interval: 30s
+
 sensor:
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Largest Block"
+    fragmentation:
+      name: "Heap Fragmentation"
   - platform: wifi_signal
     name: "${friendly_name} WiFi Signal"
     id: wifi_signal_db

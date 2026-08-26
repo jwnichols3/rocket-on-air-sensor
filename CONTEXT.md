@@ -2425,3 +2425,54 @@ else (state, light control, API) lives on the receiver.
   a 1-bit panel must not be a colour that panel cannot produce; and D's "ticking fills"
   behaviour, which copies the server's hex into the named field on tick and so pins the
   server's current value as a permanent override by way of a click made to look at a picker.
+
+- **D-72 (2026-08-26)** **#50 is shipped: B's line-per-row list with A's glass emitter, the
+  grafts from C and D, and D-70's appearance - flashed to the live panel and measured on
+  it.** Numbers from the device, not from estimates:
+
+  | | before | after |
+  |---|---|---|
+  | `GET /onair/config`, 5 rows | 6,840 B | **3,151 B** |
+  | ...with an editor open | n/a | 4,846 B |
+  | `GET /onair` | 2,655 B | **904 B** |
+  | inline CSS paid per request | 1,890 B | **0** |
+  | flash assets, gzipped | none | 8,173 B, cached immutable |
+
+  **Two measurements the envelope research could not make, now made.** `debug:` went in with
+  the same flash rather than costing a second one:
+
+  - **Largest free block is 110,592 B**, heap free 233,788 B, fragmentation 52.7%. The pool A
+    budget had been 24 KB because 24.7 KB is what the old `reserve()` was *proven to survive*
+    - which is not the same as the limit. The real ceiling is over four times that. The
+    budget stays where it is: the page now needs a quarter of what it did, and headroom on a
+    board where a failed allocation is `abort()` is not worth spending for its own sake.
+  - **Flash is at 60.5%** of the 1.79 MB app slot with the assets in. Pool B has room.
+
+  **Three defects found only by looking at the device**, none of which `esphome config`, the
+  compile, or 311 passing tests could have caught, because nothing tests generated HTML:
+
+  1. `includes:` needs every header named. `onair_assets.h` was written, gzipped and correct,
+     and the build could not see it.
+  2. The row grid had four columns and the emitter writes five children, so Edit wrapped onto
+     its own line under every row.
+  3. **`.gw` is a `<span>`, and an inline box ignores `width` and `height`** - so the scaled
+     glass overflowed its container and painted over the luminance readout beneath it. One
+     `display:block`. Cheaper to fix in the stylesheet than to spend markup on a `<div>`.
+
+  A `HEAD /onair.css` returns `text/html` because the shim does not route HEAD to the
+  handler; `GET` is correct in every header. Not chased - the browser never sends HEAD for a
+  stylesheet, and the fix would be in ESPHome's shim rather than here.
+
+  **Proven on hardware after the flash:** `POST /on` returned `confirmed: "on-air"` - read
+  back from the device, not asserted - and the panel's `Render` went to `BUSY` with `RowLabel`
+  `ON AIR`. The light still works.
+
+  **The correctness mechanism is visible in the shipped output.** The `unknown` row renders
+  `hatch 26`, not `block`, because the firmware writes `Shape`'s own integer into
+  `data-shape` and the page never decides a shape. Three of the four prototypes got that row
+  wrong by re-deriving it.
+
+  Still open, and it was flagged before the work rather than discovered after: **`table` is a
+  genuine skin here, not a second layout.** The winning markup was already a list of lines,
+  so all three skins are pure CSS over byte-identical markup - the pages differ by 1-5 bytes,
+  which is the length of the skin's name in the attribute.
