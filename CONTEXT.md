@@ -2072,3 +2072,35 @@ else (state, light control, API) lives on the receiver.
   code they pin changes shape, and a green suite is not proof that its assertions still mean
   what they meant.
 
+- **D-65 (2026-08-26)** **The Companion transport is proven end to end, and `#46` stopped
+  being a human ticket.** Amends D-62, which established that Companion is drivable over
+  tRPC but had not yet driven anything through to the light.
+  **One `PUT /state`, four surfaces agreeing:** the server moved `intended` `on`→`off`,
+  `$(onair:intended)` in Companion followed within two seconds, the ESP32 panel drew
+  `CALM LIGHT`, and the menu bar drew the calm marker. A `generic-websocket` connection is
+  live on `rocket-clawd` against `rocket-studio-m1.local:8484`, reported `good/ok`, with the
+  server showing an established socket from `10.42.14.147`. **#44 no longer rests on an
+  assumption about the transport**, which was the entire reason D-45 gated it.
+  **Three facts that cost real time and are now written into the ticket rather than a
+  transcript.**
+  **Option values take an `ExpressionOrValue` wrapper, not a bare scalar.**
+  `"value":"intended"` fails; `"value":{"value":"intended","isExpression":false}` succeeds.
+  Verified against `EntitiesTrpcRouter.ts:194` and `shared-lib/lib/Model/Options.ts` at tag
+  v5.0.3, and it applies to every `entities.*` mutation that writes an option value.
+  **Do not probe for shapes.** tRPC returns only `Invalid or malformed input provided for
+  "<path>/mutation"` with no zod issue list, so string, boolean, number, omitted and a
+  renamed key all fail identically. The technique that works is **the minified UI bundle for
+  field NAMES, the tagged GitHub source for zod SHAPES** - names from the shipped client,
+  shapes from the versioned server. That pairing is the reusable part.
+  **`newType: "button"` silently creates nothing** and returns no error. The literal is
+  `button-layered`.
+  **What is still assumed, and is flagged as such:** the button's *colour* has not been made
+  to follow the variable. The variable half is observed; the style half needs the internal
+  `variable_value` feedback plus a layered style override, and on a `button-layered` control
+  the style is an override rather than a flat style. Nobody has run that path.
+  **Confirmed by observation, not just by reading source:** `$(genericwebsocket:intended)`
+  cannot exist. Before the feedback was added the connection published only
+  `lastDataReceived`. A payload variable appears only when a `websocket_variable` feedback
+  names a JSON path, the operator chooses its NAME, and the prefix is the **connection
+  label**. `docs/companion-setup.md` is wrong on both counts and is corrected as part of #44.
+
