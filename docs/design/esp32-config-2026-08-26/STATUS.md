@@ -25,7 +25,7 @@ at every step boundary, not at the end.
 | 11 | OTA flash + capture the real page from the device | not started |
 | 12 | Prove the light still works | not started |
 | 13 | Decisions into `CONTEXT.md` | not started |
-| 14 | Discord DM readout | not started |
+| 14 | Discord DM readout | channel proven, kickoff sent |
 
 ## Artifacts
 
@@ -53,6 +53,16 @@ Copied from #50 so this file stands alone:
 - Auth stays `add_handler()` + the browser's credential prompt (D-57). No form, no cookie.
 - No external assets. Everything inline.
 - The 1-bit consequence stays visible: `luminance(bgcolor) >= 128` picks the calm SHAPE.
+
+## Corrections made to this bench
+
+- **2026-08-26.** `SAMPLE-DATA.md` and `BRIEF.md` first stated the firmware's luminance
+  formula as `(54*r + 183*g + 19*b) >> 8`. That was invented. The real one is
+  `onair_table.h:291`, Rec.601 and truncating: `(299u*r + 587u*g + 114u*b) / 1000u`. Caught
+  before the design agents ran. It mattered: every variation is asked to preview which SHAPE
+  the 1-bit glass will draw, and a preview computed from the wrong formula is exactly the
+  kind of confident lie this page must never tell. The corrected figures also now agree with
+  the display lambda's own comment (AVAILABLE 73, INTERRUPTIBLE 167).
 
 ## Decisions taken (mirror of the `CONTEXT.md` entries)
 

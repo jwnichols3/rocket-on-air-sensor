@@ -2205,3 +2205,31 @@ else (state, light control, API) lives on the receiver.
   `confirmed: on-air` and `confirmed: available`, which is read back from the device itself.
   Log lines from a reboot window look exactly like a broken credential.
 
+
+- **D-68 (2026-08-26)** **The panel config page is being redesigned as presentation only:
+  the wire contract is frozen, and the POST handler is not being rewritten.** Rocket called
+  `/onair/config` "a simple list of fields and configurations and completely inelegant"
+  (#50). He is right about the page and it is worth fixing - but the thing that is wrong
+  with it is the *rendering*, not the model. The model has already been argued to a good
+  place and each piece of it was paid for: presentation-only overlay (#33), the three-outcome
+  `submit()` (D-64), the Origin check (D-66), the row cap that announces itself (D-66), the
+  browser's own credential prompt instead of a form (D-57).
+
+  So `handle_action()`, the field names (`action`, `id`, `label`, `color`, `bgcolor`), the
+  values (`save`/`clear`/`clearall`/`refresh`), and the "empty means follow the server" rule
+  all stay exactly as they are. Only `config_page()`, `render_row_form()`, `colour_field()`
+  and `page_head()` move. Rationale: a redesign that also reopens the model turns a taste
+  problem into a correctness problem, and would put every one of those decisions back on the
+  table at once for no gain the operator can see.
+
+  **The frozen contract has a trap in it, and it is the centre of this work.** "Empty means
+  follow the server" and `<input type="color">` are incompatible: a native colour input has
+  no empty state and defaults to `#000000`. Dropped in as an obvious usability win, it
+  converts "follow the server" into "override to black" on the next save of any row - a
+  silent, permanent break of the relationship the page exists to manage, on the exact control
+  a redesign is most tempted to add. Any design using a native picker has to gate it behind
+  an explicit override control. This is written down because the defect would look like an
+  improvement in review.
+
+  Recorded before the design work rather than after, so the four variations are judged
+  against a fixed target.
