@@ -124,6 +124,10 @@ verbs:
   restart              kickstart -k
   reload               bootout+bootstrap (plist/env changes; kickstart -k
                         alone does not re-read the plist)
+  sudoers               install /etc/sudoers.d/onair on its own (needs root).
+                        Scopes passwordless sudo to seven launchctl subcommands
+                        against this one label. 'install --sudoers' cannot do
+                        this on a host where the daemon is already running.
   ui [--open]           print the URLs this system serves - admin console,
                         public display, and the panel's own status page when a
                         device is configured. --open launches the console.
@@ -426,11 +430,14 @@ EOF
   rm -f "$tmp"
 }
 
-install_sudoers() {
-  local tmp
-  tmp="$(mktemp /tmp/onair.sudoers.XXXXXX)"
-  cat > "$tmp" <<EOF
-# Managed by 'onair install --sudoers'. Scopes passwordless sudo to exactly the
+# render_sudoers DEST - write the rule into DEST and syntax-check it. No privilege, and
+# nothing outside DEST is touched. Split out of install_sudoers so the SCOPE of the rule -
+# the thing that makes it safe to install at all - can be asserted by a test that needs no
+# root and installs nothing.
+render_sudoers() {
+  local dest="$1"
+  cat > "$dest" <<EOF
+# Managed by 'onair sudoers'. Scopes passwordless sudo to exactly the
 # launchctl subcommands the onair CLI issues against $LABEL - nothing broader.
 # Remove with: sudo rm $SUDOERS_FILE
 $TARGET_USER ALL=(root) NOPASSWD: $LAUNCHCTL bootstrap system $PLIST_PATH, \\
@@ -441,13 +448,46 @@ $TARGET_USER ALL=(root) NOPASSWD: $LAUNCHCTL bootstrap system $PLIST_PATH, \\
   $LAUNCHCTL enable $T, \\
   $LAUNCHCTL disable $T
 EOF
-  if ! visudo -cf "$tmp" >/dev/null; then
+  if ! visudo -cf "$dest" >/dev/null 2>&1; then
     echo "onair: generated sudoers file failed visudo -cf, not installing" >&2
+    return 1
+  fi
+  return 0
+}
+
+install_sudoers() {
+  local tmp
+  tmp="$(mktemp /tmp/onair.sudoers.XXXXXX)"
+  if ! render_sudoers "$tmp"; then
     rm -f "$tmp"
     exit 1
   fi
   sudo install -o root -g wheel -m 0440 "$tmp" "$SUDOERS_FILE"
   rm -f "$tmp"
+}
+
+# The rule on its own, without reinstalling the service.
+#
+# WHY THIS IS A VERB. `install --sudoers` was the only way to get the rule, and on an
+# already-installed host it CANNOT WORK: cmd_install runs `launchctl bootstrap` first,
+# bootstrap on a loaded service exits non-zero, sudo_launchctl does not tolerate that, and
+# the script runs under `set -e`. So the rule was unreachable on exactly the machine that
+# needed it - the one where the daemon is already running.
+cmd_sudoers() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    echo "onair: sudoers: needs root - run 'sudo onair sudoers'" >&2
+    exit 1
+  fi
+  local had=no
+  [[ -f "$SUDOERS_FILE" ]] && had=yes
+  install_sudoers
+  if [[ "$had" == yes ]]; then
+    echo "onair: rewrote $SUDOERS_FILE"
+  else
+    echo "onair: wrote $SUDOERS_FILE"
+  fi
+  echo "onair: scoped to seven launchctl subcommands against $LABEL, nothing broader"
+  echo "onair: remove with: sudo rm $SUDOERS_FILE"
 }
 
 cmd_setup() {
@@ -963,6 +1003,7 @@ case "$verb" in
   reload) cmd_reload ;;
   status) cmd_status ;;
   ui) cmd_ui "${1:-}" ;;
+  sudoers) cmd_sudoers ;;
   logs) cmd_logs "${1:-}" ;;
   reset-state) cmd_reset_state ;;
   disable) cmd_disable ;;
