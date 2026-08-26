@@ -2381,6 +2381,41 @@ else (state, light control, API) lives on the receiver.
   trusts it, and the two entrants that scored best on truthfulness are exactly the two that
   went and checked.
 
+  **CORRECTION, same day, before implementation.** The sentence above calling A "font-exact
+  on every branch" repeated A's own claim, and the judges repeated it too. **A's geometry was
+  wrong when it was judged, and I screenshotted and shipped that version to Rocket.** The
+  design workflow's audit stage finished *after* the judging had already run against the
+  files, and it found the defect by rendering each glass at 1:1 and decoding the PNG pixel by
+  pixel rather than by looking:
+
+  - **`*{box-sizing:border-box}` does not match pseudo-elements**, and `box-sizing` is not
+    inherited. Every `.g::before` therefore fell back to `content-box`, so the open ring
+    rendered **58 px across centred at (70.5, 30.5)** instead of 44 px at (64, 24), and put
+    lit pixels at **y=52..60 - inside the diagnostics band the firmware reserves and never
+    overdraws**. The double frame rendered 130x50, losing its right outer edge to
+    `overflow:hidden` and merging its bottom edge into the band rule. The fix is one
+    selector: `*,::before,::after{box-sizing:border-box}`, re-verified with the same pixel
+    harness.
+  - A's colour mirror was **seeded with the server's value and copied it unconditionally on
+    any `input` event**, so merely opening the picker - or previewing and cancelling, which
+    Firefox fires `input` for and macOS NSColorPanel offers no cancel from - pinned the
+    server's current value as a permanent override. This is D-68's trap entered through a
+    third door: the picker was correctly unnamed, and that was not sufficient.
+  - A's per-row "Follow server" button sat inside the same form as the `pattern`-validated
+    hex fields with no `formnovalidate`, so a half-typed hex blocked **the one control that
+    puts the row back**.
+
+  **All three land on the shipped page, because D-71 grafts A's emitter.** The box-sizing
+  defect in particular would have gone into the firmware as a glass that overdraws the
+  reserved band - a miniature claiming to be the panel while drawing something the panel
+  cannot. The graft carries the *repaired* geometry, the guarded mirror that writes `''`
+  when the picked colour equals the server's, and `formnovalidate` on every clear control.
+
+  **The process lesson is the reusable part:** the judging read files that a repair stage was
+  still writing. Screenshot and judge against a frozen artifact, or wait for the whole
+  pipeline, because "verified" from a designer about its own work is a claim, and the pixel
+  harness is what turned three of those claims over.
+
   Grafted from the runners-up: C's counting pass, which also hands `reserve()` an **exact**
   size instead of a worst-case guess; C's server-vs-panel miniature pair on flipped rows;
   C's PENDING wording, the only one that says the page *body* is unconfirmed rather than

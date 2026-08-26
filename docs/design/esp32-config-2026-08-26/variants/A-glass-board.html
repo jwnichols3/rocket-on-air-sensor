@@ -290,19 +290,35 @@ BYTES: html=10785 css=8589 js=2154 total=21528
   only proven to 24.7 KB. See C++ COST for the two ways down and why the number has to be
   measured before this ships.
 
-COLOUR TRAP: solved by giving the native picker no name. Each colour is a pair - an
-<input type=color> carrying NO name attribute, and beside it the text input that actually
+COLOUR TRAP: solved in two parts. (1) The native picker has no name. Each colour is a pair -
+an <input type=color> carrying NO name attribute, and beside it the text input that actually
 carries name=color / name=bgcolor, with pattern="#[0-9a-fA-F]{6}" and the server's value as
 its placeholder. The picker is a viewfinder that writes into the text input; it is
 structurally incapable of posting anything, with or without JavaScript, so it can never turn
 "follow the server" into "override to black". Empty text field still means follow the
-server, exactly as today. The "follow" button beside each field blanks the text input and
+server, exactly as today.
+(2) The mirror is guarded, because part 1 alone is not enough. The picker is SEEDED with the
+server's value, so an unguarded mirror would write that value into the posting field on any
+input event - and browsers whose colour dialog previews live (Firefox on Win/Linux) fire
+input during a preview the operator then cancels, while macOS NSColorPanel has no cancel at
+all. So the handler compares against the server value and writes '' - follow the server -
+when they match, and does not mark the card dirty when nothing changed. Picking the server's
+own colour on a row that HAS an override therefore clears the override rather than pinning
+it, which is the same thing the "follow" button does. That button blanks the text input and
 re-syncs the picker to the server's value; the row's "Follow server" button is the real
-action=clear submit. VERIFIED in headless Chrome on this file: all ten colour pickers report
-name=null; the interruptible row posts id/label/color/bgcolor and nothing else; after
-"follow" it posts bgcolor=""; a row with no override posts label="" color="" bgcolor="";
-there is no element named busy anywhere on the page; there are zero src/href/img/iframe
-references, so nothing is fetched.
+action=clear submit, and it carries formnovalidate so a half-typed hex ("6a0dad", no #) in
+the same form cannot block the one control that puts the row back. Save deliberately keeps
+validation.
+VERIFIED in headless Chrome on this file: all ten colour pickers report name=null; a row
+with no override posts label="" color="" bgcolor=""; firing input on an untouched picker
+with its own seeded value leaves color="" and leaves the card NOT dirty; a real change posts
+color="#ff0000" and marks it dirty; picking the server value back returns it to color="";
+on the interruptible row (bgcolor override #3b5bdb, server #e8a317) picking #e8a317 posts
+bgcolor=""; after "follow" it posts bgcolor="" and the picker resyncs to #e8a317; with
+"6a0dad" typed into the recording row, form.checkValidity() is false, Save is blocked by the
+browser (invalid event on bgcolor) and Clear still submits action=clear. There is no element
+named busy anywhere on the page; there are zero src/href/img/iframe references, so nothing
+is fetched.
 
 NO-JS: everything the page exists to do still works. All five miniatures, the shapes, the
 label text, the label font size (30px bold at <=8 characters, 14px above - and 11px in the
@@ -320,10 +336,11 @@ re-derives it from the same numbers.
 C++ COST: moderate, with one honest problem.
   EASY: a whole glass is <i class=g data-shape=N><b>LABEL</b><s></s></i> - about 62 bytes,
   one append, no per-shape branching in the emitter. Every primitive is a CSS ::before keyed
-  on [data-shape]: the double frame is one 1px border plus a two-layer inset box-shadow
-  (verified to land lit pixels at x=2..3/125..126 and y=2..3/45..46, which is exactly
-  rectangle(2,2,124,44)); the open ring is one 7px border on a 44px circle at (42,2), which
-  is filled_circle(64,24,22) minus filled_circle(64,24,15); the hatch is a
+  on [data-shape]. All of these depend on border-box sizing reaching pseudo-elements, which
+  `*` alone does NOT do - the selector list is `*,::before,::after`, and getting that wrong
+  silently inflated the ring to 58px and pushed it into the reserved band. The double frame
+  is one 1px border plus a two-layer inset box-shadow; the open ring is one 7px border on a
+  44px box at (42,2); the hatch is a
   repeating-linear-gradient at the same 4px pitch. Text drawn COLOR_ON over a lit shape
   disappears for free because both are var(--lit), which is what the real panel does when it
   ORs pixels. The diagnostics band is one empty <s>, with the IP and dBm strings injected
@@ -350,7 +367,31 @@ C++ COST: moderate, with one honest problem.
   ALSO: the miniature uses Roboto if the operator's machine has it and Arial/Helvetica
   otherwise - no web font is fetched, so on a machine without Roboto the glass text is
   metrically close but not identical to the panel's. The shapes, coordinates and font SIZES
-  are exact.
+  are as stated in PIXELS below - exact for every shape except a 1px shortfall on the ring's
+  far edge, which is called out there rather than glossed.
+
+PIXELS: the shape claims above are not eyeballed. Each glass was rendered at 1:1 from this
+file's own <style> in headless Chrome, screenshotted at 128x64, and the PNG decoded pixel by
+pixel; a pixel counts as lit if it is close to var(--lit). Measured, against
+firmware/configs/elegoo-esp32.yaml:
+  shape 1 CALM HEAVY   col x=20 lit y=[0, 2, 45, 47]; row y=24 lit x=[0, 2, 125, 127]
+                       = rectangle(0,0,128,48) + rectangle(2,2,124,44), yaml:653-654. Exact.
+  shape 2 CALM LIGHT   row y=24 lit x=[42..48, 79..85]; col x=64 lit y=[2..8, 39..45]
+                       vs filled_circle(64,24,22) minus filled_circle(64,24,15), yaml:659-660.
+                       Ring THICKNESS is 7px and the origin is (42,2), both exact; the outer
+                       span is 44px where the firmware's is 45 (2r+1), so the ring is one
+                       pixel short on its right and bottom edge. A CSS box has an even
+                       extent and cannot centre on a pixel; 44 was chosen over 46 so the
+                       shape never grows past the firmware's own footprint.
+  shape 0 BUSY         col x=64 lit y=[0..47]; row y=24 lit x=[0..127]
+                       = filled_rectangle(0,0,128,48). Exact.
+  shape 3 NO DATA      col x=0 lit y=[0..14]; row y=7 lit x=[0,4,8,12,...] - 4px pitch. Exact.
+  shape 4 UNKNOWN KEY  col x=64 lit y=[0..15, 40..47] = the 16px header block plus the
+                       hatch at y=40..47. Exact.
+  RESERVED BAND: with the <s> removed, shapes 0-4 put ZERO lit pixels at or below y=49. That
+  is the property that matters - yaml:571 declares y>=49 reserved for diagnostics and never
+  overdrawn - and it is checked per shape, not assumed. With the <s> present the only lit
+  rows below the block are y=49 (the band's own rule) and y=53..60 (the IP and dBm text).
 
 GIVES UP:
   - Byte budget. See above. This is the expensive variation, and the picture is what it
