@@ -2964,6 +2964,17 @@ else (state, light control, API) lives on the receiver.
   keeps its own colours and takes a hatch. Verified on hardware rather than argued -
   `on-air` stays `BUSY` after 98 seconds without a write, `available` becomes `NO DATA`.
 
+  > **AMENDED 2026-08-27 by D-91/D-102, and the amendment is on the MEASUREMENT, not the
+  > argument.** That hardware run was real and correctly reported, and the second half of it -
+  > *`available` becomes `NO DATA` after 98 seconds without a write* - **was the bug**, not the
+  > proof. It is what `stale && !busy -> NO_DATA` did, and since the last write is routinely
+  > hours old and the server latches state, it fired on a completely healthy system.
+  >
+  > Re-measured against the latched model in D-105: `available` now stays `AVAILABLE` at 98
+  > seconds and beyond. Everything else in this decision stands - the dead branch was still
+  > dead, the glass still does not re-decide meaning, and `CALM_HEAVY`/`CALM_LIGHT` still
+  > collapse to one picture while `render_branch` reports the chosen shape.
+
   **`CALM_HEAVY` and `CALM_LIGHT` collapse to one picture on this panel.** That split exists
   only because a 1-bit display has no colour and has to pick a SHAPE by luminance; a colour
   panel just draws the row. But `render_branch` still reports the shape `compute_view` CHOSE,
@@ -3451,3 +3462,43 @@ else (state, light control, API) lives on the receiver.
   docs. It is the field an operator would most naturally reach for to answer "can I trust
   this", and it is exactly the wrong one - which is worth saying in the UI rather than only in
   a decision record.
+
+- **D-105 (2026-08-27)** **D-86's hardware run, re-measured against the latched model. The
+  panel no longer sits on NO DATA, and the number that used to decide it now visibly decides
+  nothing.** #67, the last of the D-90/D-91/D-92 work.
+
+  Live CrowPanel at `10.42.14.239`, shipped defaults (poll 1000 ms, connection-lost 60000 ms,
+  no-data 1800000 ms), server running and answering, **nothing writing state for the duration
+  of each arm**. `writeAge` is the server's `ageSeconds`; `heard` is the panel's own time since
+  the server last answered it.
+
+  | | glass | Render | mark | writeAge | heard |
+  |---|---|---|---|---|---|
+  | on-air, t+4s | ON AIR | BUSY | no | 4 s | 0 s |
+  | on-air, t+50s | ON AIR | BUSY | no | 50 s | 0 s |
+  | on-air, t+98s | ON AIR | BUSY | no | 98 s | 0 s |
+  | on-air, t+138s | ON AIR | BUSY | no | 138 s | 0 s |
+  | available, t+4s | AVAILABLE | CALM LIGHT | no | 4 s | 0 s |
+  | available, t+50s | AVAILABLE | CALM LIGHT | no | 50 s | 0 s |
+  | **available, t+98s** | **AVAILABLE** | **CALM LIGHT** | no | 98 s | 0 s |
+  | available, t+160s | AVAILABLE | CALM LIGHT | no | 160 s | 0 s |
+
+  **The bolded row is the whole ticket.** D-86 measured `available` becoming `NO DATA` at 98
+  seconds without a write. Same panel, same elapsed time, same absence of writes: it now draws
+  AVAILABLE, because the server is answering and the server latching a state is what makes that
+  state true. `writeAge` climbs to 160 s and past it while every other column stays put - the
+  number that used to decide the picture is visibly inert.
+
+  The `on-air` arm is unchanged from D-86, and that matters as much: this work did not buy the
+  calm case by weakening the busy one.
+
+  **The escalation still happens, and is keyed on the server rather than the clock.** Measured
+  separately in #65 with the thresholds set to 5 s / 15 s: held plainly to 4 s, `NOT REFRESHING`
+  from 6 s, `NO DATA` from 15 s, and back to `AVAILABLE` within one poll when the server
+  returned. Three conditions, one clock, thresholds not chained.
+
+  **The original complaint is closed.** `docs/NEXT.md` said *"the light still spends most of its
+  life showing NO DATA, because the last write is routinely hours old and THE BUSY RULE
+  correctly refuses to claim calm on stale evidence."* At the start of this session the live
+  panel read `PresenceKey: available` / `Render: NO DATA` with a healthy server. It does not any
+  more, and the rule that produced it was not correct - it was measuring the wrong thing.
