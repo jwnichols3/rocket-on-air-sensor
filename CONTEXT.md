@@ -2855,3 +2855,71 @@ else (state, light control, API) lives on the receiver.
   no `fetch` to an absolute URL, no hardcoded absolute anchor - and pins the one surviving
   scheme literal to the runtime-built link. Proven stricter, not looser: three planted hazards
   are each caught.
+
+- **D-84 (2026-08-27)** **The CrowPanel 7.0" joins the Elegoo board as a second renderer and
+  becomes the primary glass. Its 4MB flash, not its size, is what constrains the design.**
+
+  The hardware is an Elecrow CrowPanel ESP32-S3 HMI Display Module, **SKU DIS08070H**: 7.0
+  inch, 800x480, GT911 capacitive touch, on an **ESP32-S3-WROOM-1 N4R8**. Confirmed on the
+  bench rather than taken from the listing - `esptool flash-id` reports revision v0.2,
+  embedded 8MB PSRAM, and a GigaDevice `c8 4016`, which is **4MB** of quad-mode flash.
+  (Rocket's note said 5 inch; the board's own splash screen says 7.0, and the SKU agrees.)
+
+  **It adds to the OLED panel rather than replacing it**, and is the one to look at. D-63
+  already makes renderers dumb and plural, so a second one costs no new state model. What it
+  does cost is real and is deferred to stage 3 of #57: `light.host` is a single string
+  (`server/src/config.ts`) and `makeDriver` builds exactly one `EsphomeTextDriver`
+  (`server/src/index.ts`). **State is pushed to one host; only the table is pulled.** So a
+  second panel does not work by being plugged in, and the open question it raises - what
+  `confirmed` means when one panel takes a write and the other does not - is a THE BUSY RULE
+  (D-32) question, not a plumbing one. The safe answer is not "average".
+
+  **4MB of flash means two OTA slots of 1792KB each**, and that single number decides the
+  rendering approach: **no LVGL.** What this panel has to draw is five shapes and some text,
+  which is not what a widget toolkit is for, and the toolkit is the one dependency that could
+  put the image over the slot. Measured, not estimated: the stage 1 bring-up image is
+  **993472 bytes, 55% of a slot**, with `web_server` already in it. Stage 2 adds
+  `http_request`, `json` and the three on-air headers to that.
+
+  Two board facts that cost time and are worth never rediscovering. **`flash_size: 4MB` is
+  load-bearing** - every CrowPanel example online says 16MB because they are for a different
+  board, and 16MB here gives `rst:0x3` in a boot loop with no log output at all, which reads
+  like a hardware fault. And **`logger: hardware_uart: UART0` is load-bearing**: ESPHome
+  defaults the S3 logger to `USB_SERIAL_JTAG`, the chip's native USB, which this board does
+  not expose - its USB is a CH340 wired to UART0. On the default the board runs perfectly and
+  says nothing at all on the wire, so the first serial capture looks like a board that died
+  after `entry 0x403c891c`. The config gate confirms the reason independently: it warns that
+  **GPIO19 and GPIO20 are the USB-Serial-JTAG pins**, and this board wires the GT911's I2C
+  bus to them. The native USB port is not merely unexposed here, it is spent.
+
+  **Touch does not work on this unit, and the received wisdom about why is wrong here.** Every
+  write-up says the same two things: the GT911's address is latched at power-on so it is
+  `0x5D` or `0x14`, and the PCA9557 I/O expander must be left alone because resetting the
+  GT911 through it is how people break touch. An I2C scan on this board answers with **exactly
+  one device: `0x18`, which is the PCA9557 itself.** The GT911 does not answer at either
+  address, so this is not the address lottery - the touch controller is sitting in reset
+  behind the expander nobody is supposed to touch. The same expander also drives the
+  backlight, so experimenting costs a lit panel.
+
+  **So touch is not declared at all**, which is a decision and not an omission. Declaring it
+  makes ESPHome mark the component FAILED at every boot and plants a permanent error in the
+  log that is not the error anyone will be looking for. An on-air panel is a **renderer**
+  (D-63) and the Elegoo board has no touch whatsoever, so nothing in the product needs it.
+  Tracked on #57 rather than half-built.
+
+  **A full repaint of this panel costs ~150ms**, measured - ESPHome warns about it every
+  frame at `update_interval: 1s`. The Elegoo board repaints a 128x64 OLED every 500ms and
+  nobody notices. 800x480 is 47 times the pixels, so stage 2 must **repaint on state change
+  rather than on a timer**, or the panel spends a sixth of its loop pushing an identical
+  frame while also serving HTTP.
+
+  One procedural trap, mine rather than the board's: **ESPHome's safe_mode rolls an OTA back
+  if the board reboots before the boot is marked good.** Hard-resetting over RTS to read the
+  boot log immediately after flashing rolled the device back to the previous app partition,
+  and the previous build's errors reappeared - which reads exactly like a fix that did not
+  take. Wait out the window, or verify over HTTP instead of resetting.
+
+  Pin map and timings come from `esphome/esphome-devices` PR #1494, which documents this exact
+  SKU. **The CrowPanel 5.0" numbers on `devices.esphome.io` are not interchangeable** despite
+  being the same resolution: that page assigns the same physical pins to different colour
+  channels and swaps `de_pin` with `vsync_pin`.

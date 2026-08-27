@@ -7,7 +7,12 @@
 
 ESPHOME := .venv/bin/esphome
 BUILDER := .venv/bin/esphome-device-builder
-CONFIG := configs/elegoo-esp32.yaml
+# EVERY board YAML, not just the first one. A gate that validates half the firmware
+# while reporting success is worse than no gate (#57).
+CONFIGS := configs/elegoo-esp32.yaml configs/crowpanel-7.yaml
+# The default board for the single-board targets below (compile, flash, logs).
+# Override on the command line: make compile CONFIG=configs/crowpanel-7.yaml
+CONFIG ?= configs/elegoo-esp32.yaml
 
 setup:
 	uv sync
@@ -20,7 +25,8 @@ config:
 	@test -f configs/secrets.yaml || { \
 	  echo "firmware: configs/secrets.yaml missing - copy configs/secrets.yaml.example and fill it in." >&2; \
 	  echo "          It is gitignored; it holds the D-17 device credentials." >&2; exit 1; }
-	$(ESPHOME) config $(CONFIG)
+	@for c in $(CONFIGS); do echo "--- $$c"; $(ESPHOME) config $$c >/dev/null || exit 1; done
+	@echo "firmware: all board configs valid"
 
 # Kept as an alias: `validate` is what the lab repo called this.
 validate: config
