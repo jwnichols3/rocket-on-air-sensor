@@ -2682,3 +2682,97 @@ else (state, light control, API) lives on the receiver.
   collapses whitespace, which is right for a menu line and wrong for a lookup key.
 
   `/public/status` is no longer read by the plugin at all.
+
+- **D-78 (2026-08-27)** **The admin console's `light` block is called "Device connection" on
+  screen. The glossary keeps "on-air light" for the thing itself.**
+
+  Rocket, looking at the console: *"there is a section called light. that word doesn't make
+  sense in this context."* He is right, and the reason is worth writing down because it is a
+  recurring trap in this repo.
+
+  **"On-air light" is the correct glossary word for the object** and is not being retired. But
+  the four fields under that heading - `host`, `entity`, `username`, `password` - are not
+  about the light. They are about **how the server reaches it**. Naming a section after the
+  noun when its contents are about the *link to* the noun is what made the heading read as a
+  category error: next to Status, States, Admin and Network, "Light" promises the light's
+  settings and delivers a connection string.
+
+  This is a **screen label, not a domain word.** Nothing in the wire contract, the config
+  document, the code or the glossary is renamed - the JSON key stays `light`, and
+  `docs/agents/domain.md`'s entry stands. The banned-words list is untouched. What changes is
+  one `<h2>` and one rail entry.
+
+  Considered and rejected: **"Panel"**, which `deploy/swiftbar/README.md` already uses for the
+  ESP32's own pages. It is shorter and it is already in circulation, but adopting it in the
+  console would promote a README's convenience word into the operator-facing vocabulary
+  alongside "on-air light", giving one object two names in two UIs. One name per thing.
+
+- **D-79 (2026-08-27)** **The environment overlay keeps winning over the config document, and
+  the console is made to say so. Truthfulness is bought in the UI, not by moving the
+  precedence.**
+
+  Rocket asked whether the ESP32 address in the console is required or informational. It is
+  **required and load-bearing**: `server/src/app.ts:373` returns no driver when
+  `light.host` is empty, and the service falls back to `NoopDriver`, which logs a line and
+  drives nothing.
+
+  It is also, on this host, **not the value in effect**. `server/src/index.ts:42` reads
+  `process.env.ONAIR_LIGHT_HOST ?? config.light.host`, and `loadEnvOverlay()` has already
+  pulled `~/.onair/config.env` into the environment - where all four device variables are set.
+  So all four fields render as editable text boxes that the running service is ignoring. Typing
+  a new address, staging it and saving it succeeds, reports success, and changes nothing about
+  where state is sent. Both values happen to read `10.42.12.77` today, so this is a trap rather
+  than an outage.
+
+  **The precedence is not the bug.** It is D-14's rule, deliberately preserved when D-36
+  retired `config.env` as the config *source*, and it is the documented way to point a box at a
+  different light over SSH when its own UI cannot be reached. Reversing it to make the console
+  authoritative would trade a silent lie for a missing escape hatch.
+
+  So: a gated route reports **which keys the environment is overriding, by name only**, and the
+  console renders those fields read-only, naming the variable and the file to edit. **Names,
+  never values** - `ONAIR_LIGHT_PASS` is a device credential and D-35's shell is served
+  unauthenticated to every caller. Ticket #53.
+
+- **D-80 (2026-08-27)** **The view (simple/advanced) and the theme (light/dark) are
+  browser-local and apply instantly. They are deliberately outside the draft model.**
+
+  Rocket asked for a simple/advanced switch and a theme toggle, both as settings he chooses.
+  The obvious home is the config document, next to everything else the console edits. That is
+  the wrong home.
+
+  D-39 gives this page **three commit levels** - `editing`, `staged`, `saved` - and one Save
+  in the header that reaches the server. Putting a view preference in the document means
+  switching from simple to advanced marks the configuration dirty, increments the staged
+  count, arms the beforeunload guard, and waits for a Save. **Changing what you are looking at
+  is not a configuration change**, and making it behave like one teaches the staged count to
+  cry wolf.
+
+  The considered alternative - write it straight through to the server, bypassing the draft -
+  buys cross-machine persistence at the cost of one config route that does not obey D-39. A
+  documented exception to the commit model is a large price for a preference that is genuinely
+  per-browser anyway: the theme you want on the laptop is not obviously the theme you want on
+  the kiosk.
+
+  `localStorage`, therefore. No Save button, no round trip, no interaction with the draft at
+  all. It follows the browser, which is the right scope for both.
+
+- **D-81 (2026-08-27)** **The admin password is masked; the machine passphrase stays in
+  plaintext. The asymmetry is the point.**
+
+  Rocket asked for the admin password field to be `type="password"`, and for a note saying so
+  when it is still the shipped default. The natural next move is to mask the passphrase
+  sitting immediately above it. Deliberately not done.
+
+  The two credentials have opposite jobs. The **admin password** is typed by a human into this
+  page and nowhere else; it is never read back, so masking costs nothing. The **passphrase**
+  exists to be **read off this page and typed into other things** - the ESP32's ESPHome
+  dashboard, the Companion module's config, VCREC. Masking it adds a reveal click to every
+  client setup for no gain: the page is already behind admin credentials, so anyone who can
+  see the field can already read the config document that holds it.
+
+  The default-value note is **informational, not a nag**. `POST /admin/session` already
+  computes `nags.adminPassword` and it is `true` on the live box. The wording says *currently
+  set to the default* and stops there. Consistent with the standing position that these
+  defaults are documented and fine, like a router's - the note exists so the operator knows
+  which state they are in, not to push them out of it.
