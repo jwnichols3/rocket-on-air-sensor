@@ -34,9 +34,15 @@ persistent system-level change and belongs to the machine's owner. Not worked ar
 server  ->  ESP32 panel  ->  menu bar  ->  Companion / Stream Deck
 ```
 
-All four agreed on one button press during #44. And the light still spends most of its life
-showing `NO DATA`, because the last write is routinely hours old and THE BUSY RULE correctly
-refuses to claim calm on stale evidence.
+All four agreed on one button press during #44.
+
+**The light spending most of its life on `NO DATA` was the symptom that ended that model.**
+The last write is routinely hours old, and the server's half of THE BUSY RULE read that as
+grounds to stop asserting - so a panel with nothing wrong with it sat on NO DATA whenever
+nobody was writing. D-90/D-91/D-92 replace it: the server **latches** state and never decays
+it, and each renderer polls and judges its own **connection** - holding the last known state
+with a connection-lost mark after a minute, and falling to NO DATA only after thirty. See
+`docs/api-contract.md` §3.
 
 **CORRECTED 2026-08-26.** An earlier version of this file said that "where it lives is
 deferred by silence rather than decided". That was wrong, and it was wrong in a way that

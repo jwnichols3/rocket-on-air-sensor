@@ -11,6 +11,16 @@ been docs-only, so `git diff 2105e61..HEAD -- src test deploy` is still empty an
 src/test file:line below resolves.
 -->
 
+> **Superseded on staleness, 2026-08-27 (D-91/D-92).** Every `90` in this spec - `FRESH_S`,
+> `freshS`, the `ageSeconds <= 90` freshness bound, the device's `STALE_MS 90000` and the
+> "90 s of false green after reboot" analysis - describes a model that no longer exists. The
+> server latches and never decays state; `STALE_AFTER_S`, `stale()` and `stale` are gone from
+> the code and the wire; each renderer polls and judges its own connection, marking itself
+> unrefreshed after **1 minute** and falling to NO DATA after **30 minutes**. Treat every
+> normative `90` below as historical. The false-green invariant it was protecting is intact
+> and is now enforced at the renderer. See CONTEXT.md D-90/D-91/D-92 and
+> `docs/api-contract.md` §3.
+
 > **Superseded on the transport, 2026-08-24 (D-46).** This spec describes the device's
 > state entity as a `select` named `Presence`, driven by `EsphomeSelectDriver`. That is no
 > longer true: the entity is a `text` named `PresenceKey`, the driver is `EsphomeTextDriver`,

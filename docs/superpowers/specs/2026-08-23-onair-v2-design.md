@@ -119,6 +119,14 @@ Every load-bearing word in D-6/D-18's staleness rule was an ordering word ("lowe
 > that is stale (`ageSeconds > 90`). Moving to or staying at `busy: true` is always allowed.
 > Absence of information never renders calm.**
 
+> **The SERVER HALF of that rule was superseded on 2026-08-27 by D-91.** The last sentence -
+> *absence of information never renders calm* - survives intact and is now a rule about
+> **renderers**. Everything before it does not: the server latches, `STALE_AFTER_S` and
+> `stale` are gone, and no server path reads a clock to decide what the state IS. Each
+> renderer polls and judges its own **connection** instead, marking itself unrefreshed after
+> a minute and falling to NO DATA after thirty. See CONTEXT.md D-90/D-91/D-92 and
+> `docs/api-contract.md` §3, which are the current specification.
+
 Note what stopped needing a rule. D-18 had to special-case `dnd -> interruptible` decay as a
 new failure its own words did not cover. Under the busy rule, `busy:true -> busy:true` moves
 need no clause: they only happen on a write, and a write is fresh evidence by definition.
@@ -126,6 +134,11 @@ need no clause: they only happen on a write, and a write is fresh evidence by de
 Everything D-6 established survives: staleness is **visible, never acted on**; no TTL, no
 decay, no auto-raise; the server withholds an assertion rather than heartbeating a stale
 calm state, which is withdrawal of a liveness claim rather than a state change.
+
+*(D-91 amends the last clause only: the server no longer withholds anything on age. It
+asserts the latched state at any age, and the withdrawal-of-liveness idea moved to the
+renderer, which judges its own connection. "Visible, never acted on", no TTL, no decay and
+no auto-raise are all unchanged - D-91 strengthens them.)*
 
 ### Hold is a pin with one carve-out
 

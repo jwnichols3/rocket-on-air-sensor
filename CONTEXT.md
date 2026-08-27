@@ -3222,3 +3222,36 @@ else (state, light control, API) lives on the receiver.
   401 is a deploy bug, not a missed push, and it fails identically every time; an unplugged
   panel returns `null` from the same call and boots fine. That distinction predates D-92 and
   survives it.
+
+- **D-95 (2026-08-27)** **The contract states the client rules as CONTRACT, not as advice, and
+  the two superseded specs get banners rather than edits.** #62's shape.
+
+  `docs/api-contract.md` §3 now carries THE BUSY RULE reduced to its surviving sentence -
+  *absence of information never renders calm* - explicitly relabelled as a rule about
+  **renderers**, followed by the server latch and a new **CLIENT CONTRACT** section: the three
+  conditions, the three defaults, and the fail-closed requirement. It is written in the
+  imperative because a renderer that ignores it draws a confident calm claim on a dead link,
+  which is the failure the whole system exists to prevent - that is not a style note.
+
+  **The `~60 s heartbeat` line is deleted, and the deletion is the load-bearing part of this
+  ticket.** That sentence is what the decayed design rested on: if writers heartbeat, silence
+  is evidence, and a server may reason from it. D-90 replaces the premise - the writer retries
+  until CONFIRMED and then stops - so the contract now says so in as many words rather than
+  leaving the old convention lying around for the next client to implement.
+
+  **Two specs under `docs/superpowers/specs/` restate the 90 s rule normatively and were NOT
+  rewritten.** The 2026-08-23 v2 design gets a superseding blockquote directly under the rule
+  it states, plus an amendment note on the D-6 paragraph. The 2026-08-22 ESP32 spec gets a
+  banner at the top covering every `90` in it at once - `FRESH_S`, `freshS`, `STALE_MS 90000`
+  and the "90 s of false green after reboot" analysis. Editing them line by line would
+  falsify the record of what was decided when; a spec is a dated artefact and the banner is
+  how this repo already handles it (the D-46 transport banner on the same file is the
+  precedent being followed).
+
+  `docs/NEXT.md`'s "the light spends most of its life showing NO DATA, because THE BUSY RULE
+  correctly refuses to claim calm on stale evidence" is rewritten rather than banner-ed,
+  because it is a status page rather than a dated spec - and because that sentence describes
+  the exact symptom D-91 exists to remove.
+
+  `docs/companion-setup.md` still documents a `Stale` feedback and a `stale` variable. Left
+  deliberately for **#66**, so the operator-facing doc and the module change land together.

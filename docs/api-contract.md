@@ -71,12 +71,11 @@ One object, persisted atomically, restored on restart.
 | `confirmed` | string \| `"unknown"` | The row `id` the light acknowledged, read back from the device itself. `unknown` when the light is unreachable or the panel is not repainting. **Never guessed.** |
 | `hold` | string \| `null` | The pinned row `id`, or `null` for the **auto** regime. See §3. |
 | `source` | string | Who wrote it. `kind:label` - see §4. |
-| `updatedAt` | ISO 8601 | Time of the last state write, refreshed by idempotent repeats. |
-| `ageSeconds` | integer | Computed at read time. |
-| `stale` | boolean | `ageSeconds > 90`. Presentation, never a state change. |
+| `updatedAt` | ISO 8601 | **Provenance.** Time of the last state write, refreshed by idempotent repeats. |
+| `ageSeconds` | integer | **Provenance.** How long ago that write happened, computed at read time. |
 | `tableVersion` | integer | The table version in force. Bumped on every config save. |
 | `stateResolvedFrom` | string \| absent | Present only when the live row was deleted and the state fell back to `unknown`. Names the dead `id`. |
-| `message` | string \| `null` | Optional display message. Independent of state writes - heartbeats never touch it. |
+| `message` | string \| `null` | Optional display message. Independent of state writes - a state write never touches it. |
 
 > **PRESENTATION TRAVELS WITH THE PROFILE, NOT WITH THE STATE.**
 >
@@ -84,7 +83,7 @@ One object, persisted atomically, restored on restart.
 > row* is now current; how that row looks is in the table, which a renderer fetches from
 > `GET /config/states` on its own slow schedule. A state write happens many times an hour; the
 > table changes a few times a year. Sending the second with the first would put configuration
-> data on every heartbeat and weld presentation into the state protocol permanently.
+> data on every state write and weld presentation into the state protocol permanently.
 >
 > `busy`, `intended` and `confirmed` **do** travel with the state, and the line is deliberate:
 > they are **semantics**. `intended` is RFC 3863's carry-along - the basic status that lets a
@@ -93,6 +92,13 @@ One object, persisted atomically, restored on restart.
 >
 > The two `/public/*` endpoints are the one exception, and they are a **view**, not the state
 > contract - see §5.
+
+> **`updatedAt` AND `ageSeconds` ARE FACTS, NOT JUDGEMENTS.**
+>
+> There was a `stale` field here. It is **gone**, not renamed and not deprecated - a field
+> still called `stale` beside the real thing is a decoy the next renderer keys on. Nothing on
+> the wire tells you what an age *means*, because the server no longer decides: it reports
+> when the state was written and leaves the conclusion to you. See the client contract in §3.
 
 ---
 
@@ -108,20 +114,68 @@ the `busy` flag.
 
 ### THE BUSY RULE
 
-> **The server never moves from a `busy: true` state to a `busy: false` state, and never
-> asserts a `busy: false` state to a renderer, on the strength of evidence that is stale
-> (`ageSeconds > 90`). Moving to or staying at `busy: true` is always allowed. Absence of
-> information never renders calm.**
+> **Absence of information never renders calm.**
 
-Consequences a client should expect:
+That is the whole of it, and it is now a **rule about renderers**. It used to have a server
+half - the server refused to assert a `busy: false` state once `ageSeconds > 90`, and let the
+panel's own watchdog trip. That half is **gone**; what replaced it is below.
 
-- **Staleness is visible, never acted on.** There is no TTL, no decay and no auto-anything.
-  Only an explicit write changes state. `stale` and `ageSeconds` are for you to render.
-- What staleness *does* change is whether the server keeps asserting. Rather than heartbeat
-  a stale calm state forever, it **withholds the assertion** and lets the device's own
-  watchdog trip into NO DATA. That is withdrawal of a liveness claim, not a state change.
-- A client that writes state is expected to re-send it every ~60 s as a heartbeat. That is
-  a convention, not enforcement.
+**The server latches. It does not decay.**
+
+- While the service runs, **the state is the state**. `state`, `hold`, `source`, `updatedAt`
+  and `message` change only on an **explicit write**. No TTL, no decay, no auto-anything.
+- **The server never asserts anything about time.** It reports `updatedAt` and `ageSeconds`
+  as provenance and branches on neither. There is no server code path that reads a clock to
+  decide what the state IS.
+- The reason it can afford this: **the writer is responsible for making a write stick.** A
+  detector writes, reads back to validate, and retries until confirmed or out of time. A lost
+  write is therefore detected by the writer, not inferred by the server from silence - so
+  silence means what a state machine says it means: nothing has changed.
+- There is **no ~60 s heartbeat convention.** A client that writes state is *not* expected to
+  re-send it on a timer. Re-send until the write is CONFIRMED, then stop.
+
+### THE CLIENT CONTRACT
+
+Every renderer **polls**, and decides for itself when it has lost the server. Three
+conditions, not two:
+
+1. **Reachable** - draw the current state, plainly.
+2. **Unreachable, inside the grace window** - **keep drawing the last known state**, with a
+   visible connection-lost mark: a band, a line of text, an icon. The renderer says what it
+   last knew *and* that it is no longer being refreshed. It does not go blank and it does not
+   go calm.
+3. **Unreachable beyond the timeout and/or retry count** - **NO DATA**.
+
+Both thresholds are measured from the **last successful contact with the server**, and are
+**not chained off each other**: two independent numbers, one clock.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| poll interval | **1000 ms** (range 250..60000) | how often a renderer asks the server |
+| connection lost after | **1 minute** | mark the display as no longer refreshing; state unchanged |
+| no data after | **30 minutes** | give up on the state entirely -> NO DATA |
+
+All three are **configuration, not constants**. The two thresholds are deliberately far
+apart: a meeting runs about thirty minutes, so the state must survive a server outage for at
+least that long or the panel goes dark mid-call - while the honesty about not being refreshed
+costs nothing and should arrive immediately. There is no per-row branch: every state is
+marked unrefreshed after a minute and every state persists for thirty.
+
+**Fail CLOSED when you derive this.** Absent, malformed or unparseable input means *withhold
+calm*, never *assume calm*. This is a measured incident, not a precaution: trusting a server
+flag once drew a calm menu bar on 27-hour-old evidence.
+
+**What this covers, and what it does not.** It covers server death, network partition and
+renderer isolation - all three now produce a visible, escalating loss of confidence at the
+renderer. It does **not** cover a dead **writer**: if the detector stops while the state reads
+`available`, the server is healthy, every client polls happily, and every panel paints
+confident green. That exposure is named rather than hidden, and the fix when it is wanted is
+additive - the server reports one more *fact*, when the writer was last seen, and the client
+decides what to do with it.
+
+**Push is an optimisation, never a delivery guarantee.** On a state change the server emits
+to connected clients and does not error if one misses it; a client that misses a push gets
+the change on its **next poll**. Do not build correctness on the stream.
 
 ### THE PIN RULE
 
@@ -205,7 +259,6 @@ The full state object from §2.
   "source": "auto:vcrec",
   "updatedAt": "2026-08-23T21:04:00Z",
   "ageSeconds": 12,
-  "stale": false,
   "tableVersion": 7,
   "message": null
 }
@@ -323,7 +376,7 @@ already resolved for rendering.**
 
 ```json
 { "state":"on-air", "label":"ON AIR", "color":"#ffffff", "bgcolor":"#c1121f",
-  "busy":true, "ageSeconds":12, "stale":false, "tableVersion":7 }
+  "busy":true, "ageSeconds":12, "tableVersion":7 }
 ```
 
 `GET /public/events` is the same payload as an unauthenticated SSE stream, with the same
@@ -375,9 +428,10 @@ anything keyed to ladder rungs does not.
 ### `GET /display`
 
 A self-contained HTML tally page for kiosk use. Renders the current row's `label` on its
-`bgcolor` in its `color`, live via `/public/events`. Shows a DISCONNECTED overlay when the stream
-drops, a stale badge when `stale`, and a client-side watchdog reconnects after ~45 s of
-silence even with no socket error. Unauthenticated.
+`bgcolor` in its `color`, live via `/public/events`. It implements the §3 client contract:
+a connection-lost mark once contact lapses, the last known state held behind it, and NO DATA
+once the second threshold passes. A client-side watchdog fires on silence even with no socket
+error. Unauthenticated.
 
 ### `GET /admin/*`
 
