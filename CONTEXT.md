@@ -3108,3 +3108,48 @@ else (state, light control, API) lives on the receiver.
   the writer was last seen - and the client decides what to do with it. A fact is not a
   judgement, so it does not violate the rule above. Until then the exposure is named rather
   than hidden.
+
+- **D-92 (2026-08-27)** **Poll cadence and the two escalation thresholds, as configuration with
+  Rocket's defaults. Push survives as a best-effort NOTIFICATION; the poll is the source of
+  truth.**
+
+  **Push is an optimisation, not a delivery guarantee.** On a state change the server emits to
+  every connected client and **does not error if a client misses it**. The contract is
+  explicit: a client that misses a push gets the change on its next poll. That makes push
+  purely a latency win and removes it from the correctness argument entirely - which is what
+  lets the server stop caring whether any particular renderer is listening.
+
+  Two transports, because the hardware forces it and the split is worth writing down:
+  - **Browser renderers** already have this. `sse.ts` holds a `clients` Set, broadcasts
+    `text/event-stream`, and drops a client on close without erroring. Nothing to build.
+  - **The ESP32 cannot subscribe.** ESPHome's `http_request` is request/response on ESP-IDF;
+    the only `text/event-stream` in the component is inside the vendored `httplib.h`, which is
+    compiled for the `host` platform, not the board. Verified, not assumed. So the panel keeps
+    the existing server-initiated HTTP write - now **best effort, logged and never fatal** -
+    and its poll is what makes a missed push harmless.
+
+  **The three thresholds. All configurable; these are the defaults.**
+
+  | Setting | Default | Meaning |
+  |---|---|---|
+  | poll interval | **1000 ms** | how often a renderer asks the server |
+  | connection lost after | **30 minutes** | unreachable this long -> hold last known state, show the mark |
+  | no data after | **10 minutes beyond that** | 40 minutes total unreachable -> NO DATA |
+
+  **Milliseconds, as one bounded integer, not a menu of named speeds.** Range 250..60000,
+  default 1000. A fixed enum of 1/5/30/60s is always slightly wrong for somebody and needs a
+  code change to widen; an integer with a floor does not. It also maps straight onto an ESPHome
+  `number:` entity, so it is editable from the panel's own config page and over HTTP, and it
+  persists in NVS like every other device setting. **The floor is 250 ms and it is a measured
+  number, not a taste:** a full 800x480 repaint costs ~150 ms, so the paint must become
+  on-change before a fast poll is safe. The poll itself is cheap - a LAN round trip - so once
+  paint is on-change, 250 ms costs a few percent of the loop.
+
+  **The 30 minute hold is deliberate and Rocket's reasoning is recorded:** a meeting runs about
+  thirty minutes, so a panel that keeps saying ON AIR through a server outage is doing the
+  right thing rather than nagging. **Open, and flagged rather than settled:** that argument is
+  strongest for a BUSY row and weakest for a calm one. Holding ON AIR silently for 30 minutes
+  is a false ON, which D-32 calls the safe error. Holding AVAILABLE silently for 30 minutes on
+  a dead link is a false OFF, which it calls the error that matters. An asymmetric default -
+  busy holds 30 minutes, calm shows the mark sooner - would preserve the meeting rationale
+  exactly while removing the confident-green case. Not adopted without Rocket's say-so.
