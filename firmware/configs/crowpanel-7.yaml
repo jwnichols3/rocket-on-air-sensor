@@ -158,7 +158,9 @@ display:
       //      meaning of a state is decided here; this lambda only knows how to paint.
       onair::View view = onair::compute_view(
           id(presence_key).has_state() ? id(presence_key).state : std::string(),
-          id(last_write_ms));
+          id(last_contact_ms),
+          (uint32_t) id(connection_lost_ms).state,
+          (uint32_t) id(no_data_ms).state);
       const char *label = view.eff.known ? view.eff.row.label.c_str() : "";
 
       auto rgb = [](uint32_t c) {
@@ -209,17 +211,20 @@ display:
         it.printf(400, 150, id(label_big), ink, TextAlign::CENTER, "NO DATA");
         id(render_branch) = 3;
       } else {
-        // A ROW. Reaching here means compute_view has ALREADY applied the calm half of
-        // THE BUSY RULE (D-32): `stale && !busy` was turned into NO_DATA above, because a
-        // calm claim is the only one that can be a false OFF and a stale one is refused
-        // outright. So of the three shapes that arrive here, only BUSY can be stale, and
-        // there is no colours-withheld case for this branch to handle - the shared header
-        // already handled it, one layer down, for both renderers at once.
+        // A ROW, drawn in the operator's own colours - INCLUDING a calm one that is no
+        // longer being refreshed. That is the change D-91 makes here, and it is the whole
+        // reason this panel stops sitting on NO DATA: compute_view used to turn
+        // `stale && !busy` into NO_DATA one layer down, so a calm row on an old write was
+        // thrown away outright, and the last write is routinely hours old.
         //
-        // What is left for the GLASS to decide is the busy half, and it is deliberately
-        // asymmetric - the same shape D-82 settled for the admin console: a stale BUSY row
-        // keeps its OWN colours and takes a hatch over the top. Draining a stale ON AIR
-        // toward grey would weaken a busy signal, and a false OFF is worse than a false ON.
+        // The calm claim is still never drawn as a CONFIDENT one. Past the connection-lost
+        // threshold it takes the hatch and says so in words, and past the no-data threshold
+        // compute_view gives it up entirely. D-92 chose that over a shorter window for calm
+        // rows: mark everything at one minute, hold everything for thirty, no per-row branch.
+        //
+        // The hatch treatment itself is D-82's and is unchanged: an unrefreshed row keeps
+        // its OWN colours rather than draining toward grey, because draining weakens a busy
+        // signal and a false OFF is worse than a false ON.
         //
         // CALM_HEAVY and CALM_LIGHT collapse to one picture here. That split exists only
         // because a 1-bit panel has no colour and must pick a SHAPE by luminance; this
@@ -228,7 +233,7 @@ display:
         // is what makes two panels comparable at all (#57 stage 3).
         bg = rgb(view.eff.row.bgcolor);
         fg = rgb(view.eff.row.color);
-        hatched = view.stale;
+        hatched = view.unrefreshed;
 
         it.fill(bg);
         // A long label will not fit at 110px. Pick the size from the label, not the row.
@@ -238,7 +243,7 @@ display:
         if (hatched) {
           hatch_over(0, 400, fg);
           it.printf(400, 360, id(note_text), fg, TextAlign::CENTER,
-                    "UNCONFIRMED - SHOWING LAST KNOWN");
+                    "NOT REFRESHING - SHOWING LAST KNOWN");
         }
         id(render_branch) = (int) view.shape;
       }

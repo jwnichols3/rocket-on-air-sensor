@@ -3368,3 +3368,60 @@ else (state, light control, API) lives on the receiver.
   The Makefile now names both steps in order and says why. **The generated `main.cpp` is the
   cheap way to tell a flash that took from one that did not** - far cheaper than reasoning
   about hardware that is answering every request perfectly while running last week's code.
+
+- **D-101 (2026-08-27)** **The panel polls `GET /status`, not `GET /public/status`, and the
+  contract already decided it.** #65's one open question, answered by reading rather than by
+  choosing.
+
+  `docs/api-contract.md` §5 says of the public pair: *"A renderer that DOES hold a table must
+  not use these; it takes the state key from the gated endpoints and the look from
+  `GET /config/states`."* This panel holds a table (D-38/D-54). The public pair is a rendering
+  **view** for two browser pages that hold none, it is explicitly free to change shape to suit
+  them, and building firmware on it would couple a device that needs a reflash to a payload
+  the contract refuses to stabilise. The passphrase is already on the device for the config
+  pull, so the gated route costs nothing.
+
+  The poll reads **one field**, `state`. Not `busy` - that would put a second copy of the
+  safety flag on the device, able to disagree with the row it already holds. Not `ageSeconds`,
+  and that omission is the whole of D-91 in one line: it is provenance about the write, it
+  decides nothing, and the panel judges its own connection instead.
+
+- **D-102 (2026-08-27)** **The device half of THE BUSY RULE loses its calm clause, and that
+  clause was the single line most responsible for the panel sitting on NO DATA.**
+
+  `compute_view()` read `if (key == "unknown" || (v.stale && !v.eff.row.busy))` -> NO_DATA. A
+  calm row whose WRITE was more than 90 seconds old was refused outright. Since the last write
+  is routinely hours old and the server latches it, that condition was true nearly always: the
+  panel drew NO DATA on a completely healthy system, which is the symptom this whole line of
+  work exists to remove. Observed live at the start of this work - `PresenceKey: available`,
+  `Render: NO DATA` - and gone at the end of it.
+
+  It is replaced by `gap > no_data_ms`, measured from the last successful POLL. **The
+  protection is not weakened, it is relocated and strengthened.** A calm claim still cannot be
+  drawn as a confident one on a dead link: past `lost_ms` the row is visibly marked and says
+  in words that it is not a current reading, and past `no_data_ms` it is given up entirely.
+  What the panel may no longer do is throw away a state the server is still serving.
+
+  D-92 chose this over the asymmetric alternative - a shorter window for calm rows than busy
+  ones - and the reason it works is that the mark arrives at one minute for everything. A
+  silent false OFF is the danger; a *marked* one is not silent. D-82's asymmetric TREATMENT is
+  untouched (D-97): an unrefreshed row keeps its own colours and takes a hatch.
+
+- **D-103 (2026-08-27)** **The boot fix-up that D-22-era firmware needed is deleted, because
+  the new clock cannot have the bug it existed to patch.**
+
+  `on_boot: priority: -100` zeroed `last_write_ms`, and the comment explained why in detail: a
+  template text's `setup()` ends in `publish_state()`, which fires `on_value` unconditionally,
+  so without the zeroing a reboot left the clock reading a few hundred milliseconds and **a
+  restored `available` rendered as calm for 90 seconds with nobody behind it.** The 2026-08-22
+  ESP32 spec calls that the boot watchdog that isn't, and rates it CRITICAL.
+
+  `last_contact_ms` needs no such fix-up and cannot acquire that failure: it starts at 0 and is
+  written **only by a successful poll**. A restored entity value is not contact, a push
+  arriving is not contact, and `on_value` firing during setup is not contact. `0` is treated as
+  the largest gap there is rather than as a gap of zero, so a panel that has never heard from
+  the server draws NO DATA - by construction, not by a boot hook that has to be remembered.
+
+  This is the second time this design has removed a class of bug rather than a bug (the first
+  being D-96's fail-closed contact record). Both come from the same move: judge the thing you
+  can observe directly - your own connection - instead of a number somebody else sent you.

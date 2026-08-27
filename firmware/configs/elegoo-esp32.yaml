@@ -86,7 +86,9 @@ display:
       //      exist or which of them is busy.
       onair::View view = onair::compute_view(
           id(presence_key).has_state() ? id(presence_key).state : std::string(),
-          id(last_write_ms));
+          id(last_contact_ms),
+          (uint32_t) id(connection_lost_ms).state,
+          (uint32_t) id(no_data_ms).state);
       const char *label = view.eff.known ? view.eff.row.label.c_str() : "";
 
       // A long label will not fit at 30px. Pick the size from the label, not the row.
@@ -124,7 +126,9 @@ display:
         // point of the label being the row's and not the firmware's.
         it.filled_rectangle(0, 0, 128, 48, COLOR_ON);
         it.printf(64, 24, label_font(label), COLOR_OFF, TextAlign::CENTER, "%s", label);
-        if (view.stale) it.print(64, 44, id(status_text), COLOR_OFF, TextAlign::BASELINE_CENTER, "STALE");
+        // CONDITION 2 (D-91): the state is held, and the panel says it is not being
+        // refreshed. "NO LINK" and not "STALE" - the state is not stale, the LINK is.
+        if (view.unrefreshed) it.print(64, 44, id(status_text), COLOR_OFF, TextAlign::BASELINE_CENTER, "NO LINK");
         id(render_branch) = 0;
       } else if (view.shape == onair::Shape::CALM_HEAVY) {
         // CALM, HEAVY - double frame INSET above the band, mid ink.

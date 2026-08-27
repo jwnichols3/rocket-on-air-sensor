@@ -236,10 +236,10 @@ inline void glass(std::string &h, Shape shape, const std::string &label, bool sm
 
 inline void page_foot(std::string &h) { h += "</main></body></html>"; }
 
-inline std::string ago(uint32_t last_write_ms) {
-  if (last_write_ms == 0)
+inline std::string ago(uint32_t last_contact_ms) {
+  if (last_contact_ms == 0)
     return "never, since this panel booted";
-  uint32_t secs = (esphome::millis() - last_write_ms) / 1000;
+  uint32_t secs = (esphome::millis() - last_contact_ms) / 1000;
   char buf[48];
   if (secs < 120) {
     snprintf(buf, sizeof(buf), "%u s ago", (unsigned) secs);
@@ -267,7 +267,7 @@ struct Snapshot {
   uint32_t oks{0};
   uint32_t failures{0};
   size_t overrides{0};
-  uint32_t last_write_ms{0};
+  uint32_t last_contact_ms{0};
   /// For the glass's diagnostics band, which the status page also draws.
   std::string ip;
   std::string db;
@@ -276,14 +276,14 @@ struct Snapshot {
 inline Snapshot snapshot() {
   Snapshot s;
   esphome::LockGuard guard(held().lock);
-  s.view = compute_view(held().key, held().last_write_ms);
+  s.view = compute_view(held().key, held().last_contact_ms, held().lost_ms, held().no_data_ms);
   s.have = held().have;
   s.version = held().version;
   s.rows = held().table.size();
   s.oks = held().oks;
   s.failures = held().failures;
   s.overrides = held().overlay.size();
-  s.last_write_ms = held().last_write_ms;
+  s.last_contact_ms = held().last_contact_ms;
   s.ip = held().ip;
   s.db = held().db;
   return s;
@@ -324,10 +324,17 @@ inline std::string status_page() {
            "A pull has been triggered.";
       break;
     case Shape::NO_DATA:
-      h += "No fresh evidence for a calm state, so the panel refuses to claim one.";
+      h += "The server has not answered for long enough that the panel has given up on the "
+           "state entirely. It is not claiming anything.";
       break;
     default:
       h += s.view.eff.row.busy ? "Busy. The light is on." : "Not busy.";
+      // CONDITION 2 (D-91), said in words. The picture alone cannot tell "the state is
+      // calm" from "the last thing I heard was calm, a while ago", and that difference is
+      // the entire safety argument.
+      if (s.view.unrefreshed)
+        h += " <strong>The server is not answering, so this is the last state it reported, "
+             "not a current reading.</strong>";
       if (s.view.eff.any_override())
         h += " <span class=\"badge\">local override</span>";
       break;
@@ -346,7 +353,11 @@ inline std::string status_page() {
                                       : "<code>" + html_escape(s.view.key) + "</code>");
   row("Busy", s.view.eff.known ? (s.view.eff.row.busy ? "yes" : "no")
                                : "unknown - assumed yes");
-  row("Last state write", ago(s.last_write_ms) + (s.view.stale ? " (stale)" : ""));
+  // The panel's own connection, which is what every threshold is measured from now (D-91).
+  // "Last state write" used to be here; it was the WRITE's age, which no longer decides
+  // anything, and reporting it beside a NO DATA verdict it did not cause was misleading.
+  row("Last heard from the server",
+      ago(s.last_contact_ms) + (s.view.unrefreshed ? " - NOT REFRESHING" : ""));
   {
     char buf[64];
     if (s.have) {

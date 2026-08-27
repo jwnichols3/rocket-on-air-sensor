@@ -27,13 +27,16 @@ esphome:
     - onair_page.h
   on_boot:
     # setup_priority::LATE - runs strictly after every component setup(). The template
-    # text's setup() ends in publish_state(), which fires on_value unconditionally, so
-    # without this a reboot leaves last_write_ms at a few hundred ms and the panel shows
-    # a calm restored state for 90s with nobody behind it.
+    # text's setup() ends in publish_state(), which fires on_value unconditionally, so a
+    # restored entity value must not be able to look like evidence of anything.
+    #
+    # The zeroing that used to be here is gone with `last_write_ms` (D-91, #65). What
+    # replaced it needs no boot fix-up and cannot have this bug: `last_contact_ms` starts
+    # at 0 and is only ever set by a SUCCESSFUL POLL, so a restored `available` renders as
+    # NO DATA until the server actually answers, rather than as calm for 90 seconds.
     priority: -100
     then:
       - lambda: |-
-          id(last_write_ms) = 0;
           // Before anything can pull. The stored value wins over the compiled-in one, so
           // a rotation typed at the panel survives a reflash.
           onair::load_passphrase("${onair_default_passphrase}");
@@ -130,10 +133,6 @@ web_server:
     type: basic
 
 globals:
-  - id: last_write_ms
-    type: uint32_t
-    restore_value: false
-    initial_value: '0'
   - id: frames
     type: uint32_t
     restore_value: false
@@ -167,6 +166,29 @@ globals:
     type: bool
     restore_value: false
     # True at boot so the first frame is drawn without waiting for anything to change.
+    initial_value: 'true'
+  # ---- the client contract's clock (D-91, #65) -------------------------------------
+  #
+  # WHEN THE SERVER LAST ANSWERED THIS PANEL. Every threshold is measured from here, and
+  # this is the only clock that matters now - `last_write_ms` and its 90s STALE_MS are
+  # gone, because the age of a WRITE stopped meaning anything the moment the server
+  # started latching state (D-91). A two-hour-old `available` on a server that is
+  # answering every second is simply the state.
+  #
+  # 0 means "never heard from the server since boot", which is not a gap of zero - it is
+  # the largest gap there is, and compute_view treats it as such.
+  - id: last_contact_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  - id: last_poll_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  # What the last poll said, so a repaint is requested only when the picture would change.
+  - id: last_marked_unrefreshed
+    type: bool
+    restore_value: false
     initial_value: 'true'
 
 text:
@@ -204,10 +226,14 @@ text:
     on_value:
       then:
         - lambda: |-
-            uint32_t t = millis();
-            id(last_write_ms) = (t == 0) ? 1 : t;
             // The state moved, so the glass is now wrong. This is the trigger the whole
             // on-change paint hangs off (#64).
+            //
+            // It does NOT stamp a clock any more. A write used to set `last_write_ms`,
+            // which the 90s staleness rule was measured from; under D-91 the age of a
+            // write means nothing and only `last_contact_ms` - set by a successful POLL -
+            // decides anything. A push arriving is a happy accident, not evidence of a
+            // healthy link, because the server does not care whether it landed (D-92).
             id(repaint_pending) = true;
         # A key this table does not contain means the server moved and we are stale. Pull
         # at once rather than waiting out the interval, so the panel self-heals in one
@@ -311,6 +337,60 @@ number:
     min_value: 1
     max_value: 65535
     step: 1
+    mode: box
+
+  # ---- THE CLIENT CONTRACT'S THREE NUMBERS (D-92, #65) ------------------------------
+  #
+  # Configuration, not constants, and persisted in NVS like every other device setting -
+  # so they are editable from the panel's own config page and over HTTP, and they survive
+  # a reboot. `onair_table.h` carries the same three as compiled DEFAULTS only; the live
+  # values are these, and `publish_context` mirrors them to the device-served page so the
+  # page can never disagree with the glass beside it.
+  #
+  # MILLISECONDS, as bounded integers rather than a menu of named speeds. A fixed enum of
+  # 1/5/30/60s is always slightly wrong for somebody and needs a reflash to widen.
+  #
+  # The ceilings are not arbitrary: an ESPHome number is a float, and a float32 represents
+  # integers exactly only up to 2^24 (16,777,216). Every bound below sits under that, so a
+  # value set here is the value stored and read back, with no rounding to explain.
+  - platform: template
+    name: "PollIntervalMs"
+    id: poll_interval_ms
+    optimistic: true
+    restore_value: true
+    initial_value: 1000
+    # THE FLOOR IS 250 AND IT IS MEASURED, NOT TASTE. A full 800x480 repaint costs ~150ms
+    # and it blocks, so a fast poll was unsafe until the paint became on-change (#64,
+    # D-99: 1.0 fps -> 0.033 fps idle). The poll itself is a LAN round trip and cheap.
+    min_value: 250
+    max_value: 60000
+    step: 50
+    mode: box
+  - platform: template
+    name: "ConnectionLostMs"
+    id: connection_lost_ms
+    optimistic: true
+    restore_value: true
+    initial_value: 60000
+    # One second is a legal floor here: this threshold only ever makes the panel MORE
+    # honest, so there is no safety reason to stop someone tightening it.
+    min_value: 1000
+    max_value: 3600000
+    step: 1000
+    mode: box
+  - platform: template
+    name: "NoDataMs"
+    id: no_data_ms
+    optimistic: true
+    restore_value: true
+    initial_value: 1800000
+    # Thirty minutes by default because A MEETING RUNS ABOUT THIRTY MINUTES: the state has
+    # to survive a server outage for at least that long or the panel goes dark mid-call.
+    # The two thresholds are deliberately far apart and are measured from the same instant,
+    # NOT chained off each other.
+    min_value: 1000
+    max_value: 14400000
+    step: 1000
     mode: box
 
 switch:
@@ -439,6 +519,78 @@ script:
                                  version.c_str(), (unsigned) onair::held().table.size(),
                                  onair::held().etag.c_str());
 
+  # ---- the state poll (D-91/D-92, #65) ---------------------------------------------
+  #
+  # THE PANEL PULLS. Until now its only outbound request was the config pull, and state
+  # arrived by being PUSHED into `presence_key` - which is why this was the one renderer
+  # that could not tell "the server says calm" from "I cannot hear the server". The push
+  # survives as a best-effort notification (D-92) and this is what makes missing one
+  # harmless.
+  #
+  # `/status` AND NOT `/public/status`, and the contract already decides this: "a renderer
+  # that DOES hold a table must not use these; it takes the state key from the gated
+  # endpoints and the look from GET /config/states". This panel holds a table. The public
+  # pair is a rendering VIEW for two browser pages that hold none, it is free to change
+  # shape to suit them, and building a panel on it would couple the firmware to a payload
+  # that is explicitly not a contract. The passphrase is already here for the config pull,
+  # so the gated route costs nothing extra.
+  #
+  # mode: single - a poll that is still in flight when the next is due is skipped, not
+  # queued. At 250ms against a 5s timeout a queue would grow without bound.
+  - id: poll_status
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: 'return id(server_host).state.empty();'
+          then:
+            - logger.log:
+                level: DEBUG
+                format: "status poll skipped - no server host configured"
+          else:
+            - http_request.get:
+                url: !lambda |-
+                  return "http://" + id(server_host).state + ":" +
+                         std::to_string((int) id(server_port).state) + "/status";
+                capture_response: true
+                # The status object is ~300 bytes. 1kB covers it with room for a message
+                # and costs a fresh allocation on every poll - which at 250ms is the one
+                # place in this firmware where buffer size is worth being tight about.
+                max_response_buffer_size: 1kB
+                request_headers:
+                  authorization: !lambda 'return onair::held().auth_header.c_str();'
+                on_error:
+                  then:
+                    # NOT logged per failure. A server that is down produces four of these
+                    # a second, and 915 identical lines is a log that cannot answer when
+                    # something went away (#59). The panel's own escalation is the record.
+                    - lambda: 'onair::held().poll_failures++;'
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code != 200) {
+                          onair::held().poll_failures++;
+                          return;
+                        }
+                        std::string key;
+                        if (!onair::parse_status_key(body, key)) {
+                          // An unparseable body is NOT contact. Counting it would let a
+                          // server emitting garbage hold this panel confident forever,
+                          // which is the fail-OPEN direction.
+                          onair::held().poll_failures++;
+                          return;
+                        }
+                        onair::held().poll_oks++;
+                        uint32_t t = esphome::millis();
+                        id(last_contact_ms) = (t == 0) ? 1 : t;
+                        if (id(presence_key).state != key) {
+                          // Through the entity, so the existing on_value does its work:
+                          // the unknown-key re-pull and the repaint request (#64).
+                          auto call = id(presence_key).make_call();
+                          call.set_value(key);
+                          call.perform();
+                        }
+
 interval:
   # ---- the repaint safety net (#64) ------------------------------------------------
   #
@@ -455,6 +607,35 @@ interval:
   - interval: 30s
     then:
       - lambda: 'id(repaint_pending) = true;'
+
+  # ---- driving the poll, and escalating on our own clock (#65) ---------------------
+  #
+  # 50ms, because the poll interval is CONFIGURABLE down to 250ms and a tick coarser than
+  # that would turn a 250ms setting into a 300ms one. The tick itself is two integer
+  # comparisons.
+  #
+  # The second half is what makes the escalation honest: crossing a threshold changes the
+  # picture with NOTHING arriving from the server, so nothing else would ever ask for the
+  # repaint. It requests one only when the answer actually MOVES, so a panel that has been
+  # unrefreshed for ten minutes is not repainting twenty times a second.
+  - interval: 50ms
+    then:
+      - lambda: |-
+          uint32_t now = esphome::millis();
+          if (now - id(last_poll_ms) >= (uint32_t) id(poll_interval_ms).state) {
+            id(last_poll_ms) = now;
+            id(poll_status)->execute();
+          }
+          onair::View v = onair::compute_view(
+              id(presence_key).has_state() ? id(presence_key).state : std::string(),
+              id(last_contact_ms),
+              (uint32_t) id(connection_lost_ms).state,
+              (uint32_t) id(no_data_ms).state);
+          bool mark = v.unrefreshed || v.shape == onair::Shape::NO_DATA;
+          if (mark != id(last_marked_unrefreshed)) {
+            id(last_marked_unrefreshed) = mark;
+            id(repaint_pending) = true;
+          }
 
   # The device-served page's side of the fence (#33).
   #
@@ -473,9 +654,11 @@ interval:
           if (id(wifi_signal_db).has_state())
             snprintf(dbbuf, sizeof(dbbuf), "%.0fdBm", id(wifi_signal_db).state);
           onair::publish_context(id(presence_key).has_state() ? id(presence_key).state : std::string(),
-                                 id(last_write_ms),
+                                 id(last_contact_ms),
                                  id(ip_address).has_state() ? id(ip_address).state : std::string("connecting..."),
-                                 dbbuf);
+                                 dbbuf,
+                                 (uint32_t) id(connection_lost_ms).state,
+                                 (uint32_t) id(no_data_ms).state);
           onair::pump();
       - if:
           condition:

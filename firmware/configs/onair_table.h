@@ -184,6 +184,15 @@ struct LastResult {
   std::string note;
 };
 
+// THE TWO THRESHOLDS (D-92), as defaults. They are CONFIGURATION - three NVS-persisted
+// `number:` entities carry the live values - and these are only what an unconfigured panel
+// starts with. `STALE_MS = 90000` used to live here and is gone with D-91: staleness was a
+// judgement about the WRITE's age, and what replaced it is a judgement about THIS PANEL'S
+// CONNECTION to the server.
+inline constexpr uint32_t DEFAULT_POLL_MS = 1000;
+inline constexpr uint32_t CONNECTION_LOST_MS = 60000;    // 1 minute
+inline constexpr uint32_t NO_DATA_MS = 1800000;          // 30 minutes
+
 /**
  * Everything the panel holds about the table, in one place.
  *
@@ -212,6 +221,11 @@ struct Held {
   std::string inm_header;
   uint32_t oks{0};
   uint32_t failures{0};
+  /// The STATE poll's own counters (#65), separate from the config pull's above. They
+  /// answer different questions - "am I hearing the server" versus "is my vocabulary
+  /// current" - and one can be healthy while the other is not.
+  uint32_t poll_oks{0};
+  uint32_t poll_failures{0};
   /**
    * The server passphrase - held HERE and deliberately not in an ESPHome entity.
    *
@@ -237,7 +251,12 @@ struct Held {
   /// Mirrors of the two entity values the device-served page needs. The page runs on the
   /// httpd task and cannot reach an ESPHome `id()`; the main loop publishes them here.
   std::string key;
-  uint32_t last_write_ms{0};
+  uint32_t last_contact_ms{0};
+  /// The live threshold values, mirrored for the page for the same reason as `key`. They
+  /// are configuration (three NVS-backed `number:` entities), so the page must not use the
+  /// compiled defaults - it would then disagree with the glass beside it.
+  uint32_t lost_ms{CONNECTION_LOST_MS};
+  uint32_t no_data_ms{NO_DATA_MS};
   /// The diagnostics band the glass draws (y>=49). Mirrored for the same reason as `key`:
   /// the page runs on the httpd task and cannot reach an ESPHome `id()`.
   std::string ip;
@@ -375,6 +394,35 @@ inline std::string format_hex_color(uint32_t value) {
  * An empty `states` array is a FAILURE, not an empty table. The server always seeds at
  * least the reserved `unknown` row, so zero rows means we misread the body.
  */
+/**
+ * Pulls the state key out of a `GET /status` body (#65).
+ *
+ * Deliberately reads ONE field. The status object carries `busy`, `intended`, `confirmed`,
+ * `hold`, `source`, `ageSeconds` and `tableVersion`, and this panel needs none of them: the
+ * key is the address (D-31/D-34) and everything else about how to draw it comes from the
+ * table it already holds. Reading `busy` from here instead of from the row would put a
+ * second copy of the safety flag on the device, able to disagree with the first.
+ *
+ * `ageSeconds` in particular is NOT read, and that is the whole of D-91 in one line: it is
+ * provenance about the write, it decides nothing, and the panel judges its own connection.
+ *
+ * An empty key is a failure. "" is not a state, and a panel rendering nothing looks
+ * exactly like a calm one.
+ */
+inline bool parse_status_key(const std::string &body, std::string &key_out) {
+  std::string key;
+  bool ok = json::parse_json(body, [&](JsonObject root) -> bool {
+    if (!root["state"].is<const char *>())
+      return false;
+    key = root["state"].as<std::string>();
+    return !key.empty();
+  });
+  if (!ok)
+    return false;
+  key_out = key;
+  return true;
+}
+
 inline bool parse_table(const std::string &body, Table &out, std::string &version_out) {
   Table next;
   std::string version;
@@ -684,13 +732,13 @@ inline const char *shape_name(Shape shape) {
   }
 }
 
-inline constexpr uint32_t STALE_MS = 90000;
-
 struct View {
   Shape shape{Shape::BUSY};
   Effective eff;
   std::string key;
-  bool stale{true};
+  /// Condition 2: we are still drawing this, and we are no longer hearing it confirmed.
+  /// Renderers draw a visible mark for it. NOT a claim that the state is wrong.
+  bool unrefreshed{true};
 };
 
 /**
@@ -700,13 +748,16 @@ struct View {
  * be able to say NO CONFIG, UNKNOWN KEY and NO DATA for exactly the reasons the glass says
  * them, and the only way to guarantee that permanently is for there to be one decision.
  */
-inline View compute_view(const std::string &key, uint32_t last_write_ms) {
+inline View compute_view(const std::string &key, uint32_t last_contact_ms,
+                         uint32_t lost_ms = CONNECTION_LOST_MS,
+                         uint32_t no_data_ms = NO_DATA_MS) {
   View v;
   v.key = key;
   v.eff = effective(key);
-  // 0 means "nothing written since boot" - on_boot zeroes it precisely so a restored
-  // entity value cannot read as fresh.
-  v.stale = (last_write_ms == 0) || (esphome::millis() - last_write_ms > STALE_MS);
+  // 0 means "we have never heard from the server since boot", which is not the same as a
+  // gap of zero. It is the largest gap there is.
+  uint32_t gap = (last_contact_ms == 0) ? UINT32_MAX : esphome::millis() - last_contact_ms;
+  v.unrefreshed = gap > lost_ms;
   if (!held().have) {
     v.shape = Shape::NO_CONFIG;
     return v;
@@ -715,10 +766,23 @@ inline View compute_view(const std::string &key, uint32_t last_write_ms) {
     v.shape = Shape::UNKNOWN_KEY;
     return v;
   }
-  // THE BUSY RULE (D-32). A calm row is the only claim that can be a false OFF, so a stale
-  // one is refused and drawn as NO DATA. `unknown` is the reserved landing row and never
-  // renders as anything.
-  if (key == "unknown" || (v.stale && !v.eff.row.busy)) {
+  // THE BUSY RULE (D-32), AS D-91 LEAVES IT. `unknown` is the reserved landing row and
+  // never renders as anything.
+  //
+  // WHAT CHANGED, AND IT IS NOT A WEAKENING. This used to read
+  // `key == "unknown" || (v.stale && !v.eff.row.busy)`: a CALM row whose write was more
+  // than 90s old was refused outright and drawn as NO DATA. That clause is gone, and it is
+  // the single line most responsible for a healthy panel sitting on NO DATA all day - the
+  // last write is routinely hours old and the server latches it, so age was never evidence
+  // of anything.
+  //
+  // The protection it provided is now stronger, not absent. A calm claim can still never be
+  // drawn as a confident one on a dead link: within `lost_ms` the panel is visibly marked
+  // unrefreshed, and past `no_data_ms` it gives the state up entirely. What it may no longer
+  // do is throw away a state the server is still happily serving. D-92 chose this split
+  // deliberately over a shorter window for calm rows: mark everything at one minute, hold
+  // everything for thirty, no per-row branch.
+  if (key == "unknown" || gap > no_data_ms) {
     v.shape = Shape::NO_DATA;
     return v;
   }
@@ -746,11 +810,15 @@ inline void install_table(Table &next, const std::string &version, const std::st
 }
 
 /// Mirrors the two entity values the page needs into `held()`. Main loop only.
-inline void publish_context(const std::string &key, uint32_t last_write_ms,
-                            const std::string &ip, const std::string &db) {
+inline void publish_context(const std::string &key, uint32_t last_contact_ms,
+                            const std::string &ip, const std::string &db,
+                            uint32_t lost_ms = CONNECTION_LOST_MS,
+                            uint32_t no_data_ms = NO_DATA_MS) {
   esphome::LockGuard guard(held().lock);
   held().key = key;
-  held().last_write_ms = last_write_ms;
+  held().last_contact_ms = last_contact_ms;
+  held().lost_ms = lost_ms;
+  held().no_data_ms = no_data_ms;
   held().ip = ip;
   held().db = db;
 }

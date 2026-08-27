@@ -104,7 +104,9 @@ static void seed_table() {
   onair::held().key = "available";
   onair::held().ip = "10.42.12.77";
   onair::held().db = "-53dBm";
-  onair::held().last_write_ms = esphome::g_millis;
+  onair::held().last_contact_ms = esphome::g_millis;
+  onair::held().lost_ms = onair::CONNECTION_LOST_MS;
+  onair::held().no_data_ms = onair::NO_DATA_MS;
   onair::held().cmd = onair::Command{};
   onair::held().last = onair::LastResult{};
 }
@@ -578,14 +580,91 @@ static void test_status_page() {
   CHECK_MSG(has(onair::status_page(), "NO DATA"),
             "unknown short-circuits to NO_DATA here exactly as it does on the glass");
 
-  // The branch that matters most: stale evidence for a CALM row must never read as calm.
+  // THE THREE CONDITIONS (D-91), on the page, from the same compute_view the glass uses.
+  //
+  // What changed: a CALM row on an old WRITE used to be NO DATA outright. It is not any
+  // more, because the server latches state and the age of a write stopped meaning
+  // anything. What replaced it is a judgement about THIS PANEL'S CONNECTION.
+
+  begin("condition 1 - the server is answering: the row is drawn plainly, no mark");
   seed_table();
   onair::held().key = "available";
-  esphome::g_millis += onair::STALE_MS + 1000;
-  std::string stale = onair::status_page();
-  CHECK_MSG(has(stale, "NO DATA"), "a stale calm row is NO DATA - THE BUSY RULE (D-32)");
-  CHECK_MSG(!has(stale, "Not busy."), "and it must not still be describing itself as calm");
-  esphome::g_millis -= onair::STALE_MS + 1000;
+  std::string live = onair::status_page();
+  CHECK_MSG(has(live, "Not busy."), "a calm row on a live link is simply calm");
+  CHECK_MSG(!has(live, "NOT REFRESHING"), "and carries no mark");
+  CHECK_MSG(!has(live, "NO DATA"), "and is certainly not NO DATA");
+
+  begin("condition 1 survives an OLD state that the server is still serving");
+  // The headline. The last write is routinely hours old and the server latches it; this
+  // is the exact case that used to paint NO DATA on a completely healthy system.
+  seed_table();
+  onair::held().last_contact_ms = esphome::g_millis;
+  esphome::g_millis += 4 * 60 * 60 * 1000u;              // four hours pass...
+  onair::held().last_contact_ms = esphome::g_millis;     // ...and the server answered just now
+  std::string old_write = onair::status_page();
+  CHECK_MSG(has(old_write, "Not busy."), "an old write on a live link is still the state");
+  CHECK_MSG(!has(old_write, "NO DATA"), "age is not evidence of anything (D-91)");
+  seed_table();
+
+  begin("condition 2 - contact lost: the row is HELD, and says it is not being refreshed");
+  seed_table();
+  onair::held().key = "available";
+  esphome::g_millis += onair::CONNECTION_LOST_MS + 1000;
+  std::string marked = onair::status_page();
+  CHECK_MSG(has(marked, "AVAILABLE"), "it does not go blank - the last known row is still drawn");
+  CHECK_MSG(!has(marked, "NO DATA"), "and it does not give up ten minutes early");
+  CHECK_MSG(has(marked, "not a current reading"),
+            "a held calm row MUST say it is not being refreshed - this is the false-OFF guard");
+  esphome::g_millis -= onair::CONNECTION_LOST_MS + 1000;
+
+  begin("condition 2 covers a BUSY row identically - no per-row branch (D-92)");
+  seed_table();
+  onair::held().key = "on-air";
+  esphome::g_millis += onair::CONNECTION_LOST_MS + 1000;
+  std::string busy_marked = onair::status_page();
+  CHECK_MSG(has(busy_marked, "not a current reading"), "a busy row is marked the same way");
+  CHECK_MSG(!has(busy_marked, "NO DATA"), "and is held just as long");
+  esphome::g_millis -= onair::CONNECTION_LOST_MS + 1000;
+
+  begin("29 minutes is still condition 2 - the thresholds are not chained");
+  seed_table();
+  onair::held().key = "available";
+  esphome::g_millis += 29 * 60 * 1000u;
+  CHECK(!has(onair::status_page(), "NO DATA"));
+  esphome::g_millis -= 29 * 60 * 1000u;
+
+  begin("condition 3 - past thirty minutes the panel gives the state up entirely");
+  seed_table();
+  onair::held().key = "available";
+  esphome::g_millis += onair::NO_DATA_MS + 1000;
+  std::string gone = onair::status_page();
+  CHECK_MSG(has(gone, "NO DATA"), "past the second threshold there is no claim left to make");
+  CHECK_MSG(!has(gone, "Not busy."), "and it must not still be describing itself as calm");
+  esphome::g_millis -= onair::NO_DATA_MS + 1000;
+
+  begin("the thresholds are CONFIGURATION - the page follows the live values, not the defaults");
+  // A page compiled against the defaults while the glass runs configured values would be
+  // two renderers disagreeing about the same panel, which is what D-86 exists to prevent.
+  seed_table();
+  onair::held().key = "available";
+  onair::held().lost_ms = 5000;
+  onair::held().no_data_ms = 10000;
+  esphome::g_millis += 6000;
+  CHECK_MSG(has(onair::status_page(), "not a current reading"),
+            "a 5s connection-lost setting must mark at 6s, not wait for the compiled 60s");
+  esphome::g_millis += 5000;
+  CHECK_MSG(has(onair::status_page(), "NO DATA"),
+            "and a 10s no-data setting must give up at 11s");
+  esphome::g_millis -= 11000;
+  seed_table();
+
+  begin("NEVER having heard from the server is the largest gap, not a gap of zero");
+  seed_table();
+  onair::held().key = "available";
+  onair::held().last_contact_ms = 0;
+  CHECK_MSG(has(onair::status_page(), "NO DATA"),
+            "a restored entity value with nobody behind it must never read as calm");
+  seed_table();
 }
 
 // =========================================================================================
