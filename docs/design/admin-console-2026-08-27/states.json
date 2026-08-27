@@ -1,0 +1,51 @@
+{
+    "version": 11,
+    "updatedAt": "2026-08-27T15:52:32.972Z",
+    "states": [
+        {
+            "id": "available",
+            "label": "AVAILABLE",
+            "color": "#ffffff",
+            "bgcolor": "#0b6e2e",
+            "description": "",
+            "busy": false,
+            "order": 0
+        },
+        {
+            "id": "on-air",
+            "label": "ON AIR",
+            "color": "#ffffff",
+            "bgcolor": "#c1121f",
+            "description": "",
+            "busy": true,
+            "order": 1
+        },
+        {
+            "id": "interruptible",
+            "label": "INTERRUPTIBLE",
+            "color": "#1a1a1a",
+            "bgcolor": "#e8a317",
+            "description": "",
+            "busy": false,
+            "order": 2
+        },
+        {
+            "id": "recording",
+            "label": "RECORDING",
+            "color": "#ffffff",
+            "bgcolor": "#6a0dad",
+            "description": "",
+            "busy": true,
+            "order": 3
+        },
+        {
+            "id": "unknown",
+            "label": "NO DATA",
+            "color": "#ff00ff",
+            "bgcolor": "#1a1a1a",
+            "description": "",
+            "busy": true,
+            "order": 99
+        }
+    ]
+}

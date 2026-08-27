@@ -1,0 +1,1181 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-view="advanced">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>on-air admin console - variant B, the workbench</title>
+<style>
+/* ============================================================================
+   VARIANT B - TWO-PANE WORKBENCH
+   Palette, chip, list and editor idiom lifted wholesale from
+   docs/design/esp32-config-2026-08-26/live/onair.css so the two web UIs read as
+   one product. Only the ORGANISATION is new.
+   ========================================================================== */
+
+*,::before,::after{box-sizing:border-box}
+
+:root{
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+  --rail:16rem;
+}
+[data-theme="dark"]{
+  --bg:#0f1113; --panel:#14181c; --panel-2:#1a1f24; --line:#262c33; --line-2:#333a41;
+  --ink:#e8eaed; --ink-2:#aab4bd; --ink-3:#8b959e;
+  --accent:#6fb3ff; --accent-soft:#16304d;
+  --ok:#8fd6a3; --ok-line:#2f6b45; --warn:#e8ca8f; --warn-line:#7a6a3b;
+  --bad:#ff8f8f; --bad-line:#7a3b3b; --field:#0b0d0f;
+  --hatch:rgba(232,202,143,.17); --hatch-2:rgba(232,202,143,.05);
+  --ring:#0f1113;
+}
+[data-theme="light"]{
+  --bg:#eceff1; --panel:#ffffff; --panel-2:#f5f7f8; --line:#d3d9dd; --line-2:#b3bcc3;
+  --ink:#10161a; --ink-2:#59646c; --ink-3:#7d8891;
+  --accent:#0e6577; --accent-soft:#dceef2;
+  --ok:#1d6b3a; --ok-line:#8ec9a5; --warn:#7a5200; --warn-line:#e0c07a;
+  --bad:#a32020; --bad-line:#e0a0a0; --field:#ffffff;
+  --hatch:rgba(122,82,0,.15); --hatch-2:rgba(122,82,0,.04);
+  --ring:#ffffff;
+}
+
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.5 var(--sans);overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+[hidden]{display:none!important}
+code,.id,.mono{font-family:var(--mono)}
+
+/* the view switch is a display filter, nothing more (D-80) */
+[data-view="simple"] .adv{display:none!important}
+
+.app{display:grid;grid-template-rows:auto 1fr auto;height:100vh}
+
+/* ------------------------------------------------------------------- top bar --- */
+.top{display:flex;align-items:center;gap:.75rem;padding:.5rem .85rem;
+     background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+.brand{font-family:var(--mono);font-weight:700;letter-spacing:.01em}
+.ver{font-family:var(--mono);font-size:.7rem;color:var(--ink-3)}
+.sp{flex:1}
+
+.livepill{display:inline-flex;align-items:center;gap:.5rem;border-radius:99px;
+          padding:.22rem .8rem;font-size:.76rem;font-weight:700;letter-spacing:.09em;
+          border:1px solid var(--line-2);white-space:nowrap}
+.livepill .sub{font-family:var(--mono);font-weight:400;letter-spacing:.02em;opacity:.85}
+.livepill.withheld{border-color:var(--warn-line);color:var(--warn);
+  background:repeating-linear-gradient(135deg,var(--hatch) 0 5px,transparent 5px 12px),var(--panel-2)}
+.livepill.stalebusy{border-color:var(--warn-line);color:var(--warn);background:var(--panel-2)}
+
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:6px;overflow:hidden}
+.seg button{border:0;background:var(--panel-2);color:var(--ink-3);cursor:pointer;
+            padding:.3rem .72rem;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);font-weight:700}
+
+.iconbtn{width:2.15rem;height:2.15rem;display:grid;place-items:center;padding:0;
+         background:var(--panel-2);border:1px solid var(--line-2);border-radius:6px;
+         cursor:pointer;color:var(--ink-2)}
+.iconbtn:hover{background:var(--line);color:var(--ink)}
+.iconbtn svg{width:1.1rem;height:1.1rem;display:block;fill:none;stroke:currentColor;
+             stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+[data-theme="dark"] .i-moon{display:none}
+[data-theme="light"] .i-sun{display:none}
+
+/* --------------------------------------------------------------------- body --- */
+.body{display:grid;grid-template-columns:var(--rail) minmax(0,1fr);min-height:0}
+
+/* ---- the rail: always visible, always says where you are, carries live signal --- */
+.railbox{border-right:1px solid var(--line);background:var(--panel);
+         overflow-y:auto;padding:.7rem .55rem 1rem;display:flex;flex-direction:column}
+.railbox .rfilter{flex:none;width:100%;background:var(--field);color:var(--ink);
+         border:1px solid var(--line-2);border-radius:6px;padding:.32rem .55rem;
+         font-size:.85rem;margin-bottom:.35rem}
+.railbox #railitems{flex:none}
+.rfilter::placeholder{color:var(--ink-3)}
+.rgroup{font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3);
+        margin:.85rem .55rem .25rem}
+.rgroup.first{margin-top:.35rem}
+.ritem{display:flex;align-items:center;gap:.45rem;width:100%;text-align:left;cursor:pointer;
+       background:none;border:1px solid transparent;border-radius:6px;padding:.4rem .55rem;
+       color:var(--ink-2);font:inherit;font-size:.92rem}
+.ritem:hover{background:var(--panel-2);color:var(--ink)}
+.ritem[aria-current="true"]{background:var(--accent-soft);color:var(--ink);
+       border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);font-weight:600}
+.ritem .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ritem .k{font-family:var(--mono);font-size:.66rem;color:var(--ink-3);opacity:.6;margin-left:.2rem}
+.rsig{margin-left:auto;display:flex;align-items:center;gap:.35rem}
+.dot{width:.5rem;height:.5rem;border-radius:50%;flex:none}
+.dot.warn{background:var(--warn);box-shadow:0 0 0 3px var(--hatch-2)}
+.dot.bad{background:var(--bad)}
+.sig{font-family:var(--mono);font-size:.64rem;letter-spacing:.06em;text-transform:uppercase}
+.sig.warn{color:var(--warn)} .sig.mut{color:var(--ink-3)}
+.cnt{font-family:var(--mono);font-size:.66rem;border-radius:99px;padding:0 .42rem;
+     border:1px solid var(--warn-line);color:var(--warn);line-height:1.35}
+.railnote{margin-top:.7rem;border-top:1px solid var(--line);padding:.6rem .55rem 0;
+          font-size:.76rem;color:var(--ink-3);line-height:1.45}
+.railnote button{background:none;border:0;padding:0;color:var(--accent);cursor:pointer;
+                 text-decoration:underline;font-size:.76rem}
+.scaffold{margin-top:auto;border:1px dashed var(--line-2);border-radius:6px;
+          padding:.45rem .5rem;font-size:.7rem;color:var(--ink-3);line-height:1.4}
+.scaffold b{display:block;letter-spacing:.12em;font-size:.58rem;text-transform:uppercase;
+            color:var(--ink-3);margin-bottom:.25rem}
+.scaffold button{margin-top:.35rem;width:100%;font-size:.72rem;padding:.25rem .4rem}
+
+/* ---- the pane: scrolls on its own --------------------------------------- */
+.pane{overflow-y:auto;padding:1.05rem 1.5rem 3.5rem;min-width:0}
+.pane>section{max-width:64rem}
+.crumb{font-size:.63rem;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3)}
+h1{font-size:1.2rem;font-weight:650;margin:.15rem 0 .15rem}
+h2{font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);
+   margin:1.6rem 0 .55rem}
+.lede{color:var(--ink-2);font-size:.9rem;margin:0 0 1.15rem;max-width:50rem}
+.headrow{display:flex;align-items:flex-end;gap:1rem;flex-wrap:wrap;margin-bottom:.9rem}
+
+button,.btn,select{font:inherit;background:var(--panel-2);color:var(--ink);
+  border:1px solid var(--line-2);border-radius:6px;padding:.35rem .75rem;cursor:pointer}
+button:hover,.btn:hover{background:var(--line)}
+button:disabled{opacity:.45;cursor:default}
+button.pri{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:650}
+button.ghost{background:none;color:var(--ink-2)}
+button.danger{background:none;color:var(--bad);border-color:var(--bad-line)}
+button.sm{padding:.2rem .55rem;font-size:.8rem}
+
+.banner{border:1px solid;border-radius:6px;padding:.5rem .8rem;margin:0 0 .9rem;font-size:.9rem}
+.banner.ok{border-color:var(--ok-line);color:var(--ok)}
+.banner.err{border-color:var(--bad-line);color:var(--bad)}
+
+/* ---- STATUS: the tally ---------------------------------------------------- */
+.tally{border-radius:10px;padding:1.05rem 1.15rem;border:1px solid var(--line);
+       position:relative;overflow:hidden}
+.tally .word{font-size:2.15rem;font-weight:800;letter-spacing:.02em;line-height:1.06}
+.tally .sub{margin-top:.3rem;font-size:.92rem;opacity:.92}
+.tally.calm{border-color:transparent}
+
+/* THE BUSY RULE (D-32) made visual. Stale evidence for a calm row is NOT painted in that
+   row's calm colours; the card wears the withheld treatment and quotes the row instead. */
+.tally.withheld{border-color:var(--warn-line);
+  background:repeating-linear-gradient(135deg,var(--hatch) 0 6px,transparent 6px 15px),var(--panel-2);
+  box-shadow:inset 5px 0 0 var(--warn)}
+.tally.withheld .word{color:var(--warn)}
+.tally.stalebusy{border-color:var(--warn-line);box-shadow:inset 5px 0 0 var(--warn)}
+.kicker{font-family:var(--mono);font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;
+        color:var(--warn);margin-bottom:.35rem}
+.quote{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-top:.75rem;
+       font-size:.86rem;color:var(--ink-2)}
+.qchip{display:inline-block;padding:.16rem .6rem;border-radius:4px;font-weight:800;
+       font-size:.74rem;letter-spacing:.07em}
+.tally .why{margin-top:.7rem;font-size:.85rem;color:var(--ink-2);max-width:44rem;line-height:1.5}
+.tally .act{margin-top:.85rem;display:flex;gap:.5rem;flex-wrap:wrap}
+
+.agebar{margin:.85rem 0 0;max-width:26rem}
+.agebar .track{position:relative;height:6px;border-radius:3px;background:var(--line);overflow:visible}
+.agebar .fill{position:absolute;left:0;top:0;height:6px;border-radius:3px;background:var(--warn)}
+.agebar .thr{position:absolute;top:-4px;width:1px;height:14px;background:var(--ink-2)}
+.agebar .cap{display:block;margin-top:.4rem;font-size:.74rem;color:var(--ink-3);font-family:var(--mono)}
+
+.chips{display:flex;flex-wrap:wrap;gap:.55rem}
+.chip{border:0;border-radius:7px;padding:.72rem 1rem;font-weight:800;font-size:.9rem;
+      letter-spacing:.05em;cursor:pointer;min-width:10rem;text-align:center;font-family:var(--sans)}
+.chip:hover{filter:brightness(1.12)}
+.chip[aria-pressed="true"]{box-shadow:0 0 0 2px var(--ring),0 0 0 4px var(--ink-2)}
+.chiprow2{display:flex;gap:.55rem;align-items:center;flex-wrap:wrap;margin-top:.7rem}
+.pinnote{font-size:.82rem;color:var(--ink-3)}
+
+dl.facts{display:grid;grid-template-columns:auto 1fr;gap:.3rem 1.2rem;margin:0}
+dl.facts dt{color:var(--ink-3);font-size:.88rem}
+dl.facts dd{margin:0;font-family:var(--mono);font-size:.85rem;overflow-wrap:anywhere}
+dd .warn{color:var(--warn)} dd .bad{color:var(--bad)} dd .ok{color:var(--ok)}
+
+/* ---- the state list ------------------------------------------------------- */
+.list{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.hd,.r{display:grid;gap:.7rem;align-items:center;padding:.45rem .7rem;
+       grid-template-columns:11.5rem minmax(6rem,1fr) 4.6rem 8.5rem 12.5rem}
+.hd{font-size:.63rem;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);
+    background:var(--panel-2);border-bottom:1px solid var(--line)}
+.r{border-bottom:1px solid var(--line);background:var(--panel)}
+.r:last-child{border-bottom:0}
+.r.isstaged{box-shadow:inset 3px 0 0 var(--warn)}
+.r.islive{background:var(--panel-2)}
+.r.gone .chip2,.r.gone .id{opacity:.5;text-decoration:line-through}
+.chip2{display:block;text-align:center;padding:.32rem .5rem;border-radius:5px;font-weight:700;
+       font-size:.82rem;letter-spacing:.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.id{color:var(--ink-2);font-size:.85rem;display:flex;align-items:center;gap:.3rem}
+.lock{color:var(--ink-3);font-size:.72rem;border:1px solid var(--line-2);border-radius:3px;
+      padding:0 .25rem;letter-spacing:.06em}
+.busy{font-size:.7rem;letter-spacing:.09em;color:var(--ink-3);text-transform:uppercase}
+.busy.y{color:var(--bad)}
+.ratio{font-family:var(--mono);font-size:.76rem}
+.ratio.pass{color:var(--ok)} .ratio.fail{color:var(--bad)}
+.tag{font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;border:1px solid currentColor;
+     border-radius:99px;padding:.02rem .42rem;margin-left:.3rem;white-space:nowrap}
+.tag.live{color:var(--ok)} .tag.unv{color:var(--warn)} .tag.stg{color:var(--warn)}
+.acts{display:flex;gap:.35rem;justify-content:flex-end}
+.rowwarn{padding:.4rem .7rem;background:var(--hatch-2);color:var(--bad);font-size:.8rem;
+         border-bottom:1px solid var(--line)}
+
+/* the editor opens inline BENEATH the row - master/detail, the list never leaves */
+.ed{background:var(--panel-2);border-bottom:1px solid var(--line);padding:.9rem .8rem}
+.ed-top{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.75rem;
+        font-size:.85rem;color:var(--ink-2)}
+.ed-grid{display:grid;gap:1rem;grid-template-columns:1fr minmax(0,16rem)}
+.f{margin:0 0 .7rem}
+.f>label{display:block;color:var(--ink-3);font-size:.66rem;letter-spacing:.11em;
+         text-transform:uppercase;margin-bottom:.22rem}
+.f .row2{display:flex;gap:.4rem;align-items:center}
+input[type=text],input[type=password],input[type=number],input:not([type]){
+  flex:1;background:var(--field);color:var(--ink);border:1px solid var(--line-2);
+  border-radius:5px;padding:.35rem .5rem;min-width:0;width:100%}
+input[type=color]{width:2.3rem;height:2rem;padding:0;border:1px solid var(--line-2);
+  border-radius:5px;background:none;cursor:pointer;flex:none}
+input:disabled,input[readonly]{background:var(--panel);color:var(--ink-3);cursor:not-allowed}
+.hint{font-size:.76rem;color:var(--ink-3);margin-top:.22rem}
+.hint.warn{color:var(--warn)} .hint.bad{color:var(--bad)}
+.prev{border:1px solid var(--line);border-radius:6px;padding:.6rem;background:var(--panel)}
+.prev .cap{font-size:.62rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)}
+.prev .glass{margin-top:.4rem;height:4rem;border-radius:4px;display:flex;align-items:center;
+             justify-content:center;font-weight:800;letter-spacing:.05em;overflow:hidden}
+.edacts{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.2rem}
+
+/* machine values are monospace, prose is not */
+#devfields input,#adminfields input,#netfields input{font-family:var(--mono);font-size:.88rem}
+.fields{display:grid;gap:.85rem;max-width:34rem}
+.card{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:.9rem 1rem;
+      margin-bottom:.9rem;max-width:44rem}
+.card>h3{margin:0 0 .15rem;font-size:.95rem;font-weight:650}
+.card>p{margin:0 0 .8rem;color:var(--ink-2);font-size:.85rem}
+.locked{border-color:var(--warn-line)}
+.envtag{font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;color:var(--warn);
+        border:1px solid var(--warn-line);border-radius:99px;padding:0 .42rem;margin-left:.4rem}
+
+/* ---- the commit strip: it exists only when something is staged ------------- */
+.commit{display:flex;align-items:center;gap:.7rem;padding:.5rem .9rem;flex:none;
+        background:var(--panel);border-top:1px solid var(--line);flex-wrap:wrap}
+.commit .n{font-family:var(--mono);font-size:.8rem;color:var(--warn)}
+.commit .brk{font-size:.78rem;color:var(--ink-3)}
+
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;
+       justify-content:center;z-index:60;padding:1.2rem}
+.modal-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+            padding:1.1rem;max-width:34rem;width:100%}
+.modal-card h3{margin:0 0 .6rem}
+.modal ul{margin:.4rem 0 0;padding-left:1.2rem;color:var(--ink-2);font-size:.88rem}
+.modal-acts{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
+
+@media (max-width:60rem){
+  :root{--rail:12.5rem}
+  .hd,.r{grid-template-columns:9.5rem minmax(4rem,1fr) auto}
+  .hd .c3,.hd .c4,.r .c3,.r .c4{display:none}
+  .ed-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!--
+  PROTOTYPE NOTE. In the shipped console this shell is byte-identical for every caller
+  (D-35) and every value below arrives at runtime from a gated route. Here the same values
+  are hardcoded at the top of the script so the file opens from file:// with no network.
+-->
+
+<div class="app">
+
+  <header class="top">
+    <span class="brand">on-air</span>
+    <span class="ver mono" id="ver"></span>
+    <span id="livepill" class="livepill"></span>
+    <span class="sp"></span>
+    <div class="seg" role="group" aria-label="view">
+      <button id="v-simple" aria-pressed="false">Simple</button>
+      <button id="v-adv" aria-pressed="true">Advanced</button>
+    </div>
+    <button id="theme" class="iconbtn" aria-label="Switch theme" title="Switch theme">
+      <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.4v2.2M12 19.4v2.2M4.2 12H2M22 12h-2.2M5.6 5.6 4 4M20 20l-1.6-1.6M18.4 5.6 20 4M4 20l1.6-1.6"/></svg>
+      <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 13.2A8.6 8.6 0 1 1 10.8 3.2a6.7 6.7 0 0 0 10 10Z"/></svg>
+    </button>
+    <button id="logout" class="ghost sm">Log out</button>
+  </header>
+
+  <div class="body">
+
+    <nav class="railbox" aria-label="Sections">
+      <input id="rfilter" class="rfilter adv" type="text" placeholder="Filter sections" aria-label="Filter sections">
+      <div id="railitems"></div>
+      <div id="railnote" class="railnote" hidden></div>
+      <div class="scaffold">
+        <b>prototype scaffolding</b>
+        Not a real control. Puts the clock back so the stale case can be looked at again.
+        <button id="reage" class="sm">Re-age evidence to 578s</button>
+      </div>
+    </nav>
+
+    <main class="pane" id="pane">
+      <div id="banner" class="banner" hidden></div>
+
+      <!-- ---------------------------------------------------------- STATUS -->
+      <section id="sec-status" hidden>
+        <div class="crumb">Operate</div>
+        <h1>Status</h1>
+        <p class="lede adv">What the service is sending to the light right now, and the one
+          control this page is opened for.</p>
+
+        <div id="tally" class="tally"></div>
+
+        <h2>Set the state</h2>
+        <div id="chips" class="chips"></div>
+        <div class="chiprow2">
+          <button id="pin" class="sm"></button>
+          <span id="pinnote" class="pinnote"></span>
+        </div>
+
+        <div class="adv">
+          <h2>Readout</h2>
+          <dl class="facts" id="facts"></dl>
+        </div>
+      </section>
+
+      <!-- ---------------------------------------------------------- STATES -->
+      <section id="sec-states" hidden>
+        <div class="crumb">Operate</div>
+        <div class="headrow">
+          <div>
+            <h1>States</h1>
+            <p class="lede adv" style="margin:0">The rows the light can show. <code>id</code> is
+              immutable and bound to Companion buttons; <code>order</code> is presentation only.</p>
+          </div>
+          <span class="sp"></span>
+          <button id="addrow" class="sm">Add a state</button>
+        </div>
+        <div class="list">
+          <div class="hd">
+            <div>Row</div><div>id</div><div class="c3">Busy</div>
+            <div class="c4">Contrast</div><div style="text-align:right">&nbsp;</div>
+          </div>
+          <div id="rows"></div>
+        </div>
+      </section>
+
+      <!-- ----------------------------------------------------------- ADMIN -->
+      <section id="sec-admin" hidden>
+        <div class="crumb">Configure</div>
+        <h1>Admin</h1>
+        <p class="lede adv">Three things: how much of this console you see, the credentials, and
+          the reset.</p>
+
+        <div class="card">
+          <h3>View</h3>
+          <p>Stored in this browser only. It never touches the draft or the staged count (D-80).</p>
+          <div class="seg" role="group" aria-label="view">
+            <button id="v-simple2" aria-pressed="false">Simple</button>
+            <button id="v-adv2" aria-pressed="true">Advanced</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Credentials</h3>
+          <p class="adv">Two credentials with opposite jobs, so they are shown differently (D-81).</p>
+          <div class="fields" id="adminfields"></div>
+        </div>
+
+        <div class="card">
+          <h3>Factory reset</h3>
+          <p>Credentials, the state table, the pin, the live state, the port and the bind mode all
+            return to their defaults. The device connection is kept.</p>
+          <button id="freset" class="danger">Factory reset</button>
+        </div>
+      </section>
+
+      <!-- --------------------------------------------------------- NETWORK -->
+      <section id="sec-network" hidden>
+        <div class="crumb">Configure</div>
+        <h1>Network</h1>
+        <p class="lede adv">Where the service listens, and what the two convenience routes mean.</p>
+        <div class="fields" id="netfields"></div>
+      </section>
+
+      <!-- ----------------------------------------------- DEVICE CONNECTION -->
+      <section id="sec-device" hidden>
+        <div class="crumb">Configure</div>
+        <h1>Device connection</h1>
+        <p class="lede adv">All four values are in effect from the environment, not from this
+          document. Editing them here would report success and change nothing, so they are not
+          editable here (D-79).</p>
+        <div class="card locked">
+          <h3>Read-only <span class="envtag">environment wins</span></h3>
+          <p>Set by <code>~/.onair/config.env</code>, which the service loads before it reads the
+            config document. To change one, edit that file and restart the service.</p>
+          <div class="fields" id="devfields"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <div id="commit" class="commit" hidden>
+    <span id="commit-n" class="n"></span>
+    <span id="commit-brk" class="brk"></span>
+    <span class="sp"></span>
+    <button id="goto-staged" class="sm ghost">Review</button>
+    <button id="discard" class="sm">Discard all</button>
+    <button id="save" class="sm pri">Save configuration</button>
+  </div>
+</div>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-card">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+    <div class="modal-acts">
+      <button id="modal-cancel">Cancel</button>
+      <button id="modal-ok" class="pri"></button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ============================================================================
+   SAMPLE DATA. In the real console these three objects come from
+   GET /admin/config, GET /status and GET /admin/env-overrides. Hardcoded here
+   because fetch() cannot work from file://.
+   ========================================================================== */
+
+var LIVE = {
+  version: 11,
+  updatedAt: '2026-08-27T15:52:32.972Z',
+  port: 8484,
+  bind: 'all',
+  shortcuts: { on: 'on-air', off: 'available' },
+  auth: { passphrase: 'onair-local-passphrase', adminUser: 'admin', adminPassword: 'onair' },
+  light: { host: '10.42.12.77', entity: 'PresenceKey', username: 'admin', password: 'set' },
+  states: [
+    { id:'available',     label:'AVAILABLE',     color:'#ffffff', bgcolor:'#0b6e2e', description:'', busy:false, order:0 },
+    { id:'on-air',        label:'ON AIR',        color:'#ffffff', bgcolor:'#c1121f', description:'', busy:true,  order:1 },
+    { id:'interruptible', label:'INTERRUPTIBLE', color:'#1a1a1a', bgcolor:'#e8a317', description:'', busy:false, order:2 },
+    { id:'recording',     label:'RECORDING',     color:'#ffffff', bgcolor:'#6a0dad', description:'', busy:true,  order:3 },
+    { id:'unknown',       label:'NO DATA',       color:'#ff00ff', bgcolor:'#1a1a1a', description:'', busy:true,  order:99 }
+  ]
+};
+
+/* THE LIVE STATUS. stale is TRUE while the reported row is busy:false - the case the
+   whole variant is built around. */
+var STATUS = {
+  state: 'available', confirmed: 'available', hold: null, source: 'human:admin',
+  busy: false, intended: 'off', ageSeconds: 578, stale: true, tableVersion: 11
+};
+
+/* D-79: names only, never values. */
+var ENV = {
+  'light.host':     'ONAIR_LIGHT_HOST',
+  'light.entity':   'ONAIR_LIGHT_ENTITY',
+  'light.username': 'ONAIR_LIGHT_USER',
+  'light.password': 'ONAIR_LIGHT_PASS'
+};
+var ENV_FILE = '~/.onair/config.env';
+var STALE_S = 90;                 // D-32's threshold
+var NAGS = { adminPassword: true, passphrase: false };
+
+/* -------------------------------------------------------------- state ---- */
+var draft = JSON.parse(JSON.stringify(LIVE));
+var editing = {};                 // id -> in-progress edit, not yet staged (D-39)
+var current = 'status';
+var view = 'advanced';
+var banners = null;
+
+var SECTIONS = [
+  { id:'status',  name:'Status',            group:'Operate',   simple:true  },
+  { id:'states',  name:'States',            group:'Operate',   simple:true  },
+  { id:'admin',   name:'Admin',             group:'Configure', simple:true  },
+  { id:'network', name:'Network',           group:'Configure', simple:false },
+  { id:'device',  name:'Device connection', group:'Configure', simple:false }
+];
+
+function $(id){ return document.getElementById(id); }
+function el(t,c,x){ var n=document.createElement(t); if(c)n.className=c;
+  if(x!==undefined&&x!==null)n.textContent=String(x); return n; }
+function clear(n){ while(n.firstChild) n.removeChild(n.firstChild); }
+function rowById(list,id){ for(var i=0;i<list.length;i++) if(list[i].id===id) return list[i]; return null; }
+function fmtAge(s){ if(s<60) return s+'s'; var m=Math.floor(s/60); return m+'m '+(s%60)+'s'; }
+
+/* --------------------------------------------------- contrast (it stays) -- */
+function lin(c){ c=c/255; return c<=0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055,2.4); }
+function lum(hex){ var m=/^#([0-9a-f]{6})$/i.exec(hex||''); if(!m) return null;
+  var n=parseInt(m[1],16);
+  return 0.2126*lin((n>>16)&255)+0.7152*lin((n>>8)&255)+0.0722*lin(n&255); }
+function ratio(fg,bg){ var a=lum(fg),b=lum(bg); if(a===null||b===null) return null;
+  var hi=Math.max(a,b),lo=Math.min(a,b); return (hi+0.05)/(lo+0.05); }
+var HEX=/^#[0-9a-f]{6}$/;
+function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,32); }
+
+/* --------------------------------------------------- THE BUSY RULE (D-32) --
+   The server never asserts a busy:false state to a renderer on evidence older than
+   90s. So the page has exactly three postures, and only one of them is calm.        */
+function posture(){
+  var row = rowById(LIVE.states, STATUS.state);
+  var isBusy = row ? row.busy : true;
+  if(!STATUS.stale) return 'fresh';
+  return isBusy ? 'stalebusy' : 'withheld';
+}
+
+/* --------------------------------------------------------- staged (D-39) -- */
+function stagedRowIds(){
+  var out=[], i;
+  for(i=0;i<draft.states.length;i++){
+    var l=rowById(LIVE.states, draft.states[i].id);
+    if(!l || JSON.stringify(l)!==JSON.stringify(draft.states[i])) out.push(draft.states[i].id);
+  }
+  for(i=0;i<LIVE.states.length;i++)
+    if(!rowById(draft.states, LIVE.states[i].id)) out.push(LIVE.states[i].id);
+  return out;
+}
+function authChanged(){ return JSON.stringify(draft.auth)!==JSON.stringify(LIVE.auth); }
+function netChanged(){ return draft.port!==LIVE.port || draft.bind!==LIVE.bind ||
+  JSON.stringify(draft.shortcuts)!==JSON.stringify(LIVE.shortcuts); }
+function sectionStaged(id){
+  if(id==='states') return stagedRowIds().length;
+  if(id==='admin')  return authChanged()?1:0;
+  if(id==='network')return netChanged()?1:0;
+  return 0;
+}
+function stagedTotal(){ var n=0; SECTIONS.forEach(function(s){ n+=sectionStaged(s.id); }); return n; }
+
+/* ================================================================ RENDER == */
+
+function renderTop(){
+  $('ver').textContent = 'table v'+LIVE.version;
+  var p = posture(), row = rowById(LIVE.states, STATUS.state), pill = $('livepill');
+  clear(pill); pill.className='livepill'; pill.style.background=''; pill.style.color='';
+  pill.style.borderColor='';
+  if(p==='fresh'){
+    pill.style.background=row?row.bgcolor:''; pill.style.color=row?row.color:'';
+    pill.style.borderColor=row?row.bgcolor:'';
+    pill.appendChild(el('span',null,row?row.label:STATUS.state.toUpperCase()));
+    pill.appendChild(el('span','sub',fmtAge(STATUS.ageSeconds)));
+  } else if(p==='withheld'){
+    pill.className='livepill withheld';
+    pill.appendChild(el('span',null,'CALM WITHHELD'));
+    pill.appendChild(el('span','sub',STATUS.state+' · '+fmtAge(STATUS.ageSeconds)+' old'));
+  } else {
+    pill.className='livepill stalebusy';
+    pill.appendChild(el('span',null,(row?row.label:STATUS.state)+' STANDS'));
+    pill.appendChild(el('span','sub','stale '+fmtAge(STATUS.ageSeconds)));
+  }
+}
+
+function renderRail(){
+  var box=$('railitems'); clear(box);
+  var q=(view==='advanced' ? ($('rfilter').value||'') : '').trim().toLowerCase();
+  var visible = SECTIONS.filter(function(s){
+    if(view==='simple' && !s.simple) return false;
+    return !q || s.name.toLowerCase().indexOf(q)!==-1;
+  });
+  var group=null, keyn=0;
+  visible.forEach(function(s){
+    if(s.group!==group){
+      group=s.group;
+      var h=el('div','rgroup'+(box.childNodes.length?'':' first'),group);
+      box.appendChild(h);
+    }
+    keyn++;
+    var b=el('button','ritem');
+    b.setAttribute('aria-current', s.id===current ? 'true':'false');
+    b.appendChild(el('span','nm',s.name));
+    var sig=el('div','rsig');
+    /* live signal, per section */
+    if(s.id==='status'){
+      var p=posture();
+      if(p==='withheld'){ sig.appendChild(el('span','dot warn')); sig.appendChild(el('span','sig warn','withheld')); }
+      else if(p==='stalebusy'){ sig.appendChild(el('span','dot warn')); sig.appendChild(el('span','sig warn','stale')); }
+      else { sig.appendChild(el('span','sig mut',fmtAge(STATUS.ageSeconds))); }
+    }
+    if(s.id==='device'){ sig.appendChild(el('span','dot warn')); sig.appendChild(el('span','sig warn','env')); }
+    var n=sectionStaged(s.id);
+    if(n) sig.appendChild(el('span','cnt', n+' staged'));
+    b.appendChild(sig);
+    b.appendChild(el('span','k',String(keyn)));
+    b.addEventListener('click',function(){ go(s.id); });
+    box.appendChild(b);
+  });
+
+  var note=$('railnote');
+  clear(note); note.hidden=true;
+  if(view==='simple'){
+    var hidden = SECTIONS.filter(function(s){ return !s.simple; }).map(function(s){ return s.name; });
+    note.hidden=false;
+    note.appendChild(document.createTextNode(hidden.length+' sections hidden: '+hidden.join(', ')+'. Nothing on either can be set from this page today. '));
+    var a=el('button',null,'Show them');
+    a.addEventListener('click',function(){ setView('advanced'); });
+    note.appendChild(a);
+  } else if(q && visible.length===0){
+    note.hidden=false; note.appendChild(document.createTextNode('No section matches "'+q+'".'));
+  }
+}
+
+function renderStatus(){
+  var p=posture(), row=rowById(LIVE.states,STATUS.state), t=$('tally');
+  clear(t); t.className='tally '+(p==='fresh'?'calm':p);
+  t.style.background=''; t.style.color='';
+
+  if(p==='fresh'){
+    t.style.background=row?row.bgcolor:''; t.style.color=row?row.color:'';
+    t.appendChild(el('div','word',row?row.label:STATUS.state));
+    var s=el('div','sub'); s.textContent='Confirmed by the light '+fmtAge(STATUS.ageSeconds)+' ago, written by '+STATUS.source+'.';
+    t.appendChild(s);
+  } else if(p==='withheld'){
+    /* THE CONTRADICTION, HANDLED. The reported row is calm and its evidence is 578s old.
+       The card refuses to wear that row's calm colours; it quotes the row instead. */
+    t.appendChild(el('div','kicker','evidence stale · the busy rule, D-32'));
+    t.appendChild(el('div','word','CALM WITHHELD'));
+    var q=el('div','quote');
+    q.appendChild(document.createTextNode('last write was'));
+    var c=el('span','qchip',row?row.label:STATUS.state);
+    if(row){ c.style.background=row.bgcolor; c.style.color=row.color; }
+    q.appendChild(c);
+    q.appendChild(document.createTextNode('by '+STATUS.source+', '+fmtAge(STATUS.ageSeconds)+' ago'));
+    t.appendChild(q);
+    var w=el('div','why');
+    w.textContent='Nothing has changed. The light is still showing what it last confirmed ('+
+      STATUS.confirmed+'). A fresh write is what settles it.';
+    t.appendChild(w);
+    var w2=el('div','why adv');
+    w2.textContent='This console will not paint a calm room on evidence it cannot support. '+
+      STATUS.state+' is busy:false and its evidence is older than '+STALE_S+'s, so the state is '+
+      'reported but not asserted to any renderer.';
+    t.appendChild(w2);
+    t.appendChild(ageBar());
+    var a=el('div','act');
+    var re=el('button','pri','Re-assert '+STATUS.state);
+    re.addEventListener('click',function(){ setState(STATUS.state); });
+    a.appendChild(re);
+    var other=el('button',null,'Set a different state');
+    other.addEventListener('click',function(){ document.getElementById('chips').scrollIntoView({block:'center'}); });
+    a.appendChild(other);
+    t.appendChild(a);
+  } else {
+    t.appendChild(el('div','kicker','evidence stale · busy stands'));
+    t.appendChild(el('div','word',row?row.label:STATUS.state));
+    var s2=el('div','why');
+    s2.textContent='Evidence is '+fmtAge(STATUS.ageSeconds)+' old, past the '+STALE_S+'s threshold. '+
+      'Staying busy on stale evidence is always allowed (D-32), so this stands - but it is not confirmed.';
+    t.appendChild(s2);
+    t.appendChild(ageBar());
+  }
+
+  /* the frequent job: one glance, one click */
+  var chips=$('chips'); clear(chips);
+  draft.states.slice().sort(function(a,b){ return a.order-b.order || a.id.localeCompare(b.id); })
+    .forEach(function(r){
+      var b=el('button','chip',r.label);
+      b.style.background=r.bgcolor; b.style.color=r.color;
+      b.setAttribute('aria-pressed', r.id===STATUS.state ? 'true':'false');
+      b.addEventListener('click',function(){ setState(r.id); });
+      chips.appendChild(b);
+    });
+
+  var pinned = STATUS.hold!==null;
+  $('pin').textContent = pinned ? 'Release the pin' : 'Pin '+STATUS.state;
+  $('pinnote').textContent = pinned
+    ? 'Pinned at '+STATUS.hold+'. Automated writes are refused unless they move it to a busy state.'
+    : 'Not pinned. Anything with a source may write.';
+
+  var dl=$('facts'); clear(dl);
+  var f=[
+    ['State', STATUS.state, ''],
+    ['Busy', STATUS.busy?'yes':'no', ''],
+    ['Asserted to renderers', p==='withheld' ? 'no - calm withheld' : 'yes', p==='withheld'?'warn':'ok'],
+    ['Confirmed by the light', STATUS.confirmed, ''],
+    ['Written by', STATUS.source, ''],
+    ['Evidence age', fmtAge(STATUS.ageSeconds)+(STATUS.stale?' - stale, threshold '+STALE_S+'s':''), STATUS.stale?'warn':''],
+    ['Intended', STATUS.intended, ''],
+    ['Pinned at', STATUS.hold===null?'auto':STATUS.hold, ''],
+    ['Table version', String(STATUS.tableVersion), '']
+  ];
+  f.forEach(function(x){
+    dl.appendChild(el('dt',null,x[0]));
+    var dd=el('dd'); dd.appendChild(el('span',x[2],x[1])); dl.appendChild(dd);
+  });
+}
+
+function ageBar(){
+  var box=el('div','agebar adv');
+  var tr=el('div','track');
+  var pct=Math.min(100, STATUS.ageSeconds/600*100);
+  var fill=el('div','fill'); fill.style.width=pct+'%'; tr.appendChild(fill);
+  var thr=el('div','thr'); thr.style.left=(STALE_S/600*100)+'%'; tr.appendChild(thr);
+  box.appendChild(tr);
+  box.appendChild(el('span','cap', fmtAge(STATUS.ageSeconds)+' since the last write · threshold '+STALE_S+'s · scale 0-600s'));
+  return box;
+}
+
+function setState(id){
+  var r=rowById(draft.states,id) || rowById(LIVE.states,id);
+  if(!r) return;
+  /* a write is fresh evidence by definition (D-32), which is why this clears the withhold */
+  STATUS.state=id; STATUS.confirmed=id; STATUS.busy=!!r.busy;
+  STATUS.intended = r.busy ? 'on' : 'off';
+  STATUS.source='human:admin'; STATUS.ageSeconds=0; STATUS.stale=false;
+  if(STATUS.hold!==null && STATUS.hold!==id) STATUS.hold=null;  /* manual write elsewhere releases the pin */
+  renderTop(); renderStatus(); renderRail(); renderRows();
+}
+
+/* --------------------------------------------------------------- states -- */
+function renderRows(){
+  var box=$('rows'); clear(box);
+  var staged=stagedRowIds();
+  var sorted=draft.states.slice().sort(function(a,b){ return a.order-b.order || a.id.localeCompare(b.id); });
+  sorted.forEach(function(r){ box.appendChild(rowNode(r, !rowById(LIVE.states,r.id), staged)); });
+  LIVE.states.forEach(function(r){
+    if(rowById(draft.states,r.id)) return;
+    box.appendChild(rowNode(r,false,staged,true));
+  });
+}
+
+function rowNode(r,isNew,staged,gone){
+  var wrap=el('div');
+  var n=el('div','r');
+  if(staged.indexOf(r.id)!==-1) n.className+=' isstaged';
+  if(r.id===STATUS.state) n.className+=' islive';
+  if(gone) n.className+=' gone';
+
+  var chip=el('div','chip2',r.label||'(no label)');
+  chip.style.background=r.bgcolor; chip.style.color=r.color;
+  n.appendChild(chip);
+
+  var id=el('div','id');
+  id.appendChild(el('span','mono',r.id));
+  id.appendChild(el('span','lock','locked'));
+  if(r.id===STATUS.state){
+    /* the LIVE badge must not read confident while calm is withheld */
+    id.appendChild(el('span', posture()==='withheld' ? 'tag unv':'tag live',
+      posture()==='withheld' ? 'live, unvouched' : 'live'));
+  }
+  if(staged.indexOf(r.id)!==-1) id.appendChild(el('span','tag stg', gone?'delete staged':(isNew?'new':'staged')));
+  n.appendChild(id);
+
+  n.appendChild(el('div','busy c3'+(r.busy?' y':''), r.busy?'busy':'calm'));
+
+  var ra=ratio(r.color,r.bgcolor);
+  n.appendChild(el('div','ratio c4 '+(ra!==null&&ra>=4.5?'pass':'fail'),
+    ra===null?'?':ra.toFixed(2)+':1 '+(ra>=4.5?'AA':'fails AA')));
+
+  var acts=el('div','acts');
+  if(gone){
+    var undo=el('button','sm','Undo delete');
+    undo.addEventListener('click',function(){ draft.states.push(JSON.parse(JSON.stringify(r))); redrawStates(); });
+    acts.appendChild(undo);
+  } else {
+    var ed=el('button','sm', editing[r.id]?'Editing':'Edit');
+    ed.disabled=!!editing[r.id];
+    ed.addEventListener('click',function(){ editing[r.id]=JSON.parse(JSON.stringify(r)); redrawStates(); });
+    acts.appendChild(ed);
+    if(staged.indexOf(r.id)!==-1){
+      /* Revert drops the row to LIVE. Distinct from the editor's Cancel (D-39). */
+      var rv=el('button','sm ghost','Revert');
+      rv.addEventListener('click',function(){
+        delete editing[r.id];
+        var l=rowById(LIVE.states,r.id);
+        if(l) draft.states=draft.states.map(function(x){ return x.id===r.id?JSON.parse(JSON.stringify(l)):x; });
+        else draft.states=draft.states.filter(function(x){ return x.id!==r.id; });
+        redrawStates();
+      });
+      acts.appendChild(rv);
+    }
+    if(r.id!=='unknown'){
+      var del=el('button','sm ghost','Delete');
+      del.addEventListener('click',function(){ confirmDelete(r); });
+      acts.appendChild(del);
+    }
+  }
+  n.appendChild(acts);
+  wrap.appendChild(n);
+
+  if(ra!==null && ra<4.5 && !gone)
+    wrap.appendChild(el('div','rowwarn','This pair is hard to read across a room.'));
+  if(editing[r.id]) wrap.appendChild(editorNode(r,isNew));
+  return wrap;
+}
+
+function editorNode(r,isNew){
+  var w=editing[r.id];
+  var box=el('div','ed');
+  var top=el('div','ed-top');
+  top.appendChild(el('span','mono',r.id));
+  top.appendChild(el('span','lock','id is immutable'));
+  top.appendChild(el('span',null,'busy belongs to the server. It is a row property, not a setting on this page.'));
+  box.appendChild(top);
+
+  var grid=el('div','ed-grid');
+  var left=el('div');
+
+  function field(label,key,type,hint){
+    var f=el('div','f');
+    f.appendChild(el('label',null,label));
+    var row2=el('div','row2');
+    var swatch=null;
+    if(type==='color'){
+      swatch=el('input'); swatch.type='color'; swatch.value=HEX.test(w[key])?w[key]:'#000000';
+      row2.appendChild(swatch);
+    }
+    var i=el('input'); i.type=(type==='number'?'number':'text'); i.value=w[key];
+    i.addEventListener('input',function(){
+      w[key]= i.type==='number' ? Number(i.value) : i.value;
+      if(key==='label' && isNew) w.id=slug(i.value);
+      if(swatch && HEX.test(w[key])) swatch.value=w[key];
+      preview();
+    });
+    if(swatch) swatch.addEventListener('input',function(){ w[key]=swatch.value; i.value=swatch.value; preview(); });
+    row2.appendChild(i);
+    f.appendChild(row2);
+    if(hint) f.appendChild(el('div','hint',hint));
+    return f;
+  }
+
+  left.appendChild(field('Label','label'));
+  var cg=el('div'); cg.style.display='grid'; cg.style.gap='0 1rem';
+  cg.style.gridTemplateColumns='1fr 1fr';
+  cg.appendChild(field('Text colour','color','color'));
+  cg.appendChild(field('Background','bgcolor','color'));
+  left.appendChild(cg);
+  var advb=el('div','adv');
+  advb.appendChild(field('Order','order','number','Presentation only. It does not change meaning.'));
+  advb.appendChild(field('Description','description'));
+  left.appendChild(advb);
+  grid.appendChild(left);
+
+  var right=el('div','prev');
+  right.appendChild(el('div','cap','on the panel'));
+  var glass=el('div','glass');
+  right.appendChild(glass);
+  var cline=el('div','hint');
+  right.appendChild(cline);
+  grid.appendChild(right);
+  box.appendChild(grid);
+
+  function preview(){
+    glass.textContent=w.label||' ';
+    glass.style.background=HEX.test(w.bgcolor)?w.bgcolor:'transparent';
+    glass.style.color=HEX.test(w.color)?w.color:'inherit';
+    var ra=ratio(w.color,w.bgcolor);
+    cline.className='hint '+(ra!==null&&ra>=4.5?'':'bad');
+    cline.textContent = ra===null ? 'contrast: needs two #rrggbb values'
+      : ra.toFixed(2)+':1 - '+(ra>=4.5?'passes AA':'fails AA, hard to read across a room');
+  }
+  preview();
+
+  var acts=el('div','edacts');
+  var errline=el('span','hint bad');
+  var save=el('button','pri sm','Stage this row');
+  save.addEventListener('click',function(){
+    var p=validate(w,isNew);
+    if(p.length){ errline.textContent=p.join('; '); return; }
+    var frozen=JSON.parse(JSON.stringify(w));
+    if(rowById(draft.states,r.id))
+      draft.states=draft.states.map(function(x){ return x.id===r.id?frozen:x; });
+    else draft.states.push(frozen);
+    if(isNew && frozen.id!==r.id){
+      draft.states=draft.states.filter(function(x){ return x.id!==r.id; });
+      if(!rowById(draft.states,frozen.id)) draft.states.push(frozen);
+    }
+    delete editing[r.id];
+    redrawStates();
+  });
+  /* Cancel abandons the edit session and returns the row to its LAST STAGED value. */
+  var cancel=el('button','sm','Cancel');
+  cancel.addEventListener('click',function(){
+    delete editing[r.id];
+    if(isNew) draft.states=draft.states.filter(function(x){ return x.id!==r.id; });
+    redrawStates();
+  });
+  acts.appendChild(save); acts.appendChild(cancel);
+  acts.appendChild(el('span','hint','Cancel returns this row to its last staged value. Revert, on the row, drops it to live.'));
+  acts.appendChild(errline);
+  box.appendChild(acts);
+  return box;
+}
+
+function validate(r,isNew){
+  var p=[];
+  if(!/^[a-z0-9][a-z0-9-]{0,31}$/.test(r.id)) p.push('id must be lower-case letters, digits and dashes');
+  if(!r.label || r.label.length>64) p.push('label must be 1-64 characters');
+  if(!HEX.test(r.color)) p.push('text colour must be #rrggbb');
+  if(!HEX.test(r.bgcolor)) p.push('background must be #rrggbb');
+  if(!(Number.isInteger(r.order)&&r.order>=0&&r.order<=999)) p.push('order must be 0-999');
+  if(isNew && draft.states.filter(function(x){ return x.id===r.id; }).length>1) p.push('that id is already taken');
+  return p;
+}
+
+function confirmDelete(r){
+  var c=[];
+  if(STATUS.state===r.id) c.push('The live state falls back to "unknown", and GET /status reports it fell back from "'+r.id+'".');
+  if(STATUS.hold===r.id) c.push('The pin is released.');
+  c.push('Anything writing "'+r.id+'" starts getting 400 - Companion buttons and the detector included.');
+  openModal('Delete '+r.id+'?', c, 'Stage the delete', null, function(){
+    draft.states=draft.states.filter(function(x){ return x.id!==r.id; });
+    delete editing[r.id];
+    redrawStates();
+  });
+}
+
+/* --------------------------------------------------------------- fields -- */
+function textField(box,label,get,set,opts){
+  opts=opts||{};
+  var f=el('div','f');
+  var lab=el('label',null,label);
+  if(opts.env){ var t=el('span','envtag',opts.env); lab.appendChild(t); }
+  f.appendChild(lab);
+  var i=el('input');
+  i.type=opts.type||'text';
+  i.value=get();
+  if(opts.readonly){ i.readOnly=true; i.disabled=true; }
+  else i.addEventListener('input',function(){ set(opts.type==='number'?Number(i.value):i.value); redrawChrome(); });
+  f.appendChild(i);
+  if(opts.hint) f.appendChild(el('div','hint'+(opts.hintClass?' '+opts.hintClass:''),opts.hint));
+  box.appendChild(f);
+}
+
+function renderFields(){
+  var a=$('adminfields'); clear(a);
+  /* D-81: masked, because it is typed here and never read back. */
+  textField(a,'Admin password',
+    function(){ return draft.auth.adminPassword; },
+    function(v){ draft.auth.adminPassword=v; },
+    { type:'password', hint: NAGS.adminPassword ? 'currently set to the default' : '' });
+  var advBox=el('div','adv');
+  a.appendChild(advBox);
+  textField(advBox,'Admin user', function(){ return draft.auth.adminUser; },
+    function(v){ draft.auth.adminUser=v; });
+  /* D-81: plaintext, deliberately. It exists to be read off this page and typed elsewhere. */
+  textField(advBox,'Passphrase (machine clients)',
+    function(){ return draft.auth.passphrase; },
+    function(v){ draft.auth.passphrase=v; },
+    { hint:'Readable on purpose: it is read off this page and typed into the ESP32 and Companion.' });
+
+  var n=$('netfields'); clear(n);
+  textField(n,'Port', function(){ return draft.port; }, function(v){ draft.port=v; }, { type:'number' });
+  var bf=el('div','f');
+  bf.appendChild(el('label',null,'Bind'));
+  var bs=el('select');
+  [['all','All interfaces'],['loopback','This machine only']].forEach(function(o){
+    var op=el('option',null,o[1]); op.value=o[0]; if(draft.bind===o[0]) op.selected=true; bs.appendChild(op);
+  });
+  bs.addEventListener('change',function(){ draft.bind=bs.value; redrawChrome(); });
+  bf.appendChild(bs);
+  bf.appendChild(el('div','hint','Loopback is always bound.'));
+  n.appendChild(bf);
+  ['on','off'].forEach(function(k){
+    var f=el('div','f');
+    f.appendChild(el('label',null,'POST /'+k+' sets'));
+    var s=el('select');
+    var none=el('option',null,'not configured - returns 409'); none.value=''; s.appendChild(none);
+    draft.states.forEach(function(r){
+      var o=el('option',null,r.label+' ('+r.id+')'); o.value=r.id;
+      if(draft.shortcuts[k]===r.id) o.selected=true; s.appendChild(o);
+    });
+    s.addEventListener('change',function(){ draft.shortcuts[k]=s.value||null; redrawChrome(); });
+    f.appendChild(s);
+    n.appendChild(f);
+  });
+
+  /* D-79: read-only, named by variable. Names, never values, for the credentials. */
+  var d=$('devfields'); clear(d);
+  var reason='set by ONAIR_LIGHT_HOST in ~/.onair/config.env';
+  textField(d,'Device host',function(){ return LIVE.light.host; },null,
+    { readonly:true, env:ENV['light.host'], hint:reason });
+  textField(d,'Entity name',function(){ return LIVE.light.entity; },null,
+    { readonly:true, env:ENV['light.entity'], hint:'set by '+ENV['light.entity']+' in '+ENV_FILE });
+  textField(d,'Device user',function(){ return 'set in the environment - value not shown'; },null,
+    { readonly:true, env:ENV['light.username'], hint:'set by '+ENV['light.username']+' in '+ENV_FILE });
+  textField(d,'Device password',function(){ return 'set in the environment - value not shown'; },null,
+    { readonly:true, env:ENV['light.password'], hint:'set by '+ENV['light.password']+' in '+ENV_FILE+'. A device credential is never put in this shell (D-35).' });
+}
+
+/* --------------------------------------------------------------- commit -- */
+function renderCommit(){
+  var n=stagedTotal();
+  $('commit').hidden = n===0;
+  if(!n) return;
+  $('commit-n').textContent = n+(n===1?' staged change':' staged changes');
+  var parts=[];
+  SECTIONS.forEach(function(s){ var k=sectionStaged(s.id); if(k) parts.push(k+' in '+s.name); });
+  $('commit-brk').textContent = parts.join(' · ');
+  var firstStaged=null;
+  SECTIONS.forEach(function(s){ if(!firstStaged && sectionStaged(s.id)) firstStaged=s.id; });
+  $('goto-staged').hidden = (firstStaged===current);
+  $('goto-staged').onclick = function(){ go(firstStaged); };
+}
+
+function saveAll(){
+  LIVE=JSON.parse(JSON.stringify(draft));
+  LIVE.version+=1;
+  STATUS.tableVersion=LIVE.version;
+  draft=JSON.parse(JSON.stringify(LIVE));
+  editing={};
+  if(!rowById(LIVE.states,STATUS.state)){
+    STATUS.state='unknown'; STATUS.confirmed='unknown'; STATUS.busy=true;
+  }
+  flash('ok','Saved. The table is now v'+LIVE.version+'.');
+  redrawAll();
+}
+function flash(kind,msg){
+  var b=$('banner'); b.className='banner '+kind; b.textContent=msg; b.hidden=false;
+  clearTimeout(banners); banners=setTimeout(function(){ b.hidden=true; },4000);
+}
+
+/* ---------------------------------------------------------------- modal -- */
+function openModal(title,bullets,ok,promptLabel,onOk){
+  $('modal-title').textContent=title;
+  var body=$('modal-body'); clear(body);
+  if(bullets&&bullets.length){ var ul=el('ul'); bullets.forEach(function(b){ ul.appendChild(el('li',null,b)); }); body.appendChild(ul); }
+  var input=null;
+  if(promptLabel){
+    body.appendChild(el('div','hint',promptLabel));
+    input=el('input'); input.type='password'; body.appendChild(input);
+  }
+  var err=el('div','hint bad'); body.appendChild(err);
+  $('modal-ok').textContent=ok;
+  $('modal').hidden=false;
+  if(input) input.focus();
+  $('modal-ok').onclick=function(){ if(onOk(input?input.value:null,err)!==false) $('modal').hidden=true; };
+  $('modal-cancel').onclick=function(){ $('modal').hidden=true; };
+}
+
+/* ------------------------------------------------------ navigation, view -- */
+function go(id){
+  if(!id) return;
+  current=id;
+  SECTIONS.forEach(function(s){ $('sec-'+s.id).hidden = (s.id!==id); });
+  $('pane').scrollTop=0;
+  /* the rail is real navigation: the section is in the URL, so it is linkable and
+     survives a reload. The old rail's hrefs pointed at ids that did not exist. */
+  try{ history.replaceState(null,'','#'+id); }catch(e){}
+  renderRail(); renderCommit();
+}
+
+function setView(v){
+  view=v;
+  document.documentElement.setAttribute('data-view',v);
+  try{ localStorage.setItem('onair.view',v); }catch(e){}
+  $('v-simple').setAttribute('aria-pressed', v==='simple'?'true':'false');
+  $('v-adv').setAttribute('aria-pressed', v==='advanced'?'true':'false');
+  $('v-simple2').setAttribute('aria-pressed', v==='simple'?'true':'false');
+  $('v-adv2').setAttribute('aria-pressed', v==='advanced'?'true':'false');
+  var vis=SECTIONS.filter(function(s){ return v==='simple' ? s.simple : true; });
+  if(!vis.some(function(s){ return s.id===current; })) go('status'); else renderRail();
+  /* D-80: no draft touched, no staged count moved, no Save armed. */
+}
+
+function setTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  try{ localStorage.setItem('onair.theme',t); }catch(e){}
+}
+
+/* --------------------------------------------------------------- redraw -- */
+function redrawChrome(){ renderRail(); renderCommit(); }
+function redrawStates(){ renderRows(); renderRail(); renderCommit(); renderStatus(); }
+function redrawAll(){ renderTop(); renderStatus(); renderRows(); renderFields(); renderRail(); renderCommit(); }
+
+/* ----------------------------------------------------------------- wire -- */
+$('v-simple').addEventListener('click',function(){ setView('simple'); });
+$('v-adv').addEventListener('click',function(){ setView('advanced'); });
+$('v-simple2').addEventListener('click',function(){ setView('simple'); });
+$('v-adv2').addEventListener('click',function(){ setView('advanced'); });
+$('theme').addEventListener('click',function(){
+  setTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');
+});
+$('rfilter').addEventListener('input',renderRail);
+$('pin').addEventListener('click',function(){
+  STATUS.hold = STATUS.hold===null ? STATUS.state : null;
+  renderStatus(); renderRail();
+});
+$('addrow').addEventListener('click',function(){
+  var id='new-state', n=1;
+  while(rowById(draft.states,id)) id='new-state-'+(++n);
+  var r={ id:id, label:'', color:'#ffffff', bgcolor:'#333333', description:'', busy:true, order:draft.states.length };
+  draft.states.push(r);
+  editing[id]=JSON.parse(JSON.stringify(r));
+  redrawStates();
+});
+$('discard').addEventListener('click',function(){
+  editing={}; draft=JSON.parse(JSON.stringify(LIVE)); redrawAll();
+});
+$('save').addEventListener('click',saveAll);
+$('freset').addEventListener('click',function(){
+  openModal('Factory reset',[
+    'Credentials, the state table, the pin, the live state, the port and the bind mode all return to their defaults.',
+    'The device connection is kept - it is coming from the environment anyway.',
+    'Every admin session ends, including this one.'
+  ],'Reset','Admin password',function(pw,err){
+    if(!pw){ err.textContent='the admin password is required'; return false; }
+    flash('ok','Prototype: a real reset would end this session and reload.');
+    return true;
+  });
+});
+$('logout').addEventListener('click',function(){ flash('ok','Prototype: logging out would return to the public tally.'); });
+$('reage').addEventListener('click',function(){
+  STATUS.state='available'; STATUS.confirmed='available'; STATUS.busy=false; STATUS.intended='off';
+  STATUS.source='human:admin'; STATUS.ageSeconds=578; STATUS.stale=true; STATUS.hold=null;
+  redrawAll();
+});
+document.addEventListener('keydown',function(e){
+  if(e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+  if(e.metaKey||e.ctrlKey||e.altKey) return;
+  var n=parseInt(e.key,10);
+  if(n>=1&&n<=9){
+    var vis=SECTIONS.filter(function(s){ return view==='simple' ? s.simple : true; });
+    if(vis[n-1]) go(vis[n-1].id);
+  }
+});
+
+/* ------------------------------------------------------------------ boot -- */
+(function(){
+  var t=null, v=null;
+  try{ t=localStorage.getItem('onair.theme'); v=localStorage.getItem('onair.view'); }catch(e){}
+  if(t!=='light'&&t!=='dark')
+    t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+  var tok=(location.hash||'').replace('#','').split(',');
+  if(tok.indexOf('simple')!==-1) v='simple';
+  if(tok.indexOf('advanced')!==-1) v='advanced';
+  if(tok.indexOf('light')!==-1) t='light';
+  if(tok.indexOf('dark')!==-1) t='dark';
+  setTheme(t);
+  setView(v==='simple'?'simple':'advanced');
+  var want='status';
+  SECTIONS.forEach(function(s){ if(tok.indexOf(s.id)!==-1 && (view==='advanced'||s.simple)) want=s.id; });
+  go(want);
+  redrawAll();
+})();
+</script>
+
+<!--
+NOTES
+
+(a) Thesis. Organise the console the way a settings app or a mail client does: a rail that is
+always on screen, always says where you are, and carries live per-section signal, beside one
+content pane that scrolls on its own.
+
+(b) What simple view hides, and why that is safe. Simple prunes the RAIL, not the pane. The
+rail keeps Status, States and Admin and drops Network and Device connection, because those two
+are install-time wiring and one of them cannot be set from this page at all: D-79 makes every
+device field read-only. The pruning is disclosed, not silent - the rail footer names the two
+hidden sections, says why, and offers a one-click way back. Inside the pane, simple drops only
+prose and diagnostics: the lede paragraphs, the Readout list, order and description in the row
+editor. The contrast checker, the locked id, the busy column and all three commit levels stay
+in both views, so simple is a smaller console rather than a crippled one. Because the rail
+scales, the same rule would still work at twenty sections: the rail groups, filters, and takes
+number keys.
+
+(c) The stale-but-calm contradiction. This is the centre of the design. The reported row is
+available, busy:false, and its evidence is 578s old, past D-32's 90s threshold, so the page
+must not look calm. It therefore has three postures rather than one. Fresh: the tally card
+wears the row's own colours. Stale and busy: the row stands, amber-barred, marked
+unconfirmed. Stale and calm: CALM WITHHELD - the card refuses the green entirely, wears a
+hatched amber treatment, and QUOTES the row as a small chip instead of becoming it. The header
+pill, the rail dot, and the row's LIVE badge (which reads "live, unvouched") all follow the
+same posture, so no corner of the page is calm while the rest is not. Clicking any state chip
+makes the evidence fresh and the calm colours return, which demonstrates the rule rather than
+describing it.
+
+(d) Weakest. States looks nearly identical in both views, so simple earns less there than
+elsewhere. The rail's filter is theatre at five sections. And a rail that must hold signal for
+every section is the thing most likely to get noisy as sections are added.
+-->
+</body>
+</html>

@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-view="advanced">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>on-air &middot; console</title>
+<style>
+/* =====================================================================================
+   VARIANT A - COMMAND FIRST
+   The palette, the chip, the small-caps column headings and the master/detail editor are
+   lifted from docs/design/esp32-config-2026-08-26/live/onair.css so the two web UIs read
+   as one product. Tokens are copied verbatim; only the attribute name changed
+   ([data-mode] -> [data-theme]) because here the choice is per-browser (D-80), not
+   per-device.
+   ===================================================================================== */
+*, ::before, ::after { box-sizing: border-box }
+
+:root { color-scheme: light dark }
+[data-theme="dark"] {
+  --bg: #0f1113; --panel: #14181c; --panel-2: #1a1f24; --line: #262c33; --line-2: #333a41;
+  --ink: #e8eaed; --ink-2: #aab4bd; --ink-3: #8b959e;
+  --accent: #6fb3ff; --accent-soft: #16304d;
+  --ok: #8fd6a3; --ok-line: #2f6b45; --warn: #e8ca8f; --warn-line: #7a6a3b;
+  --bad: #ff8f8f; --bad-line: #7a3b3b;
+  --field: #0b0d0f;
+  --hatch: rgba(0,0,0,.62);
+}
+[data-theme="light"] {
+  --bg: #eceff1; --panel: #ffffff; --panel-2: #f5f7f8; --line: #d3d9dd; --line-2: #b3bcc3;
+  --ink: #10161a; --ink-2: #59646c; --ink-3: #7d8891;
+  --accent: #0e6577; --accent-soft: #dceef2;
+  --ok: #1d6b3a; --ok-line: #8ec9a5; --warn: #7a5200; --warn-line: #e0c07a;
+  --bad: #a32020; --bad-line: #e0a0a0;
+  --field: #ffffff;
+  --hatch: rgba(255,255,255,.66);
+}
+
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 74rem; margin: 0 auto; padding: 0 1.1rem 6rem }
+code, .id, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em }
+[hidden] { display: none !important }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px }
+
+button, select, input { font: inherit; color: inherit }
+.btn {
+  font: inherit; background: var(--panel-2); color: var(--ink);
+  border: 1px solid var(--line-2); border-radius: 6px; padding: .38rem .8rem; cursor: pointer;
+}
+.btn:hover { background: var(--line) }
+.btn:disabled { opacity: .45; cursor: default; background: var(--panel-2) }
+.btn.ghost { background: none; color: var(--ink-2) }
+.btn.danger { background: none; color: var(--bad); border-color: var(--bad-line) }
+.btn.go { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600 }
+.btn.sm { padding: .22rem .55rem; font-size: .8rem }
+
+.cap { font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3) }
+.m { color: var(--ink-3); font-size: .85rem }
+
+/* ------------------------------------------------------------------ the thin brand bar --
+ * Deliberately thin. It is not the point of the page; the control surface below it is. */
+.top {
+  max-width: 74rem; margin: 0 auto; padding: .55rem 1.1rem .2rem;
+  display: flex; align-items: center; gap: .6rem;
+}
+.brand { font-family: ui-monospace, Menlo, monospace; font-weight: 700; letter-spacing: .04em }
+.top .sp { flex: 1 }
+.seg { display: flex; border: 1px solid var(--line-2); border-radius: 99px; overflow: hidden }
+.seg button {
+  background: none; border: 0; padding: .25rem .8rem; cursor: pointer;
+  font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3);
+}
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 700 }
+.icon-btn {
+  background: none; border: 1px solid var(--line-2); border-radius: 99px; cursor: pointer;
+  width: 2rem; height: 2rem; display: grid; place-items: center; color: var(--ink-2); padding: 0;
+}
+.icon-btn:hover { background: var(--panel-2); color: var(--ink) }
+.icon-btn svg { width: 16px; height: 16px; display: block }
+
+/* ================================================================= THE CONTROL SURFACE ==
+ * Full width, top of page, biggest thing on screen, IDENTICAL in both views. Everything
+ * below it is secondary. */
+.surface { margin: .5rem 0 1.15rem }
+
+.tally {
+  position: relative; border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--line-2);
+  display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: center;
+  padding: 1.25rem 1.4rem; min-height: 8.5rem;
+}
+/* The diagonal hatch. Lifted from the panel's own NO-DATA band, where broken-up ink is
+ * already the house sign for "the glass cannot vouch for this". */
+.tally.unconfirmed::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(135deg, var(--hatch) 0 8px, transparent 8px 20px);
+}
+.tally.unconfirmed { border: 2px dashed var(--warn); }
+.tally.pending { border: 2px solid var(--warn) }
+.tally.calm { border: 1px solid var(--line-2) }
+.tally > * { position: relative }
+
+.tally-word {
+  font-size: clamp(2.4rem, 6.5vw, 4.4rem); font-weight: 800; letter-spacing: .02em;
+  line-height: 1; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tally-sub { margin-top: .5rem; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap }
+.tally-right { text-align: right; display: grid; gap: .5rem; justify-items: end }
+.hold-btn { white-space: nowrap }
+/* Small text sits on top of an arbitrary user-chosen fill, so it inherits the fill's own
+ * paired colour rather than a grey token. #c1121f + #8b959e was unreadable. */
+.tally #tally-cap, .tally .m { color: currentColor; opacity: .72 }
+.tally.calm .flag { color: currentColor; opacity: .95 }
+
+.flag {
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .68rem; letter-spacing: .09em; text-transform: uppercase; font-weight: 700;
+  border-radius: 99px; padding: .12rem .55rem; border: 1px solid currentColor;
+}
+.flag.warn { color: var(--warn) } .flag.ok { color: var(--ok) } .flag.bad { color: var(--bad) }
+.flag.pin { color: var(--accent) }
+.dot { width: .5rem; height: .5rem; border-radius: 99px; background: currentColor; flex: none }
+
+/* The caution band. Sits BETWEEN the tally and the chips, so the sentence that says the
+ * page cannot vouch for the state is physically attached to the controls that fix it. */
+.caution {
+  border: 1px solid var(--warn-line); border-top: 0; border-radius: 0 0 10px 10px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  margin: -12px .9rem 0; padding: .55rem .9rem .5rem;
+  display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap;
+  font-size: .88rem; color: var(--warn);
+}
+.caution svg { width: 15px; height: 15px; flex: none; transform: translateY(2px) }
+.caution b { font-weight: 700 }
+
+/* The chips ARE the page. Five of them, full width, no words needed. */
+.chips { display: grid; grid-template-columns: repeat(5, 1fr); gap: .6rem; margin-top: .9rem }
+.chip {
+  position: relative; border: 0; cursor: pointer; border-radius: 10px;
+  min-height: 6.2rem; padding: 1.1rem .5rem .5rem;
+  font-weight: 800; font-size: 1.05rem; letter-spacing: .05em;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .5rem;
+  outline-offset: 3px;
+}
+.chip:hover { filter: brightness(1.08) }
+.chip:active { transform: translateY(1px) }
+.chip .lab { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100% }
+.chip .mark {
+  font-size: .6rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 700;
+  border-radius: 99px; padding: .1rem .5rem; border: 1px solid currentColor; opacity: .95;
+}
+.chip.is-live { outline: 3px solid var(--ok) }
+.chip.is-live.unconfirmed { outline: 3px dashed var(--warn) }
+.chip.is-live.pending { outline: 3px solid var(--warn) }
+.chip .pinflag {
+  position: absolute; top: .4rem; right: .45rem; font-size: .58rem; letter-spacing: .09em;
+  text-transform: uppercase; font-weight: 700; opacity: .9;
+}
+.chip-ids { display: grid; grid-template-columns: repeat(5, 1fr); gap: .6rem; margin-top: .3rem }
+.chip-ids span { text-align: center; color: var(--ink-3); font-size: .72rem;
+                 font-family: ui-monospace, Menlo, monospace;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+
+/* ------------------------------------------------------------------- the section strip --
+ * Modest by design: one row of small text under the surface. It is a way OUT of the
+ * frequent job, not a menu you have to pass through to reach it. */
+.strip {
+  display: flex; gap: .15rem; align-items: center; flex-wrap: wrap;
+  border-bottom: 1px solid var(--line); padding-bottom: .1rem; margin-bottom: 1rem;
+}
+.strip button {
+  background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer;
+  padding: .45rem .7rem; color: var(--ink-3);
+  font-size: .74rem; letter-spacing: .1em; text-transform: uppercase;
+}
+.strip button:hover { color: var(--ink) }
+.strip button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 700 }
+.strip .sp { flex: 1 }
+.strip .close { font-size: .7rem; letter-spacing: .08em }
+
+.simple-note { margin: -.4rem 0 1rem; color: var(--ink-3); font-size: .8rem }
+
+/* ------------------------------------------------------------------------- the sections */
+section { margin: 0 0 1.5rem }
+h2 { font-size: .78rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 .8rem }
+
+dl.facts { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1.2rem; margin: 0 }
+dl.facts dt { color: var(--ink-3) }
+dl.facts dd { margin: 0; font-family: ui-monospace, Menlo, monospace; font-size: .92em }
+dl.facts dd.warn { color: var(--warn) } dl.facts dd.ok { color: var(--ok) } dl.facts dd.bad { color: var(--bad) }
+
+.list { border: 1px solid var(--line); border-radius: 8px; overflow: hidden }
+.hd, .r {
+  display: grid; gap: .7rem; align-items: center;
+  grid-template-columns: 11.5rem minmax(6rem, 1fr) 4.5rem 7rem auto;
+  padding: .5rem .7rem;
+}
+[data-view="simple"] .hd, [data-view="simple"] .r { grid-template-columns: 11.5rem 1fr auto }
+.hd {
+  font-size: .68rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-3); background: var(--panel-2); border-bottom: 1px solid var(--line);
+}
+.r { border-bottom: 1px solid var(--line); background: var(--panel) }
+.r:last-child { border-bottom: 0 }
+.r.staged { box-shadow: inset 3px 0 0 var(--warn) }
+.rowchip {
+  display: block; text-align: center; padding: .3rem .5rem; border-radius: 5px;
+  font-weight: 700; font-size: .82rem; letter-spacing: .04em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.idcell { color: var(--ink-2); font-family: ui-monospace, Menlo, monospace; font-size: .85rem }
+.lock { color: var(--ink-3) }
+.badge {
+  font-size: .62rem; letter-spacing: .09em; text-transform: uppercase;
+  border: 1px solid var(--line-2); border-radius: 99px; padding: .05rem .45rem;
+  color: var(--ink-3); margin-left: .35rem; white-space: nowrap;
+}
+.badge.staged { border-color: var(--warn); color: var(--warn) }
+.badge.live { border-color: var(--ok); color: var(--ok) }
+.badge.unconf { border-color: var(--warn); color: var(--warn) }
+.busy { font-size: .7rem; letter-spacing: .08em; color: var(--ink-3) }
+.busy.y { color: var(--bad) }
+.ratio { font-family: ui-monospace, Menlo, monospace; font-size: .8rem }
+.ratio.pass { color: var(--ok) } .ratio.fail { color: var(--bad) }
+
+/* master/detail: the editor opens BENEATH its row, the list stays put */
+.ed { background: var(--panel-2); border-bottom: 1px solid var(--line); padding: .9rem .8rem }
+.ed-grid { display: grid; gap: 1.2rem; grid-template-columns: 1fr minmax(0, 15rem) }
+.f { margin: 0 0 .7rem }
+.f > label { display: block; color: var(--ink-3); font-size: .74rem; letter-spacing: .06em;
+             text-transform: uppercase; margin: 0 0 .25rem }
+.f .row2 { display: flex; gap: .4rem; align-items: center }
+input[type=text], input[type=password], input[type=number], select {
+  font: inherit; background: var(--field); color: var(--ink);
+  border: 1px solid var(--line-2); border-radius: 5px; padding: .35rem .5rem; min-width: 0; width: 100%;
+}
+select { cursor: pointer }
+input[type=color] {
+  width: 2.2rem; height: 2rem; padding: 0; border: 1px solid var(--line-2);
+  border-radius: 5px; background: none; cursor: pointer; flex: none;
+}
+input[readonly], input:disabled { color: var(--ink-3); background: var(--panel); cursor: not-allowed }
+.ed-actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center }
+.preview { text-align: center; padding: 1.1rem .5rem; border-radius: 8px; font-weight: 800;
+           letter-spacing: .05em; margin-bottom: .5rem }
+
+.fields { display: grid; gap: .9rem; max-width: 34rem }
+.note { color: var(--ink-3); font-size: .78rem; margin-top: .2rem }
+.note.warn { color: var(--warn) }
+.ro-reason { color: var(--ink-3); font-size: .78rem; margin-top: .2rem; display: flex; gap: .35rem }
+.ro-reason svg { width: 12px; height: 12px; flex: none; transform: translateY(3px) }
+.danger-zone { margin-top: 1.4rem; border-top: 1px solid var(--line); padding-top: 1rem;
+               display: flex; gap: .7rem; align-items: center; flex-wrap: wrap }
+
+/* the commit bar: NOT in the header, and it does not exist until something is staged */
+.commit {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  background: var(--panel); border-top: 1px solid var(--warn-line);
+  padding: .6rem 1.1rem; display: flex; gap: .6rem; align-items: center;
+}
+.commit .inner { max-width: 74rem; margin: 0 auto; width: 100%;
+                 display: flex; gap: .6rem; align-items: center }
+.commit .sp { flex: 1 }
+.commit .n { color: var(--warn); font-weight: 700; font-size: .88rem }
+
+.banner { border-radius: 6px; padding: .5rem .85rem; margin: .6rem 0; border: 1px solid; font-size: .92rem }
+.banner.ok { border-color: var(--ok-line); color: var(--ok) }
+
+@media (max-width: 62rem) {
+  .chips, .chip-ids { grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)) }
+  .chip-ids { display: none }
+  .ed-grid { grid-template-columns: 1fr }
+  .hd { display: none }
+  .r, [data-view="simple"] .r { grid-template-columns: 1fr auto; gap: .35rem .6rem }
+  .tally { grid-template-columns: 1fr }
+  .tally-right { justify-items: start; text-align: left }
+}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <span class="brand">on-air</span>
+  <span class="m" id="top-ver"></span>
+  <span class="sp"></span>
+  <div class="seg" role="group" aria-label="view">
+    <button id="v-simple" aria-pressed="false">Simple</button>
+    <button id="v-advanced" aria-pressed="true">Advanced</button>
+  </div>
+  <button class="icon-btn" id="theme-btn" aria-label="Switch to light theme" title="Theme">
+    <svg id="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/>
+    </svg>
+    <svg id="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" hidden>
+      <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+    </svg>
+  </button>
+</div>
+
+<main>
+  <!-- ============================ THE CONTROL SURFACE. Identical in both views. -->
+  <div class="surface">
+    <div class="tally" id="tally">
+      <div>
+        <div class="cap" id="tally-cap">the light is showing</div>
+        <div class="tally-word" id="tally-word">&nbsp;</div>
+        <div class="tally-sub" id="tally-sub"></div>
+      </div>
+      <div class="tally-right">
+        <button class="btn hold-btn" id="hold-btn">Pin this state</button>
+        <span class="m" id="hold-note"></span>
+      </div>
+    </div>
+
+    <div class="caution" id="caution" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>
+      </svg>
+      <span id="caution-text"></span>
+    </div>
+
+    <div class="chips" id="chips"></div>
+    <div class="chip-ids" id="chip-ids"></div>
+  </div>
+
+  <!-- ============================ everything else, reached from a modest strip -->
+  <div class="strip" id="strip"></div>
+  <div class="simple-note" id="simple-note" hidden></div>
+  <div id="saved-banner" class="banner ok" hidden>configuration saved</div>
+
+  <section id="sec-status" hidden>
+    <h2>Status</h2>
+    <dl class="facts" id="status-facts"></dl>
+  </section>
+
+  <section id="sec-states" hidden>
+    <h2>States</h2>
+    <div class="list" id="rows"></div>
+    <p class="m" id="states-foot"></p>
+  </section>
+
+  <section id="sec-admin" hidden>
+    <h2>Admin</h2>
+    <div class="fields">
+      <div class="f">
+        <label for="admin-view">View</label>
+        <select id="admin-view">
+          <option value="simple">Simple &ndash; the control surface and the state table</option>
+          <option value="advanced">Advanced &ndash; every fact, every setting</option>
+        </select>
+        <div class="note">Stored in this browser. It never touches the draft or the Save button.</div>
+      </div>
+      <div class="f">
+        <label for="admin-pw">Admin password</label>
+        <input id="admin-pw" type="password" value="onair-admin" autocomplete="new-password">
+        <div class="note warn">currently set to the default</div>
+      </div>
+    </div>
+    <div class="danger-zone">
+      <button class="btn danger" id="factory">Factory reset</button>
+      <span class="m">Asks for the admin password. Returns the table, the pin and the credentials to their defaults.</span>
+    </div>
+  </section>
+
+  <section id="sec-network" hidden>
+    <h2>Network</h2>
+    <div class="fields">
+      <div class="f"><label for="net-port">Port</label><input id="net-port" type="number" value="8484"></div>
+      <div class="f"><label for="net-bind">Bind</label>
+        <select id="net-bind"><option value="loopback" selected>This machine only</option><option value="all">All interfaces</option></select>
+        <div class="note">Loopback is always bound.</div>
+      </div>
+      <div class="f"><label for="net-on">POST /on sets</label><select id="net-on"></select></div>
+      <div class="f"><label for="net-off">POST /off sets</label><select id="net-off"></select></div>
+      <div class="f"><label for="net-pass">Passphrase (machine clients)</label>
+        <input id="net-pass" type="text" value="onair-local" spellcheck="false">
+        <div class="note">Readable on purpose: it is typed into the ESP32 and into Companion.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sec-device" hidden>
+    <h2>Device connection</h2>
+    <div class="fields" id="device-fields"></div>
+  </section>
+</main>
+
+<div class="commit" id="commit" hidden>
+  <div class="inner">
+    <span class="n" id="commit-n"></span>
+    <span class="m">Cancel returns a row to its last staged value; Revert drops it to live. The chips above keep the saved table until you save.</span>
+    <span class="sp"></span>
+    <button class="btn" id="discard-all">Discard all</button>
+    <button class="btn go" id="save-all">Save configuration</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ---------------------------------------------------------------- hardcoded sample data.
+ * In the real console these arrive at runtime from gated routes (D-35); here they are
+ * literals so the file opens from file:// with no fetch(). */
+var LIVE = {
+  version: 11,
+  states: [
+    { id:'available',     label:'AVAILABLE',     color:'#ffffff', bgcolor:'#0b6e2e', busy:false, order:0  },
+    { id:'on-air',        label:'ON AIR',        color:'#ffffff', bgcolor:'#c1121f', busy:true,  order:1  },
+    { id:'interruptible', label:'INTERRUPTIBLE', color:'#1a1a1a', bgcolor:'#e8a317', busy:false, order:2  },
+    { id:'recording',     label:'RECORDING',     color:'#ffffff', bgcolor:'#6a0dad', busy:true,  order:3  },
+    { id:'unknown',       label:'NO DATA',       color:'#ff00ff', bgcolor:'#1a1a1a', busy:true,  order:99 }
+  ]
+};
+var STATUS = {
+  state: 'available', confirmed: 'available', hold: null, source: 'human:admin',
+  busy: false, intended: 'off', ageSeconds: 578, stale: true, tableVersion: 11
+};
+var DEVICE = { host:'10.42.12.77', entity:'PresenceKey', username:'onair', password:'set-in-config-env' };
+var STALE_AFTER = 300;           // seconds. 578 > 300, which is why the live row is stale.
+var RO_REASON = 'set by ONAIR_LIGHT_HOST in ~/.onair/config.env';
+
+var draft = JSON.parse(JSON.stringify(LIVE));   // staged
+var editing = {};                               // id -> in-progress edit (D-39 level 1)
+var openSection = 'status';
+var confirmTimer = null;
+
+var $ = function (id) { return document.getElementById(id); };
+function el(t, c, x) { var n = document.createElement(t); if (c) n.className = c;
+  if (x !== undefined && x !== null) n.textContent = String(x); return n; }
+function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+function rowOf(id) { return draft.states.filter(function (r) { return r.id === id; })[0]; }
+function sorted() { return draft.states.slice().sort(function (a, b) { return a.order - b.order; }); }
+/* THE CONTROL SURFACE READS `LIVE`, NEVER THE DRAFT. A chip is a command the server will
+ * act on, so it must wear the label the server actually has; a staged rename that has not
+ * been saved would otherwise put a word on the biggest button on the page that no part of
+ * the system agrees with. The states table below is the only place the draft is shown. */
+function liveRowOf(id) { return LIVE.states.filter(function (r) { return r.id === id; })[0]; }
+function liveSorted() { return LIVE.states.slice().sort(function (a, b) { return a.order - b.order; }); }
+
+/* ---------------------------------------------------------------- colour maths.
+ * WCAG relative luminance, straight out of app.js. The contrast checker stays. */
+function lin(c) { c = c / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+function lum(hex) { var m = /^#([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return null;
+  var n = parseInt(m[1], 16);
+  return 0.2126*lin((n>>16)&255) + 0.7152*lin((n>>8)&255) + 0.0722*lin(n&255); }
+function ratio(fg, bg) { var a = lum(fg), b = lum(bg); if (a === null || b === null) return null;
+  return (Math.max(a,b) + 0.05) / (Math.min(a,b) + 0.05); }
+function rgb(hex) { var n = parseInt(hex.slice(1), 16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+function hx(n) { n = Math.max(0, Math.min(255, Math.round(n))); return (n < 16 ? '0' : '') + n.toString(16); }
+/* Mix a state colour toward the page's own panel colour. Used ONLY to drain the confidence
+ * out of an unconfirmed tally: the colour is still recognisable, it is no longer solid. */
+function mix(hex, toward, k) { var a = rgb(hex), b = rgb(toward);
+  return '#' + hx(a[0]+(b[0]-a[0])*k) + hx(a[1]+(b[1]-a[1])*k) + hx(a[2]+(b[2]-a[2])*k); }
+function panelHex() { return document.documentElement.dataset.theme === 'light' ? '#ffffff' : '#14181c'; }
+function inkHex()   { return document.documentElement.dataset.theme === 'light' ? '#10161a' : '#e8eaed'; }
+
+function human(s) {
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  return m + 'm ' + (s % 60) + 's';
+}
+
+/* =====================================================================================
+   D-32, THE BUSY RULE, in one function.
+
+   The live payload says state "available", busy false, stale TRUE. Calm and unsupported
+   at the same time. This page refuses to draw that as calm: `trust` is what every part of
+   the control surface keys off, and only 'confirmed' unlocks the confident treatment.
+
+     confirmed  - fresh AND the light has echoed the state back. Solid colour.
+     pending    - fresh, but the light has not answered yet. Solid outline, no hatch.
+     unconfirmed- stale, or the light echoes something else. Hatched, drained, dashed.
+
+   Note that busy:false has no say in it. Calm is a property of the STATE; confidence is a
+   property of the EVIDENCE; the page never lets the first one imply the second.
+   ===================================================================================== */
+function trust() {
+  if (STATUS.stale) return 'unconfirmed';
+  if (STATUS.confirmed === null) return 'pending';
+  if (STATUS.confirmed !== STATUS.state) return 'unconfirmed';
+  return 'confirmed';
+}
+
+/* ---------------------------------------------------------------- the control surface */
+function renderTally() {
+  var t = trust(), row = liveRowOf(STATUS.state) || liveRowOf('unknown');
+  var node = $('tally');
+  node.className = 'tally ' + (t === 'confirmed' ? 'calm' : t);
+
+  if (t === 'confirmed') {
+    node.style.background = row.bgcolor;
+    node.style.color = row.color;
+  } else {
+    /* The colour is drained toward the page and then broken up by the hatch. Someone
+     * across the room still reads "green-ish"; nobody reads "all good". */
+    node.style.background = mix(row.bgcolor, panelHex(), 0.55);
+    node.style.color = inkHex();
+  }
+
+  $('tally-cap').textContent = t === 'confirmed' ? 'the light is showing' :
+                               t === 'pending'   ? 'the light was told' :
+                                                   'last written, not confirmed';
+  $('tally-word').textContent = row.label;
+
+  var sub = $('tally-sub'); clear(sub);
+  function flag(cls, text) { var f = el('span', 'flag ' + cls); f.appendChild(el('span', 'dot'));
+    f.appendChild(el('span', null, text)); sub.appendChild(f); return f; }
+
+  if (t === 'unconfirmed') flag('warn', 'unconfirmed · ' + human(STATUS.ageSeconds) + ' old');
+  else if (t === 'pending') flag('warn', 'waiting for the light');
+  else flag('ok', 'confirmed by the light');
+
+  /* The output the light is meant to be driving. Truthful in both directions: when the
+   * evidence is stale we do not claim to know the lamp is off, only what we asked for. */
+  flag(t === 'confirmed' ? 'ok' : 'warn',
+       (t === 'confirmed' ? 'light ' : 'light asked for ') + STATUS.intended);
+  if (STATUS.hold !== null) flag('pin', 'pinned');
+  if (document.documentElement.dataset.view === 'advanced') {
+    sub.appendChild(el('span', 'm mono', 'by ' + STATUS.source));
+  }
+
+  $('hold-btn').textContent = STATUS.hold === null ? 'Pin this state' : 'Release the pin';
+  $('hold-note').textContent = STATUS.hold === null ? 'auto · detector may change it'
+                                                    : 'held at ' + STATUS.hold;
+
+  /* The caution band is attached to the surface, not tucked into a diagnostics list, and
+   * it names the one control that fixes it - which is the biggest thing on the page. */
+  var c = $('caution');
+  if (t === 'unconfirmed') {
+    c.hidden = false;
+    $('caution-text').innerHTML = STATUS.stale
+      ? 'No confirmation for <b>' + human(STATUS.ageSeconds) + '</b>. This may already be wrong. Press a state below to assert one now.'
+      : 'The light reports <b>' + String(STATUS.confirmed) + '</b>, not <b>' + STATUS.state + '</b>. Press a state below to assert one now.';
+  } else if (t === 'pending') {
+    c.hidden = false;
+    $('caution-text').innerHTML = 'Sent. Waiting for the light to echo it back…';
+  } else {
+    c.hidden = true;
+  }
+  markChips();
+}
+
+/* Chips are BUILT ONCE. The one-second tick and the status refresh only ever touch marks
+ * and text - never innerHTML on this container. That is the bug in refreshStatus(): a
+ * rebuild swaps the button out from under the click that is already on its way down. */
+function buildChips() {
+  var box = $('chips'); clear(box);
+  var ids = $('chip-ids'); clear(ids);
+  liveSorted().forEach(function (r) {
+    var b = el('button', 'chip');
+    b.style.background = r.bgcolor; b.style.color = r.color;
+    b.dataset.id = r.id;
+    b.setAttribute('aria-label', 'Set state to ' + r.label);
+    b.appendChild(el('span', 'pinflag'));
+    b.appendChild(el('span', 'lab', r.label));
+    b.appendChild(el('span', 'mark'));
+    b.addEventListener('click', function () { setState(r.id); });
+    box.appendChild(b);
+    ids.appendChild(el('span', null, r.id));
+  });
+  markChips();
+}
+function markChips() {
+  var t = trust();
+  Array.prototype.forEach.call($('chips').children, function (b) {
+    var isLive = b.dataset.id === STATUS.state;
+    b.className = 'chip' + (isLive ? ' is-live ' + (t === 'confirmed' ? '' : t) : '');
+    var mark = b.querySelector('.mark');
+    mark.textContent = !isLive ? '' :
+      t === 'confirmed' ? 'live' : t === 'pending' ? 'sending…' : 'live? unconfirmed';
+    mark.style.display = isLive ? '' : 'none';
+    b.querySelector('.pinflag').textContent = (STATUS.hold === b.dataset.id) ? 'pinned' : '';
+  });
+}
+
+/* One click, from anywhere on the page, in both views. */
+function setState(id) {
+  STATUS.state = id;
+  STATUS.busy = !!(liveRowOf(id) || {}).busy;
+  STATUS.intended = STATUS.busy ? 'on' : 'off';
+  STATUS.source = 'human:admin';
+  STATUS.ageSeconds = 0;
+  STATUS.stale = false;
+  STATUS.confirmed = null;                 // the light has not answered yet - say so
+  if (STATUS.hold !== null) STATUS.hold = id;
+  renderTally(); renderStatusFacts();
+  clearTimeout(confirmTimer);
+  confirmTimer = setTimeout(function () {  // stands in for the device echo
+    STATUS.confirmed = id; renderTally(); renderStatusFacts();
+  }, 900);
+}
+
+$('hold-btn').addEventListener('click', function () {
+  STATUS.hold = STATUS.hold === null ? STATUS.state : null;
+  renderTally(); renderStatusFacts();
+});
+
+/* The age really counts up, and really crosses back into stale at STALE_AFTER. Text only
+ * - no node is replaced. */
+setInterval(function () {
+  STATUS.ageSeconds += 1;
+  var was = STATUS.stale;
+  STATUS.stale = STATUS.ageSeconds >= STALE_AFTER;
+  if (was !== STATUS.stale) { renderTally(); }
+  else {
+    var t = trust();
+    if (t === 'unconfirmed' && STATUS.stale) {
+      $('caution-text').innerHTML = 'No confirmation for <b>' + human(STATUS.ageSeconds) +
+        '</b>. This may already be wrong. Press a state below to assert one now.';
+      var f = $('tally-sub').querySelector('.flag span:last-child');
+      if (f) f.textContent = 'unconfirmed · ' + human(STATUS.ageSeconds) + ' old';
+    }
+    var dd = $('status-facts').querySelector('[data-fact="age"]');
+    if (dd) dd.textContent = STATUS.ageSeconds + 's' + (STATUS.stale ? ' · stale' : '');
+  }
+}, 1000);
+
+/* ---------------------------------------------------------------- Status facts (advanced) */
+function renderStatusFacts() {
+  var dl = $('status-facts'); clear(dl);
+  var t = trust();
+  var facts = [
+    ['State', STATUS.state, ''],
+    ['Busy', STATUS.busy ? 'yes' : 'no', STATUS.busy ? 'bad' : ''],
+    ['Evidence', t, t === 'confirmed' ? 'ok' : 'warn'],
+    /* An echo that arrived ten minutes ago is not a green fact. Only trust() may say ok. */
+    ['Confirmed by the light',
+      STATUS.confirmed === null ? '— waiting'
+        : STATUS.confirmed + (t === 'confirmed' ? '' : ' · ' + human(STATUS.ageSeconds) + ' ago, not since'),
+      t === 'confirmed' ? 'ok' : 'warn'],
+    ['Written by', STATUS.source, ''],
+    ['Last write', null, STATUS.stale ? 'warn' : ''],
+    ['Stale threshold', STALE_AFTER + 's', ''],
+    ['Pinned at', STATUS.hold === null ? 'auto' : STATUS.hold, ''],
+    ['Light output (intended)', STATUS.intended, ''],
+    ['Table version', String(STATUS.tableVersion), '']
+  ];
+  facts.forEach(function (f) {
+    dl.appendChild(el('dt', null, f[0]));
+    var dd = el('dd', f[2] || null);
+    if (f[0] === 'Last write') {
+      dd.dataset.fact = 'age';
+      dd.textContent = STATUS.ageSeconds + 's' + (STATUS.stale ? ' · stale' : '');
+    } else dd.textContent = f[1];
+    dl.appendChild(dd);
+  });
+}
+
+/* ---------------------------------------------------------------- the state table */
+function stagedIds() {
+  var out = [], liveById = {};
+  LIVE.states.forEach(function (r) { liveById[r.id] = r; });
+  draft.states.forEach(function (r) {
+    var l = liveById[r.id];
+    if (!l || JSON.stringify(l) !== JSON.stringify(r)) out.push(r.id);
+  });
+  return out;
+}
+function renderRows() {
+  var box = $('rows'); clear(box);
+  var advanced = document.documentElement.dataset.view === 'advanced';
+  var staged = stagedIds();
+
+  var hd = el('div', 'hd');
+  hd.appendChild(el('span', null, 'panel draws'));
+  hd.appendChild(el('span', null, advanced ? 'id' : 'name'));
+  if (advanced) { hd.appendChild(el('span', null, 'busy')); hd.appendChild(el('span', null, 'contrast')); }
+  hd.appendChild(el('span', null, ''));
+  box.appendChild(hd);
+
+  sorted().forEach(function (r) {
+    var line = el('div', 'r' + (staged.indexOf(r.id) !== -1 ? ' staged' : ''));
+    var chip = el('span', 'rowchip', r.label);
+    chip.style.background = r.bgcolor; chip.style.color = r.color;
+    line.appendChild(chip);
+
+    var c2 = el('span');
+    if (advanced) {
+      /* D-31/D-34: the id is immutable and VISIBLY locked. */
+      var idc = el('span', 'idcell', r.id + ' ');
+      var lk = el('span', 'lock', '\u{1F512}'); lk.title = 'ids are permanent – Companion buttons bind to them';
+      idc.appendChild(lk);
+      c2.appendChild(idc);
+    } else {
+      c2.appendChild(el('span', null, r.label));
+    }
+    if (r.id === STATUS.state) {
+      var live = el('span', 'badge ' + (trust() === 'confirmed' ? 'live' : 'unconf'),
+        trust() === 'confirmed' ? 'live' : 'live?');
+      c2.appendChild(live);
+    }
+    if (staged.indexOf(r.id) !== -1) c2.appendChild(el('span', 'badge staged', 'staged'));
+    line.appendChild(c2);
+
+    if (advanced) {
+      var b = el('span', 'busy' + (r.busy ? ' y' : ''), r.busy ? 'busy' : 'calm');
+      b.title = 'the server’s, not editable here (D-32)';
+      line.appendChild(b);
+      var cr = ratio(r.color, r.bgcolor);
+      var rn = el('span', 'ratio ' + (cr >= 4.5 ? 'pass' : 'fail'), cr.toFixed(1) + ':1');
+      line.appendChild(rn);
+    }
+
+    var act = el('span');
+    var edit = el('button', 'btn sm', editing[r.id] ? 'Close' : 'Edit');
+    edit.addEventListener('click', function () {
+      if (editing[r.id]) delete editing[r.id];
+      else editing[r.id] = JSON.parse(JSON.stringify(r));
+      renderRows();
+    });
+    act.appendChild(edit);
+    line.appendChild(act);
+    box.appendChild(line);
+
+    if (editing[r.id]) box.appendChild(editorNode(r.id));
+  });
+
+  $('states-foot').textContent = 'Table v' + draft.version + ' · ' + draft.states.length +
+    ' rows · which rows exist and which are busy are the server’s (D-32). Order is presentation only.';
+  renderCommit();
+}
+
+function editorNode(id) {
+  var e = editing[id];
+  var wrap = el('div', 'ed');
+  var grid = el('div', 'ed-grid');
+  var leftCol = el('div'), rightCol = el('div');
+
+  function field(label, node, note) {
+    var f = el('div', 'f');
+    f.appendChild(el('label', null, label));
+    f.appendChild(node);
+    if (note) f.appendChild(el('div', 'note', note));
+    return f;
+  }
+  var labInput = el('input'); labInput.type = 'text'; labInput.value = e.label;
+  labInput.addEventListener('input', function () { e.label = labInput.value; paint(); });
+  leftCol.appendChild(field('Label', labInput, 'What the panel and the chip draw.'));
+
+  function colourRow(key) {
+    var row2 = el('div', 'row2');
+    var sw = el('input'); sw.type = 'color'; sw.value = e[key];
+    var tx = el('input'); tx.type = 'text'; tx.value = e[key]; tx.spellcheck = false;
+    sw.addEventListener('input', function () { e[key] = sw.value; tx.value = sw.value; paint(); });
+    tx.addEventListener('input', function () {
+      if (/^#[0-9a-f]{6}$/i.test(tx.value)) { e[key] = tx.value; sw.value = tx.value; paint(); }
+    });
+    row2.appendChild(sw); row2.appendChild(tx);
+    return row2;
+  }
+  leftCol.appendChild(field('Text colour', colourRow('color')));
+  leftCol.appendChild(field('Background', colourRow('bgcolor')));
+
+  var idBox = el('input'); idBox.type = 'text'; idBox.value = e.id; idBox.readOnly = true;
+  var idField = field('Id \u{1F512} permanent', idBox);
+  idField.appendChild(el('div', 'note', 'Renaming would rebind every Companion button. Ids never change (D-31).'));
+  leftCol.appendChild(idField);
+
+  var busyBox = el('input'); busyBox.type = 'text'; busyBox.value = e.busy ? 'busy' : 'calm'; busyBox.disabled = true;
+  leftCol.appendChild(field('Busy', busyBox, 'The server’s. The console does not get a vote (D-32).'));
+
+  var prev = el('div', 'preview');
+  var ratioLine = el('div', 'ratio');
+  var lumLine = el('div', 'note');
+  rightCol.appendChild(el('div', 'cap', 'preview'));
+  rightCol.appendChild(prev);
+  rightCol.appendChild(ratioLine);
+  rightCol.appendChild(lumLine);
+
+  function paint() {
+    prev.textContent = e.label || ' ';
+    prev.style.background = e.bgcolor; prev.style.color = e.color;
+    var cr = ratio(e.color, e.bgcolor);
+    ratioLine.className = 'ratio ' + (cr >= 4.5 ? 'pass' : 'fail');
+    ratioLine.textContent = cr.toFixed(2) + ':1 · ' + (cr >= 4.5 ? 'passes AA' : 'below 4.5:1');
+    var L = Math.round(lum(e.bgcolor) * 255);
+    lumLine.textContent = 'background luminance ' + L + ' – the panel’s line is 128, so this draws the ' +
+      (L >= 128 ? 'light ring' : 'heavy double frame') + '.';
+    // live chip in the row above, without rebuilding the list
+    var chips = $('rows').querySelectorAll('.r .rowchip');
+    var idx = sorted().map(function (r) { return r.id; }).indexOf(id);
+    if (chips[idx]) { chips[idx].textContent = e.label; chips[idx].style.background = e.bgcolor; chips[idx].style.color = e.color; }
+  }
+  paint();
+
+  grid.appendChild(leftCol); grid.appendChild(rightCol);
+  wrap.appendChild(grid);
+
+  var acts = el('div', 'ed-actions');
+  var stage = el('button', 'btn go', 'Stage this change');
+  stage.addEventListener('click', function () {
+    var r = rowOf(id);
+    r.label = e.label; r.color = e.color; r.bgcolor = e.bgcolor;
+    delete editing[id];
+    renderRows(); buildChips(); renderTally();
+  });
+  var cancel = el('button', 'btn', 'Cancel');
+  cancel.title = 'Abandon this edit and return the row to its last staged value.';
+  cancel.addEventListener('click', function () { delete editing[id]; renderRows(); });
+  acts.appendChild(stage); acts.appendChild(cancel);
+
+  if (stagedIds().indexOf(id) !== -1) {
+    var revert = el('button', 'btn ghost', 'Revert to live');
+    revert.title = 'Drop this row all the way back to what the server has.';
+    revert.addEventListener('click', function () {
+      var liveRow = LIVE.states.filter(function (r) { return r.id === id; })[0];
+      var i = draft.states.map(function (r) { return r.id; }).indexOf(id);
+      draft.states[i] = JSON.parse(JSON.stringify(liveRow));
+      delete editing[id];
+      renderRows(); buildChips(); renderTally();
+    });
+    acts.appendChild(revert);
+  }
+  acts.appendChild(el('span', 'm', 'Cancel ≠ Revert (D-39).'));
+  wrap.appendChild(acts);
+  return wrap;
+}
+
+/* ---------------------------------------------------------------- the commit bar.
+ * It does not exist until there is something to commit. */
+function renderCommit() {
+  var n = stagedIds().length;
+  $('commit').hidden = n === 0;
+  $('commit-n').textContent = n + (n === 1 ? ' change staged' : ' changes staged');
+}
+$('discard-all').addEventListener('click', function () {
+  draft = JSON.parse(JSON.stringify(LIVE)); editing = {};
+  renderRows(); buildChips(); renderTally();
+});
+$('save-all').addEventListener('click', function () {
+  LIVE = JSON.parse(JSON.stringify(draft));
+  LIVE.version += 1; draft.version = LIVE.version; STATUS.tableVersion = LIVE.version;
+  editing = {};
+  renderRows(); buildChips(); renderTally(); renderStatusFacts(); topVer();
+  var b = $('saved-banner'); b.hidden = false;
+  setTimeout(function () { b.hidden = true; }, 2200);
+});
+
+/* ---------------------------------------------------------------- Device connection.
+ * D-79: these four are read-only here because the process reads them from the environment
+ * at start-up. A field you can type into that will be overwritten is a lie. */
+function renderDevice() {
+  var box = $('device-fields'); clear(box);
+  [['Device host', DEVICE.host], ['Entity name', DEVICE.entity],
+   ['Device user', DEVICE.username], ['Device password', DEVICE.password]].forEach(function (p) {
+    var f = el('div', 'f');
+    var lab = el('label', null, p[0] + ' ');
+    lab.appendChild(el('span', 'badge', 'read only'));
+    f.appendChild(lab);
+    var i = el('input'); i.type = 'text'; i.value = p[1]; i.readOnly = true;
+    f.appendChild(i);
+    var why = el('div', 'ro-reason');
+    why.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+      '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>';
+    why.appendChild(el('span', null, RO_REASON));
+    f.appendChild(why);
+    box.appendChild(f);
+  });
+}
+
+/* ---------------------------------------------------------------- shortcuts selects */
+function renderShortcuts() {
+  [['net-on', 'on-air'], ['net-off', 'available']].forEach(function (p) {
+    var sel = $(p[0]); clear(sel);
+    var none = el('option', null, 'not configured – returns 409'); none.value = '';
+    sel.appendChild(none);
+    sorted().forEach(function (r) {
+      var o = el('option', null, r.label + ' (' + r.id + ')'); o.value = r.id;
+      if (r.id === p[1]) o.selected = true;
+      sel.appendChild(o);
+    });
+  });
+}
+
+/* ---------------------------------------------------------------- sections and the strip.
+ * REVEALED, NOT SCROLLED. Every entry here really shows one section and hides the rest -
+ * which is the whole complaint about today's rail. */
+var SECTIONS = [
+  { id:'status', name:'Status', simple:false },
+  { id:'states', name:'States', simple:true  },
+  { id:'admin',  name:'Admin',  simple:true  },
+  { id:'network',name:'Network',simple:false },
+  { id:'device', name:'Device connection', simple:false }
+];
+function renderStrip() {
+  var simple = document.documentElement.dataset.view === 'simple';
+  var strip = $('strip'); clear(strip);
+  SECTIONS.forEach(function (s) {
+    if (simple && !s.simple) return;
+    var b = el('button', null, s.name);
+    b.setAttribute('aria-selected', String(openSection === s.id));
+    b.addEventListener('click', function () {
+      openSection = (openSection === s.id) ? null : s.id;
+      renderStrip(); showSection();
+    });
+    strip.appendChild(b);
+  });
+  strip.appendChild(el('span', 'sp'));
+  if (openSection) {
+    var c = el('button', 'close', 'close ×');
+    c.addEventListener('click', function () { openSection = null; renderStrip(); showSection(); });
+    strip.appendChild(c);
+  }
+  /* The brief asks what a variation does about sections that are empty in simple view.
+   * This one hides them and says so once, quietly, below the strip. */
+  var note = $('simple-note');
+  note.hidden = !simple;
+  note.textContent = 'Simple view. Status, Network and Device connection are hidden: they hold ' +
+    'facts and read-only values, nothing you set. The tally above already carries the one fact that matters.';
+}
+function showSection() {
+  SECTIONS.forEach(function (s) { $('sec-' + s.id).hidden = (openSection !== s.id); });
+}
+
+/* ---------------------------------------------------------------- view + theme (D-80).
+ * localStorage, applied instantly, and they touch NEITHER the draft nor the staged count
+ * nor the Save button. Note that neither handler goes anywhere near `draft`. */
+function setView(v) {
+  document.documentElement.dataset.view = v;
+  try { localStorage.setItem('onair.view', v); } catch (e) {}
+  $('v-simple').setAttribute('aria-pressed', String(v === 'simple'));
+  $('v-advanced').setAttribute('aria-pressed', String(v === 'advanced'));
+  $('admin-view').value = v;
+  if (v === 'simple' && openSection && ['status','network','device'].indexOf(openSection) !== -1) openSection = null;
+  if (v === 'advanced' && openSection === null) openSection = 'status';
+  renderStrip(); showSection(); renderRows(); renderTally();
+}
+$('v-simple').addEventListener('click', function () { setView('simple'); });
+$('v-advanced').addEventListener('click', function () { setView('advanced'); });
+$('admin-view').addEventListener('change', function () { setView($('admin-view').value); });
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('onair.theme', t); } catch (e) {}
+  $('ico-sun').hidden = (t === 'light');
+  $('ico-moon').hidden = (t !== 'light');
+  $('theme-btn').setAttribute('aria-label', t === 'light' ? 'Switch to dark theme' : 'Switch to light theme');
+  renderTally();   // the unconfirmed fill is mixed against the page colour, so it moves too
+}
+$('theme-btn').addEventListener('click', function () {
+  setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+});
+
+$('factory').addEventListener('click', function () {
+  alert('Factory reset\n\nAsks for the admin password, then returns the state table, the pin, the ' +
+        'credentials and the bind mode to their defaults.\n\n(Prototype: nothing happened.)');
+});
+
+function topVer() { $('top-ver').textContent = 'table v' + LIVE.version; }
+
+/* ---------------------------------------------------------------- boot */
+(function () {
+  var t = null, v = null;
+  try { t = localStorage.getItem('onair.theme'); v = localStorage.getItem('onair.view'); } catch (e) {}
+  if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  setTheme(t);
+  topVer();
+  buildChips();
+  renderStatusFacts();
+  renderDevice();
+  renderShortcuts();
+  setView(v === 'simple' ? 'simple' : 'advanced');
+  renderRows();
+  renderTally();
+})();
+</script>
+
+<!--
+NOTES
+
+(a) Thesis. The page is a control surface: the tally and the five chips that change it are
+the first, biggest and only guaranteed thing on screen in both views; everything else is a
+small strip underneath.
+
+(b) What simple view hides, and why that is safe. Simple keeps the whole control surface
+unchanged and offers two sections, States and Admin, both closed by default - so simple
+view at rest is the control surface and a line of five words. Status, Network and Device
+connection are hidden outright, not greyed: Status is pure diagnostics, Network is
+service configuration you touch at setup, and Device connection is four read-only fields
+(D-79), so in simple view it contains literally nothing you can set. Hiding is safe
+because nothing hidden is a control - with one exception, which is why the caution band
+is drawn on the surface itself and not inside Status. Simple's table keeps name, colour
+and Edit; the contrast checker moves into the editor, where it changes what you type.
+
+(c) The stale-but-calm contradiction. The payload says available, busy false, stale true.
+One function, trust(), decides the treatment, and busy has no vote in it: confidence is a
+property of the evidence, calm is a property of the state, and the page never lets the
+second imply the first. Unconfirmed drains the green toward the page background, hatches
+it diagonally - the panel's own sign for ink it cannot vouch for - dashes the border,
+dashes the live chip's ring, changes its badge from "live" to "live? unconfirmed", and
+attaches a caution band naming the age and pointing at the chips. The resolution is the
+thesis: the fix for stale evidence is one click on the biggest control on the page, and
+clicking it moves the tally to pending, not to calm, until the light echoes back. The
+chips read the saved table, never the draft: a staged rename must not put a word on the
+page's biggest button that no part of the system agrees with yet.
+
+(d) Weakest. The drained-plus-hatched fill costs real colour recognition at a distance, so
+the fastest scan in the design is worst exactly when the page is least sure - arguably
+right, arguably backwards. Second: the strip is deliberately modest, which makes Network
+and Device connection genuinely hard to find, and a first-time setup pass is all
+secondary sections.
+-->
+</body>
+</html>
