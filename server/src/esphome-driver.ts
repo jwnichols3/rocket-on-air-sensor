@@ -60,6 +60,7 @@ export class DriverConfigError extends Error {}
  * (web_server.cpp:167). Renaming there breaks every URL here. verifyEntity() catches it.
  */
 export class EsphomeTextDriver implements LightDriver {
+  private readonly host: string;
   private readonly base: string;
   private readonly entity: string;
   private readonly versionEntity: string;
@@ -75,8 +76,28 @@ export class EsphomeTextDriver implements LightDriver {
   private lastFrameChangeAt = 0;
   private lastVersionSent: number | null = null;
   private versionEntityMissing = false;
+  /**
+   * WHETHER THIS HOST IS ANSWERING, and since when. The log's whole job in an outage is to
+   * answer two questions - *when did it go, and which one* - and describing every poll
+   * answers neither. Measured on the live daemon log the day this was written: **1133
+   * `[esphome-driver]` lines, 1127 of them two repeated strings** ("fetch failed" 910 times,
+   * "The operation was aborted due to timeout" 217). One event, recorded a thousand times,
+   * with no timestamp and no host on any of them (#59).
+   *
+   * So the driver holds the state and logs only the EDGES. Steady-state repeats are dropped
+   * entirely rather than rate-limited: the second identical line already says nothing the
+   * first did not, and a counter on the recovery line says it better.
+   *
+   * A host that FLAPS still logs per transition, which is the honest answer - alternating
+   * results are a different fault from a dead panel and should not read like one. The
+   * recovery line's failure count is what tells them apart at a glance.
+   */
+  private failingSince: number | null = null;
+  private failedCalls = 0;
+  private configErrorLogged = false;
 
   constructor(opts: EsphomeDriverOptions) {
+    this.host = opts.host;
     this.base = `http://${opts.host}`;
     this.entity = encodeURIComponent(opts.entity ?? 'PresenceKey');
     this.versionEntity = encodeURIComponent(opts.versionEntity ?? 'TableVersion');
@@ -118,10 +139,14 @@ export class EsphomeTextDriver implements LightDriver {
       if (res.status === 401) throw new DriverConfigError(`web_server auth rejected by ${this.base}`);
       if (!res.ok) return null;
       await res.arrayBuffer();
+      this.reachable();
       return true;
     } catch (err) {
       if (err instanceof DriverConfigError) throw err;
-      this.log(`[esphome-driver] verifyEntity: device unreachable (${errText(err)})`);
+      // No bespoke line here any more. Boot is the FIRST contact, so a dead host at startup
+      // is an edge like any other and gets the same stamped, host-named line - which is the
+      // one a person reads first when asking how long this has been going on.
+      this.unreachable(err);
       return null;
     }
   }
@@ -195,8 +220,12 @@ export class EsphomeTextDriver implements LightDriver {
       }
       if (!res.ok) throw new Error(`POST ${res.status}`);
       this.lastVersionSent = version;
+      this.reachable();
     } catch (err) {
-      this.log(`[esphome-driver] version nudge failed: ${errText(err)}`);
+      // The nudge does not get its own failure line. It is a request to the same host as
+      // every other, so it feeds the same edge detector - otherwise a dead panel produces a
+      // second stream of identical lines saying what the first stream already said.
+      this.unreachable(err);
     }
   }
 
@@ -260,19 +289,72 @@ export class EsphomeTextDriver implements LightDriver {
     let last: unknown;
     for (let i = 0; i <= this.retries; i++) {
       try {
-        return await fn();
+        const value = await fn();
+        this.reachable();
+        return value;
       } catch (err) {
         if (err instanceof DriverConfigError) {
-          this.log(`[esphome-driver] CONFIG: ${errText(err)}`);
+          // A wrong entity name or rejected credentials fails identically forever, so the
+          // hundredth line is worth exactly as much as the first. Said once, then silent
+          // until this host answers again - which is the only event that can change it.
+          if (!this.configErrorLogged) {
+            this.configErrorLogged = true;
+            this.log(`[esphome-driver] ${stamp()} ${this.host} CONFIG: ${errText(err)}`);
+          }
           return null;
         }
         last = err;
         if (i < this.retries) await new Promise((r) => setTimeout(r, this.retryGapMs));
       }
     }
-    this.log(`[esphome-driver] ${errText(last)}`);
+    this.unreachable(last);
     return null;
   }
+
+  /**
+   * A call got through. Silent unless that is news - which it is exactly once, on the way
+   * back up, and then the line carries the two numbers a person actually wants: how long the
+   * host was gone and how much traffic it swallowed while it was.
+   */
+  private reachable(): void {
+    if (this.failingSince === null) return;
+    const downFor = humanMs(Date.now() - this.failingSince);
+    const n = this.failedCalls;
+    this.failingSince = null;
+    this.failedCalls = 0;
+    this.configErrorLogged = false;
+    this.log(`[esphome-driver] ${stamp()} ${this.host} BACK after ${downFor} and ${n} failed ${n === 1 ? 'call' : 'calls'}`);
+  }
+
+  /** A call failed. Only the first one after a success is worth a line. */
+  private unreachable(err: unknown): void {
+    this.failedCalls++;
+    if (this.failingSince !== null) return;
+    this.failingSince = Date.now();
+    this.log(`[esphome-driver] ${stamp()} ${this.host} UNREACHABLE: ${errText(err)}`);
+  }
+}
+
+/**
+ * A timestamp on the line, because nothing else in this log has one and "when did the panel
+ * go away" is the first question anyone asks of a device whose whole job is to be current.
+ *
+ * Deliberately only on these lines rather than on every line the service emits. Stamping the
+ * sink would be the better log and it is a different change - it rewrites the output of every
+ * component and the deploy tests that read it. An edge line that is stamped also anchors the
+ * unstamped lines around it, which is most of the value for a tenth of the blast radius.
+ */
+function stamp(): string {
+  return new Date().toISOString();
+}
+
+/** Coarse on purpose: "3h 2m" answers the question, "10932847ms" makes the reader do sums. */
+function humanMs(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 function errText(err: unknown): string {

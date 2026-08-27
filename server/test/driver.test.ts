@@ -352,3 +352,88 @@ test('a driver with no device to nudge is not required to have the method', () =
   const noop: LightDriver = new NoopDriver(() => {});
   assert.equal(noop.setTableVersion, undefined);
 });
+
+// ============================================================ #59: the failure log's edges
+
+const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/;
+
+test('A DEAD HOST IS ONE LINE, NOT ONE PER CALL - and it says when, and which one', async () => {
+  const d = await fakeDevice();
+  const host = d.host;
+  await d.close(); // nothing is listening now: every call refuses
+
+  const lines: string[] = [];
+  const driver = new EsphomeTextDriver({
+    host,
+    timeoutMs: 300,
+    retries: 0,
+    retryGapMs: 1,
+    log: (l: string) => lines.push(l),
+  });
+
+  for (let i = 0; i < 12; i++) await driver.set('on-air');
+  await driver.read();
+  await driver.setTableVersion(4); // the nudge must not open a SECOND stream of repeats
+
+  // The measured behaviour before this: 1133 lines in the live daemon log, 1127 of them two
+  // repeated strings, recording one event over and over.
+  assert.equal(lines.length, 1, `expected one edge, got ${JSON.stringify(lines)}`);
+  assert.match(lines[0]!, /UNREACHABLE/);
+  assert.match(lines[0]!, ISO, 'no timestamp means no answer to "when did it stop"');
+  assert.ok(lines[0]!.includes(host), `the line must name WHICH device: ${lines[0]}`);
+});
+
+test('coming back is the other edge, and it carries how long and how much was lost', async (t) => {
+  const d = await fakeDevice();
+  t.after(() => d.close());
+  const lines: string[] = [];
+  const driver = driverFor(d, { retries: 0, log: (l: string) => lines.push(l) });
+
+  d.status = 503; // up, but answering nothing useful
+  await driver.set('on-air');
+  await driver.set('on-air');
+  await driver.set('on-air');
+  assert.equal(lines.length, 1, 'still one line while it stays down');
+
+  d.status = null;
+  assert.equal(await driver.set('on-air'), 'on-air');
+  assert.equal(lines.length, 2);
+  assert.match(lines[1]!, /BACK after \d+s and 3 failed calls/);
+  assert.match(lines[1]!, ISO);
+  assert.ok(lines[1]!.includes(d.host));
+
+  // And a SECOND outage is a second edge - the state resets, it does not latch.
+  d.status = 503;
+  await driver.set('on-air');
+  assert.equal(lines.length, 3);
+  assert.match(lines[2]!, /UNREACHABLE/);
+});
+
+test('a config error is said once, not once per write', async (t) => {
+  const d = await fakeDevice();
+  t.after(() => d.close());
+  const lines: string[] = [];
+  // A name the fake device does not serve: 404, which is DriverConfigError - a deploy bug
+  // that will fail identically forever, so the hundredth line is worth what the first was.
+  const driver = driverFor(d, { entity: 'NotAnEntity', retries: 0, log: (l: string) => lines.push(l) });
+  for (let i = 0; i < 5; i++) await driver.set('on-air');
+  assert.equal(lines.length, 1, `expected one CONFIG line, got ${JSON.stringify(lines)}`);
+  assert.match(lines[0]!, /CONFIG:/);
+  assert.match(lines[0]!, ISO);
+  assert.ok(lines[0]!.includes(d.host));
+});
+
+test('the boot check is the first contact, so a dead host at boot is an edge like any other', async () => {
+  const d = await fakeDevice();
+  const host = d.host;
+  await d.close();
+  const lines: string[] = [];
+  const driver = new EsphomeTextDriver({ host, timeoutMs: 300, retries: 0, log: (l: string) => lines.push(l) });
+  assert.equal(await driver.verifyEntity(), null);
+  await driver.set('on-air');
+  // One line, and it is the stamped host-named one - not verifyEntity's old bespoke text
+  // followed by a stream of anonymous ones.
+  assert.equal(lines.length, 1, JSON.stringify(lines));
+  assert.match(lines[0]!, /UNREACHABLE/);
+  assert.ok(lines[0]!.includes(host));
+});

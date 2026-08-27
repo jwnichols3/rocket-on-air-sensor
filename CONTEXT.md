@@ -3627,3 +3627,54 @@ else (state, light control, API) lives on the receiver.
 
   The proof is a test, not a run count: hold `::`, assert a loopback probe calls the port free,
   assert the wildcard bind fails EADDRINUSE. Eight consecutive full server runs, 337/337.
+
+- **D-109 (2026-08-27)** **The driver logs the EDGES of a host's reachability, not the polls -
+  with a timestamp and the host on every line.** Closes #59.
+
+  Census of the live daemon log the day this was written: **1133 `[esphome-driver]` lines,
+  1127 of them two repeated strings** - "fetch failed" 910 times and "The operation was
+  aborted due to timeout" 217. One event, a panel going away, recorded a thousand times. No
+  timestamp on any of them, and no host. Nothing else in the whole log came close: the next
+  most frequent line appeared 88 times.
+
+  The three things missing were each enough on their own to leave the question unanswered, and
+  the question is *when did this panel go, and which one*. #87 makes "which one" sharper than
+  it looks: the Elegoo is a bench board and is **normally** absent, so the log has to tell
+  expected silence apart from the panel that matters dying, and it could not.
+
+  **Now:** the driver holds `failingSince` / `failedCalls` and emits one line when a host
+  starts failing and one when it comes back.
+
+  ```
+  [esphome-driver] 2026-08-27T23:39:41.674Z 127.0.0.1:58351 UNREACHABLE: POST 503
+  [esphome-driver] 2026-08-27T23:39:44.617Z 127.0.0.1:58351 BACK after 3s and 45 failed calls
+  ```
+
+  Measured: 46 failing calls across a real outage produce those two lines. 20 `set()` calls
+  plus a version nudge against a black-hole host produce **one**.
+
+  **Steady-state repeats are dropped, not rate-limited.** The second identical line already
+  says nothing the first did not, and the recovery line's count says it better. A host that
+  FLAPS still logs per transition, and that is the honest answer - alternating results are a
+  different fault from a dead panel and must not read like one. The failure count on the
+  recovery line is what tells them apart at a glance.
+
+  Three call sites fold into the one detector rather than keeping their own streams:
+  `attempt()`, `setTableVersion()` (whose nudge would otherwise be a second stream of
+  identical lines saying what the first already said), and `verifyEntity()` - boot is simply
+  the FIRST contact, so a dead host at startup is an edge like any other and loses its bespoke
+  un-stamped line. A `DriverConfigError` keeps its own once-only flag: it is deterministic and
+  will fail identically forever, so it is said once and then silent until the host answers.
+
+  **The timestamp is on these lines only, and that is a deliberate half-measure.** Nothing in
+  this log has ever carried one - not `[onair]`, not `[supervisor]`. Stamping the sink would
+  be the better log and it is a different change: it rewrites the output of every component
+  and the deploy tests that read it. A stamped edge line also anchors the unstamped lines
+  around it, which is most of the value for a fraction of the blast radius. Worth doing
+  properly one day; not worth smuggling into this ticket.
+
+  This also unblocks the cheapest fix for #68. Skipping the device when the driver already
+  knows the host is failing needs exactly this per-host failure state.
+
+  Verified live: daemon cycled onto the new build, `state=available, confirmed=available`, and
+  no `[esphome-driver]` line at all against a healthy panel.
