@@ -2620,3 +2620,65 @@ else (state, light control, API) lives on the receiver.
   the sake of a test, so `companion-module/test/fake-server.mjs` implements just enough of
   the server to bump the version on demand. Eight tests, no Companion needed, in
   `npm run verify`.
+
+- **D-76 (2026-08-27)** **The menu bar carries a drawn ON AIR sign, not words - and UNLIT is
+  reserved for "not a state" (#51).**
+
+  The plugin used to write the state into the menu bar as text (`○ AVAILABLE`, `● ON AIR`).
+  Width is the scarce resource up there, so it now draws a small ON AIR **sign** instead:
+  32x11 points, a 64x22 bitmap whose `pHYs` chunk declares 144 DPI so AppKit reads it as a 2x
+  representation at half the point size.
+
+  **The sign is painted in the state row's own `color` on its own `bgcolor`** - both halves of
+  the operator's own indicator, the same pair the panel paints on the glass and the admin
+  console edits. There is no second palette to drift from the first.
+
+  **THE BUSY RULE (D-32) is expressed as LIT versus UNLIT.** No data and no service draw the
+  sign as an outline with nothing behind the letters. That is stronger than the old text
+  marker: an unlit sign cannot be read as *any* configured state, whatever colours the
+  operator picked for it - not even if they configure a row in the same grey. A row whose
+  colours cannot be painted faithfully (missing, malformed, or no matching row at all) lands
+  in the same picture, because a sign this renderer cannot paint truthfully is one it will
+  not paint.
+
+  **The `unknown` row's own colours are deliberately NOT used.** That row is `#ff00ff` on
+  `#1a1a1a`, chosen for the glass, where the background is dark by construction. `#1a1a1a` in
+  the menu bar is invisible on a dark menu bar and a black smear on a light one. NO DATA gets
+  grey, and "no service" gets the warning amber, both unlit.
+
+  **There is no hover text, and that is a SwiftBar limitation rather than an omission.**
+  SwiftBar assigns `tooltip` to `NSMenuItem` - dropdown rows - and never to the status item's
+  button; `button?.toolTip` does not appear in `MenuBarItem.swift`. The state in words is
+  therefore the first row of the dropdown, one click away.
+
+  **No dependency was added for imaging.** A PNG is a zlib stream in four length-prefixed
+  chunks, and the encoder is twenty lines of `struct` and `zlib`. Every feature of the sign is
+  an even number of device pixels and every glyph starts on an even column, so the 2x bitmap
+  halves onto exact pixel boundaries on a 1x display - which is the case that actually has to
+  look right, because all three of Rocket's displays are 1x today.
+
+  **The test suite had to change shape, not just expectations.** `deploy/test-swiftbar.sh`
+  now decodes the PNG and asserts on the set of opaque colours in it: one colour means unlit,
+  two means lit in the row's own pair. Grepping for a marker character was only ever a proxy
+  for "what does the operator see", and the thing the operator sees is now a picture. Proven
+  by mutation - a NO DATA branch that draws a lit calm sign fails 9 assertions, trusting the
+  `stale` flag instead of deriving it fails 2, and matching the row by position instead of by
+  id fails 4.
+
+- **D-77 (2026-08-27)** **The plugin takes the look from `GET /config/states`, not from
+  `/public/status` - the same call D-75 made for Companion, for the same reason.**
+
+  The plugin read presentation from `/public/status`. `docs/api-contract.md` is explicit that
+  this is a *rendering view* for `/display` and the landing page, "free to change shape to
+  suit the two pages", and that "a renderer that holds a table must not use these ... take the
+  state key from the gated endpoints and the look from `GET /config/states`."
+
+  It also **removes a race instead of merely detecting one.** Semantics and presentation
+  arrived in two responses, and a write landing between them paired one row's `busy` with
+  another row's colour. The old code could only notice the mismatch and drop the colour.
+  Looking the row up by its **id** makes the mismatch impossible: the two halves are for the
+  same row by construction, and reordering the table cannot repaint the sign. The row is
+  matched on the **raw** id from `/status`, not the sanitised copy - `safe()` rewrites `|` and
+  collapses whitespace, which is right for a menu line and wrong for a lookup key.
+
+  `/public/status` is no longer read by the plugin at all.

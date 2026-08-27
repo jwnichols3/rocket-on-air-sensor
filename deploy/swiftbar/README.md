@@ -81,7 +81,42 @@ menu bar to react instantly.
 
 ## What the plugin shows
 
-The first line is the menu bar title. `NO DATA` in amber is the normal resting state when
-nothing has written state recently: THE BUSY RULE (D-32) refuses to claim a calm state on
-stale evidence, and the menu bar is a renderer like any other (D-63), so it says the same
-thing the ESP32 glass says.
+**The menu bar carries a drawn ON AIR sign, not words** (D-76, #51). It is 32x11 points - a
+64x22 PNG whose `pHYs` chunk declares 144 DPI, so AppKit reads it as a 2x representation at
+half the point size. The script draws it from scratch every run; a PNG is a zlib stream in
+four length-prefixed chunks and the encoder is twenty lines of stdlib.
+
+| Picture | Means |
+|---|---|
+| **Lit**, in a row's own `color` on its own `bgcolor` | that row is the current state |
+| **Unlit**, grey outline | `NO DATA` - unknown, or evidence too old to support a calm claim |
+| **Unlit**, amber outline | the on-air service is not answering |
+
+The colours are **the operator's own**, read from `GET /config/states` and matched to the
+row by id (D-77). Change a row's colours in the admin console and the menu bar follows; there
+is no second palette to drift from the first.
+
+**Unlit is reserved for "not a state".** That is THE BUSY RULE (D-32) expressed as a picture,
+and it is stronger than a coloured marker would be: an outline cannot be read as any
+configured state, whatever colours the operator picked for it. The unlit sign is the normal
+resting state when nothing has written state recently. The menu bar is a renderer like any
+other (D-63), so it says the same thing the ESP32 glass says.
+
+**There is no hover text on the menu bar, and there cannot be.** SwiftBar assigns `tooltip`
+to `NSMenuItem` - dropdown rows - and never to the status item's button; `button?.toolTip`
+does not appear in `MenuBarItem.swift`. The state in words is the **first row of the
+dropdown** instead, one click away, coloured to match the sign.
+
+## Where to change or test the state
+
+| Page | URL | What it is |
+|---|---|---|
+| Admin console | `http://127.0.0.1:8484/` | Set the state, pin and release a hold, edit the row table and its colours |
+| Public display | `http://127.0.0.1:8484/display` | A dumb full-screen tally. Point a kiosk at it |
+| Panel status | `http://<light>/onair` | What the ESP32 itself believes, open |
+| Panel settings | `http://<light>/onair/config` | The device's own table editor, behind device basic auth (D-57) |
+
+Every one of them is in the plugin's dropdown, so the menu bar is the way in. The service
+binds all interfaces by default, so the two console URLs also answer on the Mac's LAN
+address - loopback is only waived from the passphrase (D-24); from any other host the
+passphrase is required.

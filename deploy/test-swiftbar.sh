@@ -61,14 +61,64 @@ write_state() { cat > "$SCRATCH/state.json"; }
 run_plugin() { ONAIR_PORT="$PORT" ONAIR_LIGHT_HOST="${HOSTILE_HOST:-10.0.0.5}" "$PLUGIN"; }
 title() { run_plugin | head -1; }
 
+# --- reading the menu bar icon --------------------------------------------------------
+# The menu bar carries an ON AIR SIGN, not words, so these assertions decode the PNG rather
+# than grep for a marker character. That is not a workaround; it is the only way to assert
+# the property that matters. THE BUSY RULE is about what the operator SEES, and what the
+# operator sees is now a picture.
+#
+# `icon` prints the sign's opaque colours, sorted and deduplicated:
+#   one colour  -> the sign is UNLIT. Outline and letters only, nothing behind them. This is
+#                  the picture reserved for "no state": no data, no service.
+#   two colours -> the sign is LIT, in the row's own `color` on its own `bgcolor`.
+# `none` means no image reached the menu bar at all, which is the blank menu bar this plugin
+# exists to prevent.
+cat > "$SCRATCH/icon.py" <<'ICON'
+import base64, re, struct, sys, zlib
+
+line = sys.stdin.readline()
+match = re.search(r"image=([A-Za-z0-9+/=]+)", line)
+if not match:
+    print("none")
+    raise SystemExit(0)
+
+data = base64.b64decode(match.group(1))
+pos, idat, width, height = 8, b"", 0, 0
+while pos < len(data):
+    length = struct.unpack(">I", data[pos:pos + 4])[0]
+    tag = data[pos + 4:pos + 8]
+    if tag == b"IHDR":
+        width, height = struct.unpack(">II", data[pos + 8:pos + 16])
+    elif tag == b"IDAT":
+        idat += data[pos + 8:pos + 8 + length]
+    pos += 12 + length
+
+raw = zlib.decompress(idat)
+stride, offset, seen = width * 4, 0, set()
+for _ in range(height):
+    assert raw[offset] == 0, "the encoder must not filter"
+    offset += 1
+    row = raw[offset:offset + stride]
+    offset += stride
+    for x in range(width):
+        r, g, b, a = row[x * 4:x * 4 + 4]
+        if a == 255:
+            seen.add("#%02x%02x%02x" % (r, g, b))
+print(" ".join(sorted(seen)))
+ICON
+icon() { run_plugin | head -1 | /usr/bin/python3 "$SCRATCH/icon.py"; }
+
 # ---------------------------------------------------------------------------------------
 echo "== the service is unreachable =="
 # No fake server running yet. This is the highest-severity case: the menu bar must not look
 # calm, and must not look blank either.
 t="$(title)"
-check "does not render an empty title"        "$([[ -n "$t" ]] && echo yes || echo no)" "yes"
-check "does not claim a state"                "$(printf '%s' "$t" | grep -cE '○|●')" "0"
-check "says something is wrong"               "$(printf '%s' "$t" | grep -c '⚠')" "1"
+check "the menu bar is not blank"             "$([[ -n "$t" ]] && echo yes || echo no)" "yes"
+check "an icon reaches the menu bar"          "$([[ "$(icon)" == "none" ]] && echo no || echo yes)" "yes"
+# ONE colour: the sign is unlit. It cannot be read as any state the operator has configured,
+# whatever colours they chose for it.
+check "the sign is unlit"                     "$(icon)" "#e8a317"
+check "and says so in words on opening"       "$(run_plugin | grep -c '^NO SERVICE')" "1"
 check "still offers a way to start it"        "$(run_plugin | grep -c 'param1=start')" "1"
 
 /usr/bin/python3 "$SCRATCH/fake.py" "$PORT" "$SCRATCH/state.json" >/dev/null 2>&1 &
@@ -79,56 +129,64 @@ echo "== busy =="
 write_state <<'JSON'
 {"/status":  {"state":"on-air","busy":true,"stale":false,"hold":null,"ageSeconds":2,
               "source":"auto:vcrec","confirmed":"on-air","message":null},
- "/public/status": {"state":"on-air","label":"On air","bgcolor":"#c1121f"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"on-air","label":"On air","color":"#ffffff","bgcolor":"#c1121f","busy":false,"order":0}]}}
 JSON
 sleep 0.4
-check "filled marker"                         "$(title | grep -c '●')" "1"
-check "shows the row label, upper case"       "$(title | grep -c 'ON AIR')" "1"
-check "carries the row colour"                "$(title | grep -c 'color=#c1121f')" "1"
+check "the sign is lit"                       "$(icon)" "#c1121f #ffffff"
+check "in the row's own colours, both halves" "$(icon)" "#c1121f #ffffff"
+check "and the words are one click away"      "$(run_plugin | grep -c '^ON AIR | size=14')" "1"
 
 echo
 echo "== calm and fresh =="
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":3,
               "source":"auto:vcrec","confirmed":"available","message":null},
- "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
-check "hollow marker, not filled"             "$(title | grep -c '○')" "1"
-check "and not the busy marker"               "$(title | grep -c '●')" "0"
+check "the sign is lit, in the calm colour"   "$(icon)" "#0b6e2e #ffffff"
+check "and it is not the busy colour"         "$(icon | grep -c '#c1121f')" "0"
 
 echo
 echo "== THE BUSY RULE: calm but STALE must not read as calm =="
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"stale":true,"hold":null,"ageSeconds":400,
               "source":"auto:vcrec","confirmed":"available","message":null},
- "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
-check "draws NO DATA"                         "$(title | grep -c 'NO DATA')" "1"
-check "and no calm marker"                    "$(title | grep -c '○')" "0"
+check "the sign goes unlit"                   "$(icon)" "#8e8e93"
+check "so the calm colour is nowhere on it"   "$(icon | grep -c '#0b6e2e')" "0"
+check "and it says NO DATA on opening"        "$(run_plugin | grep -c '^NO DATA')" "1"
 
 echo "-- and a stale BUSY row is still busy: staleness never makes it calmer --"
 write_state <<'JSON'
 {"/status":  {"state":"on-air","busy":true,"stale":true,"hold":null,"ageSeconds":400,
               "source":"auto:vcrec","confirmed":"unknown","message":null},
- "/public/status": {"state":"on-air","label":"On air","bgcolor":"#c1121f"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"on-air","label":"On air","color":"#ffffff","bgcolor":"#c1121f","busy":false,"order":0}]}}
 JSON
-check "stale busy still shows busy"           "$(title | grep -c '●')" "1"
+check "stale busy is still lit, still red"    "$(icon)" "#c1121f #ffffff"
 
 echo
 echo "== the reserved unknown row is never calm (D-34) =="
 write_state <<'JSON'
 {"/status":  {"state":"unknown","busy":true,"stale":false,"hold":null,"ageSeconds":1,
               "source":"auto:vcrec","confirmed":"unknown","message":null},
- "/public/status": {"state":"unknown","label":"Unknown","bgcolor":"#555555"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"unknown","label":"Unknown","color":"#ffffff","bgcolor":"#555555","busy":false,"order":0}]}}
 JSON
-check "draws NO DATA"                         "$(title | grep -c 'NO DATA')" "1"
+check "the sign goes unlit"                   "$(icon)" "#8e8e93"
+check "even though the row has a colour"      "$(icon | grep -c '#555555')" "0"
 
 echo
 echo "== a pin is reported as a pinned ROW, not a person =="
 write_state <<'JSON'
 {"/status":  {"state":"on-air","busy":true,"stale":false,"hold":"on-air","ageSeconds":1,
               "source":"human:rocket","confirmed":"on-air","message":null},
- "/public/status": {"state":"on-air","label":"On air","bgcolor":"#c1121f"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"on-air","label":"On air","color":"#ffffff","bgcolor":"#c1121f","busy":false,"order":0}]}}
 JSON
 check "names the pinned row"                  "$(run_plugin | grep -c 'Pinned to: on-air')" "1"
 # reset-state also clears the message and restarts the service - far more than "release".
@@ -140,7 +198,8 @@ write_state <<'JSON'
 {"/status":  {"state":"on-air","busy":true,"stale":false,"hold":null,"ageSeconds":1,
               "source":"human:a|b","confirmed":"on-air",
               "message":"HI | color=#ff0000 bash=/bin/rm param1=-rf\nsecond line"},
- "/public/status": {"state":"on-air","label":"On|air","bgcolor":"#c1121f"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"on-air","label":"On|air","color":"#ffffff","bgcolor":"#c1121f","busy":false,"order":0}]}}
 JSON
 out="$(run_plugin)"
 # The property that matters is NOT that the string `bash=` is absent - SwiftBar only parses
@@ -152,17 +211,22 @@ check "every bash= parameter points at onair"  \
 check "no pipe survives in the message line"   "$(printf '%s' "$out" | grep 'Message:' | grep -c '|')" "0"
 check "so the message line carries no params"  "$(printf '%s' "$out" | grep -c '^Message:.*|')" "0"
 check "a newline cannot add a menu line"       "$(printf '%s' "$out" | grep -c '^second line')" "0"
-check "a pipe in the label does not split it"  "$(printf '%s' "$out" | head -1 | grep -c 'ON/AIR')" "1"
+check "a pipe in the label cannot split a line" "$(printf '%s' "$out" | grep -c '^ON/AIR | size=14')" "1"
 
 echo
 echo "== a malformed colour never reaches a parameter =="
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
               "source":"auto:x","confirmed":"available","message":null},
- "/public/status": {"state":"available","label":"Available","bgcolor":"red; rm -rf /"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"red; rm -rf /","busy":false,"order":0}]}}
 JSON
-check "bad colour is dropped, not passed on"  "$(title | grep -c 'color=')" "0"
-check "and the title still renders"           "$(title | grep -c '○ Available')" "1"
+# A row this script cannot paint faithfully is one it will not paint. The alternative -
+# painting the sign in a default colour - would put a colour on the menu bar that the
+# operator never chose, which is a renderer inventing evidence.
+check "the sign goes unlit rather than guess" "$(icon)" "#8e8e93"
+check "and the menu bar is still not blank"   "$([[ "$(icon)" == "none" ]] && echo no || echo yes)" "yes"
+check "the dropdown says why, in words"       "$(run_plugin | grep -c '^NO DATA')" "1"
 
 echo
 echo "== the host is a parameter value, so it is a command-injection surface =="
@@ -176,7 +240,8 @@ echo "== the host is a parameter value, so it is a command-injection surface =="
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
               "source":"auto:x","confirmed":"available","message":null},
- "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
 out="$(HOSTILE_HOST='h bash=/bin/sh param1=-c param2=whoami terminal=false' run_plugin)"
 check "no injected bash= parameter"           \
@@ -194,8 +259,13 @@ write_state <<'JSON'
 JSON
 # The fake serves whatever is in the file, so /status now answers with an ARRAY.
 out="$(ONAIR_PORT="$PORT" "$PLUGIN")"
+# An array is not a status object. `get()` refuses any non-dict, so this lands on the
+# unreachable picture - which is the right one: something is answering the port and it is
+# not the on-air service, and that is not a state.
 check "still prints a title"                  "$([[ -n "$out" ]] && echo yes || echo no)" "yes"
-check "and it is the warning, not a state"    "$(printf '%s' "$out" | head -1 | grep -c '⚠')" "1"
+check "an icon still reaches the menu bar"    "$([[ "$(ONAIR_PORT="$PORT" "$PLUGIN" | head -1 | /usr/bin/python3 "$SCRATCH/icon.py")" == "none" ]] && echo no || echo yes)" "yes"
+check "and the sign is unlit, not a state"    "$(ONAIR_PORT="$PORT" "$PLUGIN" | head -1 | /usr/bin/python3 "$SCRATCH/icon.py")" "#e8a317"
+check "and it says so in words"               "$(printf '%s' "$out" | grep -c '^NO SERVICE')" "1"
 
 echo
 echo "== staleness is DERIVED, never trusted =="
@@ -205,56 +275,112 @@ echo "== staleness is DERIVED, never trusted =="
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"hold":null,"ageSeconds":99999,
               "source":"auto:x","confirmed":"available","message":null},
- "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
-check "old evidence is stale without the flag" "$(title | grep -c 'NO DATA')" "1"
+check "old evidence is stale without the flag" "$(icon)" "#8e8e93"
 
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"hold":null,
               "source":"auto:x","confirmed":"available","message":null},
- "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
-check "a MISSING ageSeconds is stale"          "$(title | grep -c 'NO DATA')" "1"
+check "a MISSING ageSeconds is stale"          "$(icon)" "#8e8e93"
 
 # ...and a lying flag cannot make old evidence look fresh either.
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":99999,
               "source":"auto:x","confirmed":"available","message":null},
- "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
-check "a false stale flag does not override"   "$(title | grep -c 'NO DATA')" "1"
+check "a false stale flag does not override"   "$(icon)" "#8e8e93"
 
 echo
-echo "== the two payloads are two requests =="
-# A state change between them would pair one row's busy with another row's colour.
+echo "== the look is looked up by row id, never borrowed =="
+# The state and the colours arrive in two different responses, so the risk is pairing one
+# row's semantics with another row's paint. The old renderer read the colours from
+# /public/status and could only DETECT a mismatch and give up. Matching the row by its id in
+# the table makes the mismatch impossible instead of merely visible - and it is what the
+# contract tells a client with a table to do.
+#
+# Here /status names a row the table does not contain at all.
 write_state <<'JSON'
 {"/status":  {"state":"on-air","busy":true,"stale":false,"hold":null,"ageSeconds":1,
               "source":"auto:x","confirmed":"on-air","message":null},
- "/public/status": {"state":"available","label":"Available","bgcolor":"#0b6e2e"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
-check "mismatched rows: no borrowed colour"    "$(title | grep -c 'color=')" "0"
-check "and it falls back to the row id"        "$(title | grep -c 'ON-AIR')" "1"
+check "no colour is borrowed from another row" "$(icon | grep -c '#0b6e2e')" "0"
+check "the sign goes unlit instead"            "$(icon)" "#8e8e93"
+check "and the dropdown falls back to the id"  "$(run_plugin | grep -c 'State: on-air')" "1"
+
+# ...and the row is matched on id, not on position, so reordering the table cannot repaint
+# the sign. `on-air` is last here and its colours must still be the ones that are drawn.
+write_state <<'JSON'
+{"/status":  {"state":"on-air","busy":true,"stale":false,"hold":null,"ageSeconds":1,
+              "source":"auto:x","confirmed":"on-air","message":null},
+ "/config/states": {"version":9,"states":[
+   {"id":"recording","label":"Recording","color":"#ffffff","bgcolor":"#6a0dad","busy":true,"order":0},
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":1},
+   {"id":"on-air","label":"On air","color":"#1a1a1a","bgcolor":"#c1121f","busy":true,"order":2}]}}
+JSON
+check "the row's own colours, from anywhere in the table" "$(icon)" "#1a1a1a #c1121f"
 
 echo
 echo "== labels are operator text, and land at column 0 =="
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
               "source":"auto:x","confirmed":"available","message":null},
- "/public/status": {"state":"available","label":"   ","bgcolor":"#0b6e2e"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"   ","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
 # A label of three spaces is legal - the server validates length, never content - and would
 # otherwise erase the state word from the menu bar entirely.
-check "a whitespace label never empties the title" "$(title | grep -c 'available')" "1"
+check "a whitespace label falls back to the id" "$(run_plugin | grep -c '^AVAILABLE | size=14')" "1"
+check "and the sign is unaffected either way"   "$(icon)" "#0b6e2e #ffffff"
 
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
               "source":"auto:x","confirmed":"available","message":null},
- "/public/status": {"state":"available","label":"--Sub","bgcolor":"#0b6e2e"}}
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"--Sub","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
 # SwiftBar reads a leading `--` as a submenu child rather than a top-level line.
 # `---` is SwiftBar's own separator. What must not appear is a line starting with exactly
 # two dashes, which SwiftBar reads as a submenu child.
 check "no menu line begins with --"            "$(run_plugin | grep -cE '^--([^-]|$)')" "0"
+
+echo
+echo "== the icon is small, and it is a 2x bitmap =="
+# The FOOTPRINT is a requirement, not a detail: the sign replaced words precisely because
+# words took too much room in the menu bar. A menu bar item is about 22 points tall, so the
+# sign has to stay well inside that and stay narrower than the label it replaced.
+#
+# The pHYs chunk is what makes the point size half the pixel size. Lose it and AppKit reads
+# the bitmap at 72 DPI, the sign doubles to 64x22 POINTS, and it is suddenly the widest
+# thing in the menu bar.
+cat > "$SCRATCH/geom.py" <<'GEOM'
+import base64, re, struct, sys
+
+match = re.search(r"image=([A-Za-z0-9+/=]+)", sys.stdin.readline())
+data = base64.b64decode(match.group(1))
+pos, size, dpi = 8, None, None
+while pos < len(data):
+    length = struct.unpack(">I", data[pos:pos + 4])[0]
+    tag = data[pos + 4:pos + 8]
+    if tag == b"IHDR":
+        size = struct.unpack(">II", data[pos + 8:pos + 16])
+    elif tag == b"pHYs":
+        px_per_m, _, unit = struct.unpack(">IIB", data[pos + 8:pos + 17])
+        dpi = round(px_per_m * 0.0254) if unit == 1 else None
+    pos += 12 + length
+scale = 2 if dpi == 144 else 1
+print("%dx%d px @ %s dpi = %dx%d pt" % (size[0], size[1], dpi, size[0] // scale, size[1] // scale))
+GEOM
+geom() { run_plugin | head -1 | /usr/bin/python3 "$SCRATCH/geom.py"; }
+check "a 2x bitmap that declares its own scale" "$(geom)" "64x22 px @ 144 dpi = 32x11 pt"
 
 echo
 echo "== the action paths survive a checkout containing a space =="
