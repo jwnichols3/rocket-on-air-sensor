@@ -38,11 +38,36 @@ All four agreed on one button press during #44. And the light still spends most 
 showing `NO DATA`, because the last write is routinely hours old and THE BUSY RULE correctly
 refuses to claim calm on stale evidence.
 
-D-30 put the detector out of this repo deliberately, and that is not being reopened here.
-But **where it lives is currently deferred by silence rather than decided**, and this is the
-first moment where it is the only thing left between "the parts work" and "the thing works".
+**CORRECTED 2026-08-26.** An earlier version of this file said that "where it lives is
+deferred by silence rather than decided". That was wrong, and it was wrong in a way that
+would have sent someone off to make a decision that already exists.
 
-Worth a decision, not more infrastructure.
+**D-30 decides it.** Zoom/Meet sensing is done by a separate existing project, **VCREC**,
+"which will be evolved to push events to this server". This repo never imports it, never
+names it in code, and never depends on its shape. `docs/api-contract.md` is the only
+coupling, which is exactly why the contract had to be legible enough to be written against
+by a client whose source nobody here reads.
+
+So the decision exists and the WORK does not. Those are different things.
+
+### What is actually open
+
+Not where the Detector lives. When, or whether, VCREC gets the work:
+
+1. **Do it.** VCREC writes to `POST /state/{id}` with `source=auto:vcrec`. Nothing in this
+   repo changes.
+2. **Do not do it, and drive the light by hand.** The menu bar and the Stream Deck are
+   enough. The light becomes a manual sign rather than a sensor.
+3. **Defer it, and record that as a decision.** The current condition then becomes
+   deliberate instead of accidental.
+
+**Recommend 1.** This repo is complete for its purpose, the contract is now proved by four
+independent clients, and VCREC is the only remaining client that takes the person out of the
+loop.
+
+**If 3, write it down.** The current condition is invisible: everything reports success,
+every test passes, and the light says `NO DATA`. That reads like a fault. It is not a fault.
+It is an absent client.
 
 ## Smaller things, if the mood is for tidying
 
