@@ -3530,3 +3530,50 @@ else (state, light control, API) lives on the receiver.
   explicitly, so the default was exercised only in production. Verified after the fix on the
   live system: `confirmed: "available"` and **zero** new freeze reports in 150 s against a 90 s
   window.
+
+- **D-107 (2026-08-27)** **`/` on the panel redirects to `/onair`, and it works only because
+  it is registered EARLY. The ESPHome dashboard keeps a path at `/?esphome=1`.** Closes #56.
+
+  The complaint was two complaints with one cause: the bare device IP prompted for a password,
+  and the page behind it looked "way too simple". Nothing had been deprecated. `/` was
+  ESPHome's own dashboard - its default entity table, behind ESPHome's auth - and D-57's page
+  was one path over at `/onair`, open, with none of that. **The bare IP is what a human types**,
+  and it was the one URL that went somewhere useless.
+
+  **Registration order is the entire mechanism, and it is easy to get silently wrong.**
+  `AsyncWebServer::request_handler_()` walks its handlers in registration order and the first
+  `canHandle()` that returns true wins. ESPHome's `WebServer::canHandle()` answers true for
+  `/` (web_server.cpp:2339, 2026.8.0). `install_pages()` runs at `on_boot` priority -100, which
+  is strictly AFTER web_server's setup at `setup_priority::WIFI - 1` (249) - so a root handler
+  added there is appended second and never fires. There is no error and no log line; the
+  redirect simply does not happen. So the root handler gets **its own `on_boot` at priority
+  600**, above 249. Registering that early is safe: `add_handler_without_auth()` appends to
+  `WebServerBase::handlers_`, and `init()` copies that vector into the running server in order.
+  `global_web_server_base` is assigned in main.cpp's `setup()` before `App.setup()`, so it is
+  non-null at every component priority.
+
+  **Registered without auth, deliberately.** A redirect that fires only after a password prompt
+  is worse than no redirect, because it teaches that the prompt is expected.
+
+  **The dashboard is not swallowed.** `canHandle()` DECLINES when the request carries
+  `esphome=1`, and declining is not a 404 - it falls through to the next handler that claims
+  `/`, which is ESPHome's own, still behind ESPHome's auth exactly as before. The OTA and log
+  views live there and have no other URL. Both device pages now link to `/?esphome=1`; the
+  config page's old `href="/"` would have bounced straight back.
+
+  **The `=1` is measured, not decorative.** This shipped once reading a bare `/?esphome` and
+  the live panel redirected anyway. `query_has_key()` calls ESP-IDF's
+  `httpd_query_key_value()`, which parses `key=value` pairs and cannot see a valueless key.
+  The host-test shim had modelled the bare key as matching, so the test passed and the device
+  disagreed - the same class of failure as D-100, a shim or a build that is not the thing it
+  stands for. The shim now mirrors the device and a test asserts the measured truth: bare
+  `/?esphome` redirects, `/?esphome=1` falls through.
+
+  Verified on the live CrowPanel at `10.42.14.239` after an OTA flash: `GET /` -> `302
+  Location: /onair` with no credential; following it -> `200`; `GET /?esphome=1` -> `401`, and
+  with the device credential -> `200` and the dashboard's own HTML; `/onair` -> `200`;
+  `/onair/config` -> `401`; `/onair.css` -> `200`.
+
+  No doc named the bare device root as the way in - `deploy/swiftbar/README.md` already said
+  `http://<light>/onair` - so the doc half of #56 was already satisfied, and the only offender
+  was the device's own config page.

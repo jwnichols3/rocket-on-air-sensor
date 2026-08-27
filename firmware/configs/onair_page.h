@@ -393,7 +393,8 @@ inline std::string status_page() {
   h += "</dl>";
   h += "<p><a class=\"btn\" href=\"/onair/config\">Configure</a></p>";
   h += "<p class=\"m\">Read-only. Nothing on this page changes anything, and no "
-       "credential of any kind appears on it.</p>";
+       "credential of any kind appears on it. "
+       "<a href=\"/?esphome=1\">ESPHome dashboard</a></p>";
   page_foot(h);
   return h;
 }
@@ -718,7 +719,7 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
   h += "<p class=\"m\">The server passphrase is not shown here and cannot be read back from "
        "this device at all (D-55). Set it on the ESPHome dashboard, where the field is "
        "write-only. <a href=\"/onair\">Back to status</a> &middot; "
-       "<a href=\"/\">ESPHome dashboard</a></p>";
+       "<a href=\"/?esphome=1\">ESPHome dashboard</a></p>";
   h += "<script src=\"/onair.js\"></script>";
   page_foot(h);
   return h;
@@ -940,6 +941,68 @@ class Page : public AsyncWebHandler {
  protected:
   bool config_;
 };
+
+/**
+ * `/` redirects to `/onair`, so the one URL a person actually types reaches the panel's own
+ * page instead of ESPHome's entity list behind a credential prompt (#56).
+ *
+ * ORDER IS THE ENTIRE MECHANISM. `AsyncWebServer::request_handler_()` walks its handlers in
+ * REGISTRATION order and the first `canHandle()` that says yes wins - and ESPHome's own
+ * `WebServer::canHandle()` answers true for "/" (web_server.cpp:2339, 2026.8.0). So this
+ * handler wins only if it is registered BEFORE web_server's, which is why it is installed
+ * from its own early on_boot instead of alongside the other pages. See
+ * install_root_redirect().
+ *
+ * Registered WITHOUT auth, and that is the point rather than a convenience: a redirect that
+ * fires only after a password prompt is worse than no redirect, because it teaches that the
+ * prompt is expected.
+ */
+class Root : public AsyncWebHandler {
+ public:
+  bool canHandle(AsyncWebServerRequest *request) const override {
+    char buf[AsyncWebServerRequest::URL_BUF_SIZE];
+    if (request->url_to(buf) != "/")
+      return false;
+    // THE DASHBOARD'S SURVIVING PATH. Declining here does not 404 - it lets the request fall
+    // through to the next handler that claims "/", which is ESPHome's own, still behind
+    // ESPHome's auth exactly as before. The OTA and log views live there and have no other
+    // URL, so a redirect that swallowed "/" outright would trade one lost page for another.
+    //
+    // THE `=1` IS REQUIRED, and that is measured rather than assumed: this shipped once
+    // reading a bare `/?esphome` and the live panel redirected anyway. Underneath,
+    // `query_has_key()` calls ESP-IDF's `httpd_query_key_value()`, which parses `key=value`
+    // pairs and does not see a valueless key at all. So the hatch is spelt `/?esphome=1`,
+    // both pages link to exactly that, and a bare `/?esphome` simply redirects.
+    return !request->hasArg("esphome");
+  }
+
+  void handleRequest(AsyncWebServerRequest *request) override { request->redirect("/onair"); }
+};
+
+/**
+ * Installs ONLY the root redirect, and MUST be called from an on_boot priority above
+ * web_server's setup priority (`setup_priority::WIFI - 1`, i.e. 249). Called at LATE with
+ * the other pages it would register second and lose "/" in silence - the redirect would
+ * simply never fire, and the symptom would be indistinguishable from not having built it.
+ *
+ * Registering this early is safe even though the server does not exist yet:
+ * `add_handler_without_auth()` appends to `WebServerBase::handlers_`, and `init()` - which
+ * web_server calls at 249 - copies that vector into the running server in order. Either way
+ * this handler lands ahead of web_server's own.
+ *
+ * `global_web_server_base` is assigned in main.cpp's `setup()` before `App.setup()` runs, so
+ * it is already non-null at every component priority.
+ */
+inline void install_root_redirect() {
+  static Root root_handler;
+  auto *base = esphome::web_server_base::global_web_server_base;
+  if (base == nullptr) {
+    ESP_LOGE("onair", "no web server base - / does NOT redirect to /onair");
+    return;
+  }
+  base->add_handler_without_auth(&root_handler);
+  ESP_LOGI("onair", "device pages: / redirects to /onair (/?esphome=1 keeps the ESPHome dashboard)");
+}
 
 /// Registers both pages. Call from on_boot at a priority that runs after web_server's
 /// setup - handlers added after init() are attached to the running server immediately.

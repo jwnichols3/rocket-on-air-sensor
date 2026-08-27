@@ -26,6 +26,15 @@ esphome:
     - onair_assets.h
     - onair_page.h
   on_boot:
+    # ABOVE web_server's own setup priority (setup_priority::WIFI - 1 = 249), and that is the
+    # whole reason this is a second on_boot rather than one more line in the block below.
+    # Handlers are dispatched in registration order and ESPHome's web_server claims "/", so
+    # the redirect only wins if it is registered first. Registered at LATE it would lose
+    # silently - see install_root_redirect() (#56).
+    - priority: 600
+      then:
+        - lambda: 'onair::install_root_redirect();'
+
     # setup_priority::LATE - runs strictly after every component setup(). The template
     # text's setup() ends in publish_state(), which fires on_value unconditionally, so a
     # restored entity value must not be able to look like evidence of anything.
@@ -34,21 +43,21 @@ esphome:
     # replaced it needs no boot fix-up and cannot have this bug: `last_contact_ms` starts
     # at 0 and is only ever set by a SUCCESSFUL POLL, so a restored `available` renders as
     # NO DATA until the server actually answers, rather than as calm for 90 seconds.
-    priority: -100
-    then:
-      - lambda: |-
-          // Before anything can pull. The stored value wins over the compiled-in one, so
-          // a rotation typed at the panel survives a reflash.
-          onair::load_passphrase("${onair_default_passphrase}");
-          // The local presentation overlay (#33). Persisted, unlike the table - a row the
-          // operator renamed survives a reboot, the vocabulary it renames does not.
-          onair::load_overlay();
-          // How the served PAGES look (D-70). Nothing to do with the glass - a skin has no
-          // path to compute_view() and no vote in which SHAPE is drawn.
-          onair::load_appearance();
-          // Priority -100 runs after every component setup(), and web_server's is
-          // WIFI - 1, so the server is up and a handler added now attaches to it live.
-          onair::install_pages();
+    - priority: -100
+      then:
+        - lambda: |-
+            // Before anything can pull. The stored value wins over the compiled-in one, so
+            // a rotation typed at the panel survives a reflash.
+            onair::load_passphrase("${onair_default_passphrase}");
+            // The local presentation overlay (#33). Persisted, unlike the table - a row the
+            // operator renamed survives a reboot, the vocabulary it renames does not.
+            onair::load_overlay();
+            // How the served PAGES look (D-70). Nothing to do with the glass - a skin has no
+            // path to compute_view() and no vote in which SHAPE is drawn.
+            onair::load_appearance();
+            // Priority -100 runs after every component setup(), and web_server's is
+            // WIFI - 1, so the server is up and a handler added now attaches to it live.
+            onair::install_pages();
 
 api:
   encryption:

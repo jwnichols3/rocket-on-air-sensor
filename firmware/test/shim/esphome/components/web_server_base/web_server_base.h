@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,19 @@ class AsyncWebServerRequest {
   }
   bool hasParam(const char *name) const { return this->params_.count(name) != 0; }
 
+  /// A VALUELESS query key, i.e. `?esphome` with no `=`. Stored separately and deliberately
+  /// NOT matched by hasArg(), because that is what the device does: hasArg() reaches
+  /// ESP-IDF's httpd_query_key_value(), which parses `key=value` pairs and cannot see a bare
+  /// key. An earlier version of this shim matched it, the test passed, and the live panel
+  /// then redirected `/?esphome` anyway (#56).
+  void set_arg(const std::string &name) { this->args_.insert(name); }
+  bool hasArg(const char *name) { return this->params_.count(name) != 0; }
+
+  void redirect(const std::string &url) {
+    this->status = 302;
+    this->headers["Location"] = url;
+  }
+
   StringRef url_to(char (&)[URL_BUF_SIZE]) const { return StringRef(this->url_.c_str()); }
   WebRequestMethod method() const { return this->method_; }
 
@@ -114,6 +128,7 @@ class AsyncWebServerRequest {
   WebRequestMethod method_;
   std::string url_;
   std::map<std::string, AsyncWebParameter> params_;
+  std::set<std::string> args_;
   std::map<std::string, std::string> headers_;
 };
 

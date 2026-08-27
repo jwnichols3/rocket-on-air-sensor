@@ -696,6 +696,54 @@ static void test_registration() {
   CHECK(has(req.headers["Cache-Control"], "immutable"));
   CHECK_MSG(req.body.size() >= 2 && (uint8_t) req.body[0] == 0x1f && (uint8_t) req.body[1] == 0x8b,
             "the blob really is gzip - magic 1f 8b");
+
+  begin("the root redirect is registered WITHOUT auth, and on its own");
+  esphome::web_server_base::global_web_server_base->with_auth.clear();
+  esphome::web_server_base::global_web_server_base->without_auth.clear();
+  onair::install_root_redirect();
+  CHECK_MSG(esphome::web_server_base::global_web_server_base->without_auth.size() == 1 &&
+                esphome::web_server_base::global_web_server_base->with_auth.empty(),
+            "a redirect that fires only after a password prompt teaches that the prompt is "
+            "expected - which is the defect, not the fix (#56)");
+  AsyncWebHandler *root = esphome::web_server_base::global_web_server_base->without_auth[0];
+
+  begin("GET / answers 302 to /onair");
+  AsyncWebServerRequest slash(HTTP_GET, "/");
+  CHECK(root->canHandle(&slash));
+  root->handleRequest(&slash);
+  CHECK(slash.status == 302);
+  CHECK_MSG(slash.headers["Location"] == "/onair", "the bare IP must land on the panel's own page");
+
+  begin("GET /?esphome=1 DECLINES, so the ESPHome dashboard keeps a path");
+  AsyncWebServerRequest hatch(HTTP_GET, "/");
+  hatch.set_param("esphome", "1");
+  CHECK_MSG(!root->canHandle(&hatch),
+            "declining lets the request fall through to web_server's own handler - the OTA "
+            "and log views have no other URL");
+
+  begin("a VALUELESS /?esphome still redirects - the =1 is load-bearing");
+  AsyncWebServerRequest bare(HTTP_GET, "/");
+  bare.set_arg("esphome");
+  CHECK_MSG(root->canHandle(&bare),
+            "httpd_query_key_value() parses key=value and cannot see a bare key. Measured on "
+            "the live panel, which redirected /?esphome after this shipped reading hasArg");
+
+  begin("the root handler claims nothing but /");
+  AsyncWebServerRequest status_url(HTTP_GET, "/onair");
+  AsyncWebServerRequest config_url(HTTP_GET, "/onair/config");
+  AsyncWebServerRequest css_url(HTTP_GET, "/onair.css");
+  CHECK(!root->canHandle(&status_url));
+  CHECK(!root->canHandle(&config_url));
+  CHECK(!root->canHandle(&css_url));
+
+  begin("neither page links to the bare root any more - that link now bounces");
+  seed_table();
+  std::string sp = onair::status_page();
+  std::string cp = onair::config_page("", onair::Submitted::APPLIED, "");
+  CHECK_MSG(has(sp, "href=\"/?esphome=1\""), "the page the bare IP lands on must offer the dashboard");
+  CHECK(has(cp, "href=\"/?esphome=1\""));
+  CHECK_MSG(!has(sp, "href=\"/\"") && !has(cp, "href=\"/\""),
+            "a link to / would redirect straight back here");
 }
 
 // =========================================================================================
