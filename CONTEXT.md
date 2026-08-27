@@ -3577,3 +3577,53 @@ else (state, light control, API) lives on the receiver.
   No doc named the bare device root as the way in - `deploy/swiftbar/README.md` already said
   `http://<light>/onair` - so the doc half of #56 was already satisfied, and the only offender
   was the device's own config page.
+
+- **D-108 (2026-08-27)** **A test helper that proves a port free must probe the SAME scope the
+  service binds, and must not draw from the pool the kernel hands out at random.** Closes #58,
+  whose own fix direction pointed at the wrong code.
+
+  The flake was `Error: listen EADDRINUSE: address already in use :::54460` during
+  *"A REBIND THAT FAILS ROLLS BACK"*. The ticket read that as the test's `blocker` picking an
+  unlucky port and told us to make the blocker atomic - **but the blocker already was**: it
+  does `listen(0)`, reads the assigned port and keeps the listener, exactly as recommended.
+  The race was one helper up, in `freePort()`, and it had two independent defects.
+
+  **Defect one: the wrong scope.** `freePort()` probed `127.0.0.1`. `resolveBind('all')`
+  returns `['::']` and `listenAll()` binds that - the dual-stack wildcard. Measured on this
+  machine, holder down the side and the attempted bind across:
+
+  | holder | `127.0.0.1` | `::1` | `::` | wildcard |
+  |---|---|---|---|---|
+  | `127.0.0.1` | EADDRINUSE | OK | OK | OK |
+  | `::1` | OK | EADDRINUSE | OK | OK |
+  | **`::`** | **OK** | **OK** | **EADDRINUSE** | **EADDRINUSE** |
+
+  Read the last row. **A port held on the wildcard still binds happily on `127.0.0.1`.** So the
+  probe asked the one address that always says yes, and the service then failed on an address
+  the probe never looked at. `:::54460` is that address. Wildcard holders are everywhere in a
+  run: every other test file boots the same app on `::`, and this file's own blocker takes an
+  ephemeral wildcard port.
+
+  This was worth measuring rather than reasoning about - the first version of the fix asserted
+  that a holder on `::1` would block a wildcard bind, and the matrix says it does not.
+
+  **Defect two: the ephemeral range.** The port came from `listen(0)`, i.e. macOS 49152-65535
+  or Linux 32768-60999, and was then released. Anything on the machine - a browser tab, an
+  outbound fetch, another test file - can be handed it back in the gap. The ticket saw this
+  half and was right about it.
+
+  **The fix.** One shared `test/free-port.ts` (both suites had their own copy of the same two
+  bugs), which probes the **wildcard** and draws from **20000-32767**, below both ephemeral
+  ranges. Nothing lands there by accident; anything squatting there is a real service and the
+  probe skips it. The band is cut into 64 slices and each process takes `pid % 64`, because the
+  runner gives every test FILE its own process - two processes that never look at the same port
+  cannot race at all, and near-consecutive worker pids land in distinct slices.
+
+  Note the two pools are now disjoint by construction: the blocker still takes an *ephemeral*
+  port on purpose, and can no longer collide with a port `freePort()` handed out.
+
+  It is still not atomic and cannot be - the service does its own `listen()`, so proving a port
+  free and taking it are always two steps. What is gone is both reasons that gap could lose.
+
+  The proof is a test, not a run count: hold `::`, assert a loopback probe calls the port free,
+  assert the wildcard bind fails EADDRINUSE. Eight consecutive full server runs, 337/337.

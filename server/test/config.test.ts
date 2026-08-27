@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { loadConfig } from '../src/config.js';
+import { freePort } from './free-port.js';
 
 // The `server` workspace root, not the repo root - D-37 put the service under
 // server/, and this spawns `src/index.ts` relative to it.
@@ -14,20 +15,6 @@ const pkgRoot = fileURLToPath(new URL('..', import.meta.url));
 
 async function tmpDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'onair-config-test-'));
-}
-
-/**
- * A port that is free right now. These two tests spawn the REAL service, and a hardcoded
- * port is a flake by construction - anything else on the machine holding it (an orphaned
- * run, another checkout) fails the test for a reason that has nothing to do with the code.
- */
-async function freePort(): Promise<number> {
-  const { createServer } = await import('node:http');
-  const s = createServer(() => {});
-  await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
-  const port = (s.address() as { port: number }).port;
-  await new Promise<void>((r) => s.close(() => r()));
-  return port;
 }
 
 test('values load from the file', async () => {

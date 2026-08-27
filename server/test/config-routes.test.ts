@@ -7,6 +7,7 @@ import { createApp, type AppOptions } from '../src/app.js';
 import type { LightDriver } from '../src/driver.js';
 import { defaultConfig, type OnAirConfig } from '../src/config-store.js';
 import { SEED_ROWS, UNKNOWN_ID } from '../src/state.js';
+import { freePort } from './free-port.js';
 
 class StubDriver implements LightDriver {
   calls: string[] = [];
@@ -38,20 +39,6 @@ async function boot(t: TestContext, over: Partial<AppOptions> = {}, configOnDisk
 }
 
 const json = async (res: Response): Promise<Record<string, unknown>> => (await res.json()) as Record<string, unknown>;
-
-/**
- * A port that is free right now. The rebind tests need a REAL port in the document rather
- * than the `port: 0` seam, because rebinding is the behaviour under test and rolling back
- * to 0 would land on a different port every time.
- */
-async function freePort(): Promise<number> {
-  const { createServer } = await import('node:http');
-  const s = createServer(() => {});
-  await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
-  const port = (s.address() as { port: number }).port;
-  await new Promise<void>((r) => s.close(() => r()));
-  return port;
-}
 
 // ------------------------------------------------------- GET /config/states
 
