@@ -3066,3 +3066,45 @@ else (state, light control, API) lives on the receiver.
   about whether anyone is still watching. That is a **liveness** question about the writer, and
   it is a different question from what the state is. Conflating the two into one 90-second
   timer is the thing now under review.
+
+- **D-91 (2026-08-27)** **The server latches state and never decays it. Every judgement about
+  age moves to the client, where it becomes a judgement about the CONNECTION rather than about
+  the state.** Rocket's call, and it supersedes the server half of D-32.
+
+  **Server.** While the service runs, the state is the state. `state`, `hold`, `source`,
+  `updatedAt` and `message` change only on an explicit write. Nothing expires, nothing decays,
+  and the server never asserts anything about time. `STALE_AFTER_S` and `stale()` go, and
+  `stale` leaves the wire: it is a **judgement**, and the server no longer makes judgements.
+  `ageSeconds` and `updatedAt` stay as **provenance** - facts a client may reason about. This
+  completes D-90: the API answers writes, answers questions, accepts configuration.
+
+  **Client.** Every renderer PULLS. Three conditions, not two:
+
+  1. reachable -> draw the current state, plainly.
+  2. unreachable, inside the grace window -> **keep drawing the last known state**, with a
+     visible "connection lost" mark - a band, a line of text or an icon. The panel says what
+     it last knew AND that it is no longer being refreshed. It does not go blank and it does
+     not go calm.
+  3. unreachable beyond a configured timeout and/or retry count -> **NO DATA**.
+
+  Timeout and retry count are **configuration**, not constants, and either or both may apply.
+
+  **This is not a new pattern, it is the existing one finally applied evenly.** `/display`
+  already ships exactly this: a `DISCONNECTED` overlay behind a 45s watchdog
+  (`server/src/display.ts:64`, `:68`). SwiftBar already pulls every 5s with a bounded socket
+  deadline. The admin console already polls. **The ESP32 was the only renderer being pushed
+  to**, and the only one that could not tell "the server says calm" apart from "I cannot hear
+  the server".
+
+  **WHAT THIS COVERS AND WHAT IT DOES NOT - stated plainly, because the gap is real.** It
+  covers server death, network partition and renderer isolation: all three now produce a
+  visible, escalating loss of confidence at the renderer. **It does NOT cover a dead WRITER.**
+  If VCREC stops while the state reads `available`, the server is healthy, every client polls
+  happily, and every panel paints confident green. If Rocket then joins a call, that is a false
+  OFF - the error D-32 exists to prevent, and this design does not prevent it.
+
+  That is accepted deliberately and is **not fixed by adding decay back**. The fix, when it is
+  wanted, is additive and needs no restructuring: the server reports one more **fact** - when
+  the writer was last seen - and the client decides what to do with it. A fact is not a
+  judgement, so it does not violate the rule above. Until then the exposure is named rather
+  than hidden.
