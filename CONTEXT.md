@@ -3502,3 +3502,31 @@ else (state, light control, API) lives on the receiver.
   correctly refuses to claim calm on stale evidence."* At the start of this session the live
   panel read `PresenceKey: available` / `Render: NO DATA` with a healthy server. It does not any
   more, and the rule that produced it was not correct - it was measuring the wrong thing.
+
+- **D-106 (2026-08-27)** **The freeze detector has to be calibrated against the panel's own
+  idle repaint rate, and #64 moved that rate by 30x without moving the detector.** A
+  regression this work introduced, caught on the live system rather than by a test.
+
+  `EsphomeTextDriver.repainted()` reports a panel as FROZEN when its `Frames` counter has sat
+  still for `frozenAfterMs`, defaulting to 20s. That was calibrated against a panel repainting
+  once a second. D-99 made the paint on-change with a 30s safety net, so an idle panel now
+  repaints twice a minute - and every healthy idle panel began reporting frozen. The live
+  system sat at `confirmed: "unknown"` with the daemon log filling with *"device state agrees
+  but the panel is not repainting"*, while the glass was rendering perfectly.
+
+  Sharpest detail: **the driver's own comment already warned about this exact failure** -
+  *"reporting that as frozen drops `confirmed` to `unknown` on a perfectly healthy panel. Only
+  a counter that has sat still longer than any plausible publish interval is real evidence."*
+  The reasoning was right and the constant was stale. "Any plausible publish interval" is not a
+  fact about the driver; it is a fact about firmware in another language in another directory,
+  and nothing connected the two.
+
+  Default raised to **90s = three safety-net repaints**, and the coupling is now a TEST rather
+  than a comment: `driver.test.ts` reads the interval out of `onair-core.yaml` and fails if the
+  threshold no longer clears it. A freeze detector calibrated below the panel's own idle rate
+  does not detect freezes, it manufactures them.
+
+  **Why no test caught it:** every existing `repainted()` test passes `frozenAfterMs`
+  explicitly, so the default was exercised only in production. Verified after the fix on the
+  live system: `confirmed: "available"` and **zero** new freeze reports in 150 s against a 90 s
+  window.

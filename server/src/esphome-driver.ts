@@ -17,10 +17,24 @@ export interface EsphomeDriverOptions {
   /** How many times to re-read while waiting for a write to actually land. */
   confirmTries?: number;
   confirmGapMs?: number;
-  /** How long the frame counter must sit still before the panel counts as frozen. */
+  /**
+   * How long the frame counter must sit still before the panel counts as frozen.
+   *
+   * MUST EXCEED THE PANEL'S SLOWEST LEGITIMATE REPAINT, with room for a miss. That is a
+   * coupling to the firmware and it is stated here because it has already bitten once: #64
+   * made the paint on-change with a 30s safety net, so an idle panel repaints twice a
+   * minute - and against the old 20s default a perfectly healthy panel read as FROZEN and
+   * `confirmed` sat at `unknown` forever.
+   */
   frozenAfterMs?: number;
   log?: (line: string) => void;
 }
+
+/**
+ * The freeze threshold, exported so a test can hold it against the firmware interval it is
+ * calibrated to. 90s = three of the panel's 30s safety-net repaints (#64).
+ */
+export const DEFAULT_FROZEN_AFTER_MS = 90_000;
 
 /** A wrong entity name or rejected credentials. A deploy bug, so never retried. */
 export class DriverConfigError extends Error {}
@@ -71,7 +85,10 @@ export class EsphomeTextDriver implements LightDriver {
     this.retryGapMs = opts.retryGapMs ?? 400;
     this.confirmTries = opts.confirmTries ?? 3;
     this.confirmGapMs = opts.confirmGapMs ?? 80;
-    this.frozenAfterMs = opts.frozenAfterMs ?? 20_000;
+    // 90s = three of the firmware's 30s safety-net repaints. Raise this if that interval
+    // ever grows; a freeze detector calibrated below the panel's own idle rate does not
+    // detect freezes, it manufactures them.
+    this.frozenAfterMs = opts.frozenAfterMs ?? DEFAULT_FROZEN_AFTER_MS;
     this.log = opts.log ?? console.log;
     this.headers = opts.username
       ? { authorization: `Basic ${Buffer.from(`${opts.username}:${opts.password ?? ''}`).toString('base64')}` }
@@ -200,6 +217,10 @@ export class EsphomeTextDriver implements LightDriver {
    * twice as a matter of course - and reporting that as frozen drops `confirmed` to
    * `unknown` on a perfectly healthy panel. Only a counter that has sat still longer
    * than any plausible publish interval is real evidence.
+   *
+   * "Any plausible publish interval" is a moving target and it MOVED: it meant ~1s when
+   * this was written, and #64 made the paint on-change so an idle panel now repaints once
+   * per 30s. See `frozenAfterMs`.
    */
   async repainted(): Promise<boolean | null> {
     const body = await this.getJson(`${this.base}/sensor/Frames`);

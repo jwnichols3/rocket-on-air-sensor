@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { NoopDriver, type LightDriver } from '../src/driver.js';
-import { DriverConfigError, EsphomeTextDriver } from '../src/esphome-driver.js';
+import { DEFAULT_FROZEN_AFTER_MS, DriverConfigError, EsphomeTextDriver } from '../src/esphome-driver.js';
 import { UNKNOWN_ID } from '../src/state.js';
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 test('noop driver logs the level and reports unknown', async () => {
   const lines: string[] = [];
@@ -250,6 +255,26 @@ test('repainted does report frozen once the counter has been static long enough'
   await new Promise((r) => setTimeout(r, 60));
   assert.equal(await driver.repainted(), false, 'a genuinely stuck panel must still be caught');
   await d.close();
+});
+
+test('the freeze threshold clears the panel\'s own idle repaint rate, with margin', () => {
+  // A REGRESSION GUARD ACROSS TWO COMPONENTS, and it is here because the bug already
+  // happened. #64 made the firmware paint on-change with a 30s safety net, so an idle panel
+  // repaints twice a minute; against the old 20s default every healthy panel read as FROZEN
+  // and `confirmed` sat at `unknown` indefinitely. A freeze detector calibrated below the
+  // panel's own idle rate does not detect freezes, it manufactures them.
+  //
+  // Read from the firmware rather than restated, so moving the interval fails HERE rather
+  // than silently on the glass.
+  const core = readFileSync(join(REPO, 'firmware', 'configs', 'onair-core.yaml'), 'utf8');
+  const match = /repaint safety net[\s\S]*?- interval: (\d+)s/.exec(core);
+  assert.ok(match, 'the firmware repaint safety net moved or was renamed - re-check this coupling');
+  const safetyNetMs = Number(match[1]) * 1000;
+  assert.ok(
+    DEFAULT_FROZEN_AFTER_MS >= safetyNetMs * 2,
+    `frozenAfterMs ${DEFAULT_FROZEN_AFTER_MS}ms must clear the ${safetyNetMs}ms repaint interval ` +
+      'with room for a missed publish',
+  );
 });
 
 test('a transient failure is retried once', async () => {
