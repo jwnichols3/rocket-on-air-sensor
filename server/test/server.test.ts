@@ -360,7 +360,9 @@ test('GET /display serves the self-contained page', async () => {
   // NOT a state word: the page holds no vocabulary since D-42/D-48 - the label arrives at
   // runtime, resolved from the table. Asserting one here would re-bake one in.
   assert.match(html, /public\/events/);
-  assert.match(html, /WATCHDOG_SILENT_MS/);
+  // The client contract's two thresholds (D-91), which replaced the single 45s watchdog.
+  assert.match(html, /CONNECTION_LOST_MS/);
+  assert.match(html, /NO_DATA_MS/);
   await h.close();
 });
 

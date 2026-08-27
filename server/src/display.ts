@@ -34,65 +34,92 @@ export const DISPLAY_HTML = `<!doctype html>
   }
 
   /* The badges sit in the corners so they can never displace or cover the state word. */
-  #stale, #held {
+  #lost, #held {
     position: fixed; top: 2vh; font-size: 2.4vw; font-weight: 700; letter-spacing: 0.12em;
     padding: 0.6vh 1.4vw; border: 0.25vh solid currentColor; border-radius: 0.6vh;
     display: none;
   }
-  #stale { right: 2vw; }
-  body.stale #stale { display: block; }
+  #lost { right: 2vw; }
+  body.lost #lost { display: block; }
 
-  /* A hatched wash, so STALE is legible across a room without changing the state colour -
+  /* A hatched wash, so the mark is legible across a room without changing the state colour -
      the colour is the state and nothing else is allowed to speak with it. */
-  body.stale::after {
+  body.lost::after {
     content: ""; position: fixed; inset: 0; pointer-events: none; opacity: 0.16;
     background: repeating-linear-gradient(45deg, currentColor 0 2px, transparent 2px 14px);
   }
-
-  #overlay {
-    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-    background: rgba(0,0,0,0.82); color: #fff; font-size: 6vw; font-weight: 800;
-    letter-spacing: 0.08em;
-  }
-  body.disconnected #overlay { display: flex; }
 </style>
 </head>
 <body>
   <div id="word"></div>
   <div id="sub"></div>
-  <div id="stale">STALE</div>
-  <div id="overlay">DISCONNECTED</div>
+  <div id="lost">CONNECTION LOST</div>
   <script>
-    // If the stream says nothing at all for this long, assume the connection is dead rather
-    // than that the world stopped changing. An SSE connection can sit open and silent.
-    var WATCHDOG_SILENT_MS = 45000;
-    // Extends the server's own 'stale' forward between events. The server is the authority
-    // on the threshold; this only ages the last value we were given.
-    var STALE_AFTER_SECONDS = 90;
+    // THE CLIENT CONTRACT (D-91/D-92), in three conditions. Every threshold below is
+    // measured from THE LAST SUCCESSFUL CONTACT WITH THIS SERVER - our own wall clock,
+    // never a number the server sent us. That is what makes this fail CLOSED: there is no
+    // field to be absent, renamed or wrong. Trusting a server flag is a measured incident
+    // (D-64.3) - a calm menu bar drawn on 27-hour-old evidence - not a hypothetical.
+    //
+    // The two thresholds are independent, both from the same instant, and NOT chained.
+    // Overridable per kiosk on the query string, since a wall panel and a desk monitor can
+    // reasonably want different patience: /display?lost=60&nodata=1800 (seconds).
+    var CONNECTION_LOST_MS = 60000;   // 1 minute  - mark it as no longer refreshing
+    var NO_DATA_MS = 1800000;         // 30 minutes - give up on the state entirely
+    // Deliberately far apart: a meeting runs about thirty minutes, so the STATE must
+    // survive an outage for at least that long or the panel goes dark mid-call. The
+    // honesty about not being refreshed costs nothing, so it arrives immediately.
+
+    function seconds(name, fallback) {
+      // A character class, NOT a digit escape. This whole page is a TEMPLATE LITERAL, so a
+      // backslash here is eaten on the way out and the emitted page matches a literal "d"
+      // instead of a digit - silently, and only when someone passes an override. A class
+      // with no escape in it cannot have that bug.
+      var m = new RegExp('[?&]' + name + '=([0-9]{1,6})').exec(location.search);
+      return m ? Number(m[1]) * 1000 : fallback;
+    }
+    CONNECTION_LOST_MS = seconds('lost', CONNECTION_LOST_MS);
+    NO_DATA_MS = seconds('nodata', NO_DATA_MS);
 
     var word = document.getElementById('word');
     var sub = document.getElementById('sub');
     var last = null;
-    var lastAt = 0;
+    var lastContactAt = 0;
     var es;
 
     // The reserved row's look is the fallback for "we have nothing" - never blank, and
     // never calm. It is replaced by the server's own 'unknown' row the moment one arrives.
     function unknownLook() {
-      return { label: 'NO DATA', color: '#ff00ff', bgcolor: '#1a1a1a', message: null, stale: false };
+      return { label: 'NO DATA', color: '#ff00ff', bgcolor: '#1a1a1a', message: null };
     }
 
-    function effectiveAgeSeconds() {
-      if (last === null) return Infinity;
-      return last.ageSeconds + (Date.now() - lastAt) / 1000;
+    /** Milliseconds since we last heard ANYTHING from the server. Infinity before we ever did. */
+    function sinceContact() {
+      return lastContactAt === 0 ? Infinity : Date.now() - lastContactAt;
     }
 
-    function refreshStale() {
-      var stale = last !== null && (last.stale === true || effectiveAgeSeconds() > STALE_AFTER_SECONDS);
-      document.body.classList.toggle('stale', stale);
+    /**
+     * Condition 3: beyond the second threshold we stop claiming to know the state at all.
+     * NO DATA is drawn as the state itself rather than as an overlay - an overlay over the
+     * last known state would be two claims at once, and the honest one is the reserved row.
+     */
+    var gaveUp = false;
+    function judge() {
+      var gap = sinceContact();
+      if (last === null || gap > NO_DATA_MS) {
+        document.body.classList.remove('lost');
+        // Paint once on the way in, not every tick: this runs on a 1 s timer and repainting
+        // the same thing sixty times a minute is a busy loop wearing a judgement's clothes.
+        if (!gaveUp) { gaveUp = true; paint(unknownLook()); }
+        return;
+      }
+      gaveUp = false;
+      // Condition 2: hold the last known state, and say plainly that it is not being
+      // refreshed. It does not go blank and it does not go calm.
+      document.body.classList.toggle('lost', gap > CONNECTION_LOST_MS);
     }
 
-    function render(s) {
+    function paint(s) {
       // No vocabulary here: whatever row the server resolved is what gets drawn, including
       // one invented this morning. A page that only knew four appearances could not do that
       // and would have to drop the state - and a state that degrades to nothing looks
@@ -114,8 +141,12 @@ export const DISPLAY_HTML = `<!doctype html>
       var msg = (s.message !== null && s.message !== undefined) ? String(s.message) : '';
       sub.textContent = msg;
       sub.style.display = msg === '' ? 'none' : 'block';
+    }
 
-      refreshStale();
+    /** A fresh payload: condition 1. Draw it plainly and clear any mark. */
+    function render(s) {
+      paint(s);
+      judge();
     }
 
     function connect() {
@@ -123,31 +154,40 @@ export const DISPLAY_HTML = `<!doctype html>
       // Unauthenticated by design: this page is served without a credential, so it cannot
       // present one either. A ?token= left in a bookmarked URL is simply ignored.
       es = new EventSource('/public/events');
-      es.onopen = function () { document.body.classList.remove('disconnected'); };
+      // Opening the socket is not contact. Only a payload is - a stream that connects and
+      // then says nothing is exactly the failure these thresholds exist to catch.
+      es.onopen = function () {};
       // A NAMED event, so onmessage would never fire - onmessage only receives unnamed
       // ones. Getting this wrong is silent: the page connects, the server streams, and the
       // page sits on its opening appearance forever with nothing in the console.
       es.addEventListener('status', function (ev) {
         var data;
+        // An unparseable payload is NOT contact. Counting it would let a server emitting
+        // garbage hold the panel calm forever, which is the fail-open direction.
         try { data = JSON.parse(ev.data); } catch (e) { return; }
-        document.body.classList.remove('disconnected');
         last = data;
-        lastAt = Date.now();
+        lastContactAt = Date.now();
         render(data);
       });
-      es.onerror = function () { document.body.classList.add('disconnected'); };
+      // A socket error is NOT itself a verdict - the thresholds are - and it must not
+      // trigger a reconnect here. onerror fires immediately when the server is down, so
+      // reconnecting from inside it is a tight loop hammering a box that is already
+      // struggling. The 10 s watchdog below does the retrying, on a clock.
+      es.onerror = function () {};
     }
 
     // Ship as the unknown appearance rather than asserting anything before data arrives.
-    render(unknownLook());
+    paint(unknownLook());
     connect();
 
-    setInterval(refreshStale, 5000);
+    // The judgement runs on our own clock, not on server traffic, so a stream that goes
+    // silent still escalates on time.
+    setInterval(judge, 1000);
+    // The server emits a keep-alive status event every 15 s, so silence beyond a couple of
+    // those is a dead stream even when the socket never errored. Reconnect well inside the
+    // first threshold, so a recoverable drop never reaches the mark.
     setInterval(function () {
-      if (lastAt !== 0 && Date.now() - lastAt > WATCHDOG_SILENT_MS) {
-        document.body.classList.add('disconnected');
-        connect();
-      }
+      if (sinceContact() > 20000) connect();
     }, 10000);
     document.addEventListener('visibilitychange', function () {
       if (!document.hidden) connect();

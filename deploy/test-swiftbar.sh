@@ -58,7 +58,26 @@ FAKE
 
 write_state() { cat > "$SCRATCH/state.json"; }
 
-run_plugin() { ONAIR_PORT="$PORT" ONAIR_LIGHT_HOST="${HOSTILE_HOST:-10.0.0.5}" "$PLUGIN"; }
+# HOME is redirected into the scratch dir. The plugin keeps its last-successful-contact
+# record under ~/.onair (D-91: the thresholds are measured from OUR clock, and a process that
+# lives five seconds has to write that down somewhere). Without this the suite would both
+# read and WRITE the operator's real ~/.onair, and every test below would inherit whatever
+# the real menu bar last saw.
+export FAKE_HOME="$SCRATCH/home"
+mkdir -p "$FAKE_HOME/.onair"
+CONTACT="$FAKE_HOME/.onair/swiftbar-contact.json"
+forget_contact() { rm -f "$CONTACT"; }
+# Rewrite the recorded contact time to N seconds ago, leaving the remembered reading intact.
+age_contact() {
+  /usr/bin/python3 - "$CONTACT" "$1" <<'AGE'
+import json, sys, time
+path, secs = sys.argv[1], int(sys.argv[2])
+d = json.load(open(path))
+d["at"] = time.time() - secs
+json.dump(d, open(path, "w"))
+AGE
+}
+run_plugin() { HOME="$FAKE_HOME" ONAIR_PORT="$PORT" ONAIR_LIGHT_HOST="${HOSTILE_HOST:-10.0.0.5}" "$PLUGIN"; }
 title() { run_plugin | head -1; }
 
 # --- reading the menu bar icon --------------------------------------------------------
@@ -149,25 +168,40 @@ check "the sign is lit, in the calm colour"   "$(icon)" "#0b6e2e #ffffff"
 check "and it is not the busy colour"         "$(icon | grep -c '#c1121f')" "0"
 
 echo
-echo "== THE BUSY RULE: calm but STALE must not read as calm =="
+echo "== THE BUSY RULE: calm but UNREFRESHED must not read as calm =="
+# The rule is unchanged; what triggers it moved from the write's age to OUR connection
+# (D-91). So the setup is a good reading followed by a link that stops answering, rather
+# than a fresh reading carrying a big ageSeconds.
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"stale":true,"hold":null,"ageSeconds":400,
+{"/status":  {"state":"available","busy":false,"hold":null,"ageSeconds":4,
               "source":"auto:vcrec","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
+run_plugin >/dev/null
+write_state <<'JSON'
+[1, 2, 3]
+JSON
+age_contact 120
 check "the sign goes unlit"                   "$(icon)" "#8e8e93"
 check "so the calm colour is nowhere on it"   "$(icon | grep -c '#0b6e2e')" "0"
 check "and it says NO DATA on opening"        "$(run_plugin | grep -c '^NO DATA')" "1"
+forget_contact
 
-echo "-- and a stale BUSY row is still busy: staleness never makes it calmer --"
+echo "-- and an unrefreshed BUSY row is still busy: it never gets calmer --"
 write_state <<'JSON'
-{"/status":  {"state":"on-air","busy":true,"stale":true,"hold":null,"ageSeconds":400,
+{"/status":  {"state":"on-air","busy":true,"hold":null,"ageSeconds":4,
               "source":"auto:vcrec","confirmed":"unknown","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"on-air","label":"On air","color":"#ffffff","bgcolor":"#c1121f","busy":false,"order":0}]}}
 JSON
-check "stale busy is still lit, still red"    "$(icon)" "#c1121f #ffffff"
+run_plugin >/dev/null
+write_state <<'JSON'
+[1, 2, 3]
+JSON
+age_contact 120
+check "unrefreshed busy is still lit, still red" "$(icon)" "#c1121f #ffffff"
+forget_contact
 
 echo
 echo "== the reserved unknown row is never calm (D-34) =="
@@ -254,48 +288,110 @@ echo
 echo "== a dead renderer says so; it never goes blank =="
 # Blank IS the false OFF. Any unhandled exception, or a /usr/bin/python3 that is a stub on a
 # Mac without Command Line Tools, would otherwise emit nothing at all.
+
+# First establish contact on a good reading, so there is something to hold.
+write_state <<'JSON'
+{"/status":  {"state":"available","busy":false,"hold":null,"ageSeconds":3,
+              "source":"auto:x","confirmed":"available","message":null},
+ "/config/states": {"version":1,"states":[
+   {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
+JSON
+run_plugin >/dev/null
+
 write_state <<'JSON'
 [1, 2, 3]
 JSON
-# The fake serves whatever is in the file, so /status now answers with an ARRAY.
-out="$(ONAIR_PORT="$PORT" "$PLUGIN")"
-# An array is not a status object. `get()` refuses any non-dict, so this lands on the
-# unreachable picture - which is the right one: something is answering the port and it is
-# not the on-air service, and that is not a state.
+# The fake serves whatever is in the file, so /status now answers with an ARRAY. An array is
+# not a status object, so `get()` refuses it and this counts as a FAILED POLL - not as
+# contact. Something is answering the port and it is not the on-air service.
+out="$(run_plugin)"
 check "still prints a title"                  "$([[ -n "$out" ]] && echo yes || echo no)" "yes"
-check "an icon still reaches the menu bar"    "$([[ "$(ONAIR_PORT="$PORT" "$PLUGIN" | head -1 | /usr/bin/python3 "$SCRATCH/icon.py")" == "none" ]] && echo no || echo yes)" "yes"
-check "and the sign is unlit, not a state"    "$(ONAIR_PORT="$PORT" "$PLUGIN" | head -1 | /usr/bin/python3 "$SCRATCH/icon.py")" "#e8a317"
-check "and it says so in words"               "$(printf '%s' "$out" | grep -c '^NO SERVICE')" "1"
+check "an icon still reaches the menu bar"    "$([[ "$(icon)" == "none" ]] && echo no || echo yes)" "yes"
+# CONDITION 2 (D-91). One failed poll does not move the picture - the state is latched at the
+# server and we heard it three seconds ago. Giving up here is the over-eager NO DATA this
+# whole change removes.
+check "the last known state is HELD"          "$(icon)" "#0b6e2e #ffffff"
+check "and the dropdown says the poll failed" "$(printf '%s' "$out" | grep -c 'This poll got no answer')" "1"
+check "but it does NOT claim to be current"   "$(printf '%s' "$out" | grep -c '^NO SERVICE')" "0"
+
+# ...and once the grace window passes, the same dead renderer escalates.
+age_contact 120
+check "past a minute it says NOT REFRESHING"  "$(run_plugin | grep -c '^NOT REFRESHING')" "1"
+check "and a CALM row goes unlit"             "$(icon)" "#8e8e93"
+
+# ...and past the second threshold it stops claiming a state at all.
+age_contact 1900
+check "past thirty minutes it gives up"       "$(run_plugin | grep -c '^NO SERVICE')" "1"
+check "and says how long it has been"         "$(run_plugin | grep -c 'has been discarded')" "1"
+check "the sign is the unreachable one"       "$(icon)" "#e8a317"
+
+# FAIL CLOSED: with no usable memory of contact there is no way to bound how long we have
+# been out of touch, so no state is claimed. This is D-64.3's lesson moved somewhere it
+# cannot be undone by anything the server sends.
+forget_contact
+check "no contact record means NO SERVICE"    "$(run_plugin | grep -c '^NO SERVICE')" "1"
+check "and the sign is unlit"                 "$(icon)" "#e8a317"
+
+# A record from the FUTURE is a clock that moved, not evidence of contact.
+printf '{"at": 99999999999, "status": {"state":"available","busy":false}}' > "$CONTACT"
+check "a future-dated record is refused"      "$(run_plugin | grep -c '^NO SERVICE')" "1"
+printf 'not json at all' > "$CONTACT"
+check "an unreadable record is refused"       "$(run_plugin | grep -c '^NO SERVICE')" "1"
+forget_contact
 
 echo
-echo "== staleness is DERIVED, never trusted =="
-# The contract defines stale as ageSeconds > 90. Reading the flag instead fails OPEN on the
-# calm side: every miss - a rename, version skew, something else on the port - reads false,
-# and false means calm.
+echo "== liveness is OUR CLOCK, never anything the server says (D-91) =="
+# THE HEADLINE. The plugin used to derive `ageSeconds > 90` and go grey on it, so a calm
+# state nobody had rewritten in an hour drew NO DATA while the service was healthy and
+# answering every five seconds. It is the state. Draw it.
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"hold":null,"ageSeconds":99999,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
-check "old evidence is stale without the flag" "$(icon)" "#8e8e93"
+check "a 27-hour-old write on a LIVE link is drawn" "$(icon)" "#0b6e2e #ffffff"
+check "and nothing claims it is not refreshing"     "$(run_plugin | grep -c '^NOT REFRESHING')" "0"
 
+# ageSeconds is display text now and carries no decision, so its absence costs a dropdown
+# line and cannot change the picture.
 write_state <<'JSON'
 {"/status":  {"state":"available","busy":false,"hold":null,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
-check "a MISSING ageSeconds is stale"          "$(icon)" "#8e8e93"
+check "a MISSING ageSeconds changes nothing"        "$(icon)" "#0b6e2e #ffffff"
+check "it just says the write time is unknown"      "$(run_plugin | grep -c '^Last write: unknown')" "1"
 
-# ...and a lying flag cannot make old evidence look fresh either.
+# There is no `stale` field on the wire any more. One arriving - from version skew, or from
+# something else answering the port - must not be able to influence anything.
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":99999,
+{"/status":  {"state":"available","busy":false,"stale":true,"hold":null,"ageSeconds":4,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
-check "a false stale flag does not override"   "$(icon)" "#8e8e93"
+check "a resurrected stale flag is ignored"         "$(icon)" "#0b6e2e #ffffff"
+check "no bare 90 threshold survives in the plugin" "$(grep -c 'STALE_SECONDS' "$PLUGIN")" "0"
+
+# THE ASYMMETRY SURVIVES (D-82), with the trigger moved to the connection: an unrefreshed
+# CALM row loses its colours, an unrefreshed BUSY row keeps them. Draining a busy signal
+# weakens it, and false OFF is worse than false ON.
+write_state <<'JSON'
+{"/status":  {"state":"on-air","busy":true,"hold":null,"ageSeconds":4,
+              "source":"auto:x","confirmed":"on-air","message":null},
+ "/config/states": {"version":1,"states":[
+   {"id":"on-air","label":"On Air","color":"#ffffff","bgcolor":"#c1121f","busy":true,"order":0}]}}
+JSON
+run_plugin >/dev/null
+write_state <<'JSON'
+[1, 2, 3]
+JSON
+age_contact 120
+check "an unrefreshed BUSY row KEEPS its colours"   "$(icon)" "#c1121f #ffffff"
+check "and is still marked in words"                "$(run_plugin | grep -c '^NOT REFRESHING')" "1"
+forget_contact
 
 echo
 echo "== the look is looked up by row id, never borrowed =="

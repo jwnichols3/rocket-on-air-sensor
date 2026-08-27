@@ -25,6 +25,19 @@ var editing = {};        // id -> the in-progress edit for one row, not yet stag
 // which is truthy and has no fields. It renders as a blank page with one exception in the
 // console and nothing else. Found in a browser; no test would have.
 var liveStatus = null;       // the gated /status readout
+
+// THE CLIENT CONTRACT (D-91/D-92). The console is a renderer like any other: it polls, and
+// it judges its own CONNECTION rather than reading a verdict off the wire. `stale` is gone
+// from the server precisely because it was a judgement, and the console used to key five
+// separate pieces of chrome on it.
+//
+// Both thresholds are measured from the LAST SUCCESSFUL CONTACT, on our own clock, and are
+// NOT chained off each other. Nothing here reads `ageSeconds` to decide anything: that is
+// provenance about the WRITE, and a write being old is not the same as the server being
+// gone - conflating the two is what painted NO DATA on a healthy system.
+var CONNECTION_LOST_MS = 60000;    // 1 minute  - say it is no longer refreshing
+var NO_DATA_MS = 1800000;          // 30 minutes - give up on the state entirely
+var lastContactAt = 0;
 var lastRenderedState = null; // which row last wore the LIVE badge - see refreshStatus()
 var nags = {};
 var envInfo = { overrides: [], effective: {} };  // what the environment is overriding (D-79)
@@ -140,7 +153,9 @@ function railSignal(id) {
     return sectionDirty(id) ? { text: 'staged', cls: 'staged' } : null;
   }
   if (id === 'status') {
-    return liveStatus && liveStatus.stale ? { text: 'stale', cls: 'warn' } : null;
+    if (!liveStatus) return null;
+    if (gaveUp()) return { text: 'no data', cls: 'warn' };
+    return contactLost() ? { text: 'not refreshing', cls: 'warn' } : null;
   }
   return null;
 }
@@ -256,27 +271,52 @@ var HEX = /^#[0-9a-f]{6}$/;
 //
 // THE ASYMMETRY IS THE WHOLE POINT (D-32, D-82).
 //
-// Stale evidence is handled DIFFERENTLY depending on which way being wrong would hurt:
+// An unrefreshed reading is handled DIFFERENTLY depending on which way being wrong would
+// hurt:
 //
-//   calm + stale  -> withhold the row's colours entirely. Painting a calm room on evidence
-//                    that cannot support it is the failure this product exists to prevent.
-//   busy + stale  -> keep the row's own colours, and hatch them. Draining a stale ON AIR
-//                    toward the page background WEAKENS a busy signal, and false OFF is
-//                    worse than false ON.
+//   calm + unrefreshed -> withhold the row's colours entirely. Painting a calm room on
+//                    evidence that cannot support it is the failure this product exists to
+//                    prevent.
+//   busy + unrefreshed -> keep the row's own colours, and hatch them. Draining an
+//                    unrefreshed ON AIR toward the page background WEAKENS a busy signal,
+//                    and false OFF is worse than false ON.
 //
 // Two of the three design prototypes drained both directions toward grey. That is the
 // intuitive move and it is wrong in the busy direction: a judge verified that the drained
 // treatment reads calm from across the desk in the light theme, which is exactly what the
 // rule forbids.
+//
+// WHAT CHANGED UNDER D-91, AND WHAT DID NOT. The TRIGGER moved: this used to fire on the
+// server's `stale` flag, which meant a calm state nobody had rewritten in ten minutes was
+// drained even though the server was healthy and answering. It now fires on OUR connection.
+// The asymmetric TREATMENT below is untouched and is still D-82's - that asymmetry is about
+// how a withheld claim should look, not about when to withhold it, and D-92's rejection of
+// asymmetric THRESHOLDS does not touch it.
 function treatment(row, st) {
-  if (!row || !st) return { lit: false, hatch: true, eyebrow: 'NO DATA' };
-  if (!st.stale) return { lit: true, hatch: false, eyebrow: 'CONFIRMED ' + st.ageSeconds + 'S AGO' };
-  if (row.busy) return { lit: true, hatch: true, eyebrow: 'UNCONFIRMED FOR ' + st.ageSeconds + 'S' };
-  return { lit: false, hatch: true, eyebrow: 'UNCONFIRMED FOR ' + st.ageSeconds + 'S - COLOURS WITHHELD' };
+  if (!row || !st || gaveUp()) return { lit: false, hatch: true, eyebrow: 'NO DATA' };
+  if (!contactLost()) return { lit: true, hatch: false, eyebrow: 'LAST WRITE ' + st.ageSeconds + 'S AGO' };
+  if (row.busy) return { lit: true, hatch: true, eyebrow: 'NOT REFRESHED FOR ' + lostFor() + 'S' };
+  return { lit: false, hatch: true, eyebrow: 'NOT REFRESHED FOR ' + lostFor() + 'S - COLOURS WITHHELD' };
 }
 
 function rowFor(id) {
   return (live ? live.states : []).filter(function (r) { return r.id === id; })[0] || null;
+}
+
+/** Milliseconds since the server last answered. Infinity before it ever has. */
+function sinceContact() {
+  return lastContactAt === 0 ? Infinity : Date.now() - lastContactAt;
+}
+/** Condition 2: held, but visibly not being refreshed. */
+function contactLost() {
+  return sinceContact() > CONNECTION_LOST_MS;
+}
+/** Condition 3: we no longer claim to know the state. */
+function gaveUp() {
+  return sinceContact() > NO_DATA_MS;
+}
+function lostFor() {
+  return Math.floor(sinceContact() / 1000);
 }
 
 // ---------------------------------------------------------------- the command surface
@@ -311,9 +351,9 @@ function renderTally() {
   // The caution band sits BETWEEN the tally and the chips, so the sentence saying the
   // reading may already be wrong physically touches the control that fixes it.
   var caution = $('caution');
-  if (liveStatus.stale) {
-    caution.textContent = 'No confirmation for ' + liveStatus.ageSeconds +
-      's. Press a state below to assert one now.';
+  if (contactLost()) {
+    caution.textContent = 'No answer from the service for ' + lostFor() +
+      's. This is the last state it reported, not a current reading.';
     caution.hidden = false;
   } else {
     caution.hidden = true;
@@ -371,10 +411,11 @@ function markChips() {
     var n = chipNodes[id];
     var isLive = id === liveStatus.state;
     n.button.className = 'chip' + (isLive ? ' on' : '');
-    // A chip only claims to be live when the evidence supports it. On stale evidence it
-    // says what it actually knows: something wrote this, and the light has not agreed since.
-    if (isLive && liveStatus.stale) {
-      n.mark.textContent = 'unconfirmed';
+    // A chip only claims to be live when we are still hearing from the server. Once we are
+    // not, it says what it actually knows: this is the last thing we were told, and nobody
+    // has confirmed it since.
+    if (isLive && contactLost()) {
+      n.mark.textContent = 'last known';
       n.mark.hidden = false;
     } else if (isLive) {
       n.mark.textContent = 'live';
@@ -414,7 +455,8 @@ function renderStatus() {
     ['Busy', liveStatus.busy ? 'yes' : 'no', false],
     ['Confirmed by the light', liveStatus.confirmed, liveStatus.confirmed !== liveStatus.state],
     ['Written by', liveStatus.source, false],
-    ['Last write', liveStatus.ageSeconds + 's ago' + (liveStatus.stale ? ' - stale' : ''), liveStatus.stale],
+    ['Last write', liveStatus.ageSeconds + 's ago', false],
+    ['Service contact', contactLost() ? lostFor() + 's ago - not refreshing' : 'current', contactLost()],
     ['Light output (intended)', liveStatus.intended, false],
     ['Pinned at', liveStatus.hold === null ? 'auto' : liveStatus.hold, false],
     ['Table version', String(liveStatus.tableVersion), false]
@@ -454,7 +496,7 @@ function rowNode(row, isNew) {
   if (row.busy) { line.appendChild(document.createTextNode(' ')); line.appendChild(el('span', 'badge busy', 'BUSY')); }
   if (liveRow && liveStatus && liveStatus.state === row.id) {
     line.appendChild(document.createTextNode(' '));
-    line.appendChild(el('span', 'badge live', liveStatus.stale ? 'CLAIMED' : 'LIVE'));
+    line.appendChild(el('span', 'badge live', contactLost() ? 'LAST KNOWN' : 'LIVE'));
   }
   if (stagedIds.indexOf(row.id) !== -1) {
     line.appendChild(document.createTextNode(' '));
@@ -820,9 +862,19 @@ function renderAll() {
 // ---------------------------------------------------------------- actions
 
 function refreshStatus() {
+  // A FAILED POLL IS INFORMATION, and it used to be discarded. `if (r.status !== 200)
+  // return` meant a service that had stopped answering left the console rendering its last
+  // reading with full confidence, forever - the console had no way to tell "nothing has
+  // changed" from "I cannot hear the service". Recording contact is what closes that.
   return api('/status').then(function (r) {
-    if (r.status !== 200) return;
-    liveStatus = r.body;
+    if (r.status !== 200) return null;
+    lastContactAt = Date.now();
+    return r.body;
+  }, function () {
+    return null; // a network failure is a lost connection, not an exception to swallow
+  }).then(function (body) {
+    if (body === null) { repaintLiveness(); return; }
+    liveStatus = body;
     // The first call happens during boot, BEFORE showConsole() has a draft - and on the
     // landing path there is no console at all. Rendering the console from here without
     // checking throws on a page that otherwise looks like it is still connecting.
@@ -846,6 +898,20 @@ function refreshStatus() {
     lastRenderedState = liveStatus.state;
     if (liveChanged && Object.keys(editing).length === 0) renderRows();
   });
+}
+
+/**
+ * Redraw only the parts that speak about the connection. Runs when a poll FAILS and on its
+ * own second-by-second timer, so the escalation happens on our clock rather than waiting
+ * for traffic that by definition is not arriving. It touches text and classes only - never
+ * rebuilding a node, for the reason refreshStatus() explains at length.
+ */
+function repaintLiveness() {
+  if (!liveStatus || !live || !draft) return;
+  renderTally();
+  markChips();
+  renderStatus();
+  renderRail();
 }
 
 function saveAll() {
@@ -895,6 +961,10 @@ function showConsole() {
   renderAll();
   showSection(section);
   setInterval(refreshStatus, 5000);
+  // The thresholds are ours, so they are checked on our clock. A poll every 5s would put
+  // the mark up to 5s late and, worse, would stop escalating entirely if the poll itself
+  // wedged rather than failed.
+  setInterval(repaintLiveness, 1000);
 }
 
 function showLanding(publicStatus) {
@@ -909,7 +979,7 @@ function showLanding(publicStatus) {
   var dl = $('landing-facts');
   clear(dl);
   [['Service', 'running'], ['Currently sending', publicStatus.state],
-   ['Last write', publicStatus.ageSeconds + 's ago' + (publicStatus.stale ? ' (stale)' : '')]
+   ['Last write', publicStatus.ageSeconds + 's ago']
   ].forEach(function (f) {
     dl.appendChild(el('dt', null, f[0]));
     dl.appendChild(el('dd', null, f[1]));

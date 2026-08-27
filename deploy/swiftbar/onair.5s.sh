@@ -7,10 +7,18 @@
 # A SwiftBar plugin for the on-air light (D-26, #18). It is an ordinary script that prints
 # text; SwiftBar runs it every 5 seconds and draws stdout.
 #
-# THIS IS A RENDERER, so THE BUSY RULE (D-32) applies to it exactly as it applies to the
-# panel. It must never draw a calm menu bar on evidence it does not have. Unreachable, stale
-# and calm are three different pictures here for the same reason they are three different
-# pictures on the glass (D-54, D-57).
+# THIS IS A RENDERER, so THE CLIENT CONTRACT (D-91, D-92) applies to it exactly as it
+# applies to the panel. It must never draw a calm menu bar on evidence it does not have.
+# Three conditions, not two: answering, not answering but inside the grace window, and
+# given up - the same three pictures the glass draws (D-54, D-57).
+#
+# THE AWKWARD PART, AND HOW IT IS SOLVED. The contract measures both thresholds from the
+# LAST SUCCESSFUL CONTACT, and this plugin has no memory: SwiftBar starts a fresh process
+# every five seconds and it dies with its answer. So contact is recorded on disk - the
+# timestamp, plus enough of the last reading to keep drawing it. Without that, "the service
+# has been down for two minutes" and "for two hours" look identical from in here, and the
+# only safe thing a memoryless renderer can do with a failed poll is give up immediately -
+# which is exactly the over-eager NO DATA this whole change exists to remove.
 #
 # It needs NO credential. Every request goes to loopback, where D-24's waiver applies - that
 # waiver is the whole reason this plugin is 100 lines and not 300.
@@ -33,7 +41,7 @@ ONAIR="$REAL/../onair"
 # heredoc inside command substitution - measured, not assumed.
 TMP="$(/usr/bin/mktemp -t onair.swiftbar)"
 /usr/bin/python3 - "$ONAIR" <<'PY' > "$TMP" 2>/dev/null
-import base64, json, os, signal, struct, sys, urllib.error, urllib.request, zlib
+import base64, json, os, signal, struct, sys, time, urllib.error, urllib.request, zlib
 
 # A REAL deadline. urlopen(timeout=) bounds each socket operation, NOT the whole run, so a
 # server that emits one byte a second holds json.load open forever - measured. SwiftBar
@@ -74,6 +82,58 @@ def read_document():
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+
+
+# THE TWO THRESHOLDS (D-92). Ours, on our own clock, measured from the last successful
+# contact and NOT chained off each other.
+CONNECTION_LOST_S = 60      # 1 minute  - say it is not being refreshed
+NO_DATA_S = 1800            # 30 minutes - give up on the state entirely
+
+CONTACT_FILE = os.path.join(HOME, ".onair", "swiftbar-contact.json")
+
+
+def remember_contact(payload):
+    """Record this successful reading, so the NEXT run - which may not get one - knows how
+    long we have actually been out of touch and what we last knew.
+
+    Never fatal. A read-only home directory costs us the grace window and nothing else: the
+    fallback is to give up immediately, which is the safe direction."""
+    try:
+        tmp = CONTACT_FILE + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, CONTACT_FILE)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def recall_contact():
+    """The last recorded reading, or None.
+
+    FAILS CLOSED, and this is the property #63 was told to keep. It is the descendant of a
+    measured incident (D-64.3): trusting the server's own `stale` flag drew a calm menu bar
+    on 27-hour-old evidence, because any miss - a rename, version skew, something else on
+    the port - read as false, and false meant calm. Absent, unreadable, malformed or
+    missing a usable timestamp all mean WITHHOLD CALM here, never assume it.
+
+    Note what is no longer possible: nothing the server sends feeds this decision at all
+    now. There is no field left to be absent or wrong - the clock is ours."""
+    try:
+        with open(CONTACT_FILE) as fh:
+            cached = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(cached, dict):
+        return None
+    at = cached.get("at")
+    if isinstance(at, bool) or not isinstance(at, (int, float)):
+        return None
+    # A timestamp in the future is a clock that moved, not evidence. Refuse it.
+    if at > time.time() + 5:
+        return None
+    if not isinstance(cached.get("status"), dict):
+        return None
+    return cached
 
 
 HOST_OK = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-_[]")
@@ -130,6 +190,38 @@ def get(path):
 # that and give up. Both are waived on loopback (D-24).
 status = get("/status")
 table = get("/config/states")
+
+# THE THREE CONDITIONS (D-91), resolved before anything is drawn.
+#
+# `contact_lost` and `gave_up` are the only two facts the rest of this script consults about
+# liveness, and both are computed from OUR clock against the recorded contact time. Note the
+# asymmetry with the old code: a poll that fails is not by itself a verdict. One missed poll
+# on a five-second cadence changes nothing; sixty seconds of them puts up the mark.
+contact_lost = False
+gave_up = False
+lost_for = 0
+poll_failed = status is None
+row_cache = None
+
+if status is not None:
+    remember_contact({"at": time.time(), "status": status, "table": table})
+else:
+    cached = recall_contact()
+    if cached is None:
+        # No usable memory of ever having contact. We cannot bound how long we have been out
+        # of touch, so we do not claim a state. Fail closed.
+        gave_up = True
+    else:
+        lost_for = int(max(0, time.time() - cached["at"]))
+        contact_lost = lost_for > CONNECTION_LOST_S
+        gave_up = lost_for > NO_DATA_S
+        if not gave_up:
+            # Condition 2: keep drawing what we last knew. The state has not changed - the
+            # server latches it (D-91) - we simply are not hearing it confirmed.
+            status = cached["status"]
+            row_cache = cached.get("table")
+            if table is None and isinstance(row_cache, dict):
+                table = row_cache
 
 out = []
 
@@ -280,13 +372,17 @@ def line(text, *params):
 
 
 if status is None:
-    # NEVER a calm-looking title. We do not know, and saying so is the only honest answer -
-    # a blank or green menu bar here is a false OFF with extra steps. An UNLIT sign in the
-    # warning colour: the shape is still the shape, so the menu bar item does not vanish or
-    # change size, but nothing about it says a state.
+    # CONDITION 3, or no memory of ever having had contact. NEVER a calm-looking title. We do
+    # not know, and saying so is the only honest answer - a blank or green menu bar here is a
+    # false OFF with extra steps. An UNLIT sign in the warning colour: the shape is still the
+    # shape, so the menu bar item does not vanish or change size, but nothing about it says a
+    # state.
     line("", "image=%s" % sign(UNREACHABLE_AMBER, None))
     line("---")
     line("NO SERVICE", "size=14", "color=%s" % UNREACHABLE_AMBER)
+    if lost_for:
+        line("No answer for %dm - the last state it reported has been discarded"
+             % (lost_for // 60), "color=#ff8f8f")
     line("The on-air service is not answering on %s" % base, "color=#ff8f8f")
     line("Start it", 'bash="%s" param1=start terminal=false refresh=true' % ONAIR)
     line("Restart it", 'bash="%s" param1=restart terminal=false refresh=true' % ONAIR)
@@ -299,21 +395,14 @@ busy = bool(status.get("busy"))
 hold = safe(status.get("hold"), 64)
 message = safe(status.get("message"), 200)
 
-# STALENESS IS DERIVED, NOT TRUSTED. The contract defines it as ageSeconds > 90, and the
-# reference renderer computes it rather than reading a flag (onair_table.h, compute_view).
-# Trusting `stale` fails OPEN on the calm side: any miss - a field rename, version skew,
-# something else answering the port - reads as false, and false means calm. Measured:
-# ageSeconds 99999 with no `stale` key drew a calm menu bar on 27-hour-old evidence.
-#
-# A missing or non-numeric ageSeconds is STALE. Of the two guesses only the calm one can be
-# a false OFF.
-STALE_SECONDS = 90
+# `ageSeconds` IS NOW PURELY DISPLAY TEXT. It used to carry the safety decision - a private
+# ninety-second threshold and its derivation lived right here - and it carries none of it now.
+# A missing or non-numeric value costs a line of the dropdown and nothing else, because the
+# liveness verdict was settled above from our own clock and cannot be influenced from the
+# wire. That is a stronger version of the property the derivation was protecting.
 age = status.get("ageSeconds")
 if isinstance(age, bool) or not isinstance(age, (int, float)):
-    stale = True
     age = None
-else:
-    stale = age > STALE_SECONDS
 
 # The row is matched on the RAW id from /status, not on the sanitised copy: `safe()` rewrites
 # `|` and collapses whitespace, which is right for a menu line and wrong for a lookup key.
@@ -329,12 +418,18 @@ label = safe(row.get("label"), 64) or state
 fg = hex_color(row.get("color"))
 bgcolor = hex_color(row.get("bgcolor"))
 
-# The same three-way decision the panel makes, in the same order (compute_view, D-57).
-if state == "unknown" or (stale and not busy) or not (fg and bgcolor):
-    # Stale evidence cannot support a calm claim. THE BUSY RULE. The sign is drawn UNLIT, so
-    # an absence of evidence cannot be mistaken for a configured state whatever colours that
-    # state was given. A row this script cannot paint faithfully - no colours, or no row at
-    # all - lands here too: a sign it cannot paint truthfully is one it will not paint.
+# The same three-way decision the panel makes, in the same order (compute_view, D-57), with
+# the trigger moved from the write's age to OUR connection.
+#
+# The asymmetry is unchanged and is the same one the admin console draws (D-82): an
+# unrefreshed CALM row loses its colours, an unrefreshed BUSY row keeps them. Draining a
+# busy signal weakens it, and false OFF is worse than false ON.
+if state == "unknown" or (contact_lost and not busy) or not (fg and bgcolor):
+    # A claim we are no longer hearing confirmed cannot support a calm menu bar. The sign is
+    # drawn UNLIT, so an absence of evidence cannot be mistaken for a configured state
+    # whatever colours that state was given. A row this script cannot paint faithfully - no
+    # colours, or no row at all - lands here too: a sign it cannot paint truthfully is one it
+    # will not paint.
     headline, headline_colour = "NO DATA", "#e8a317"
     line("", "image=%s" % sign(NO_DATA_GREY, None))
 else:
@@ -348,11 +443,22 @@ line(headline, "size=14", "color=%s" % headline_colour)
 # Prefixed, so an operator-supplied label can never be the first thing on the line.
 line("State: %s  (%s)" % (label, state), "size=13")
 line("Busy: %s" % ("yes" if busy else "no"))
+if contact_lost:
+    # Said in words, first, because the picture alone cannot distinguish "the state is calm"
+    # from "the last thing I heard was calm, a while ago".
+    line("NOT REFRESHING - no answer for %ds" % lost_for, "color=#e8a317")
+    line("This is the last state the service reported, not a current reading.", "size=12",
+         "color=#e8a317")
+elif poll_failed:
+    # Inside the grace window the PICTURE deliberately does not move - one missed poll on a
+    # five-second cadence means nothing. The dropdown still says it, because a diagnostic
+    # line costs nothing and someone opening the menu is asking exactly this question.
+    line("This poll got no answer; showing the last reading.", "size=12", "color=#8b959e")
 if age is None:
-    line("Last write: unknown  (stale)", "color=#e8a317")
+    line("Last write: unknown")
 else:
     when = "%ds ago" % int(age) if age < 120 else "%dm ago" % int(age // 60)
-    line("Last write: %s%s" % (when, "  (stale)" if stale else ""))
+    line("Last write: %s" % when)
 src = safe(status.get("source"), 64)
 if src:
     line("Source: %s" % src)

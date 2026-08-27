@@ -3255,3 +3255,66 @@ else (state, light control, API) lives on the receiver.
 
   `docs/companion-setup.md` still documents a `Stale` feedback and a `stale` variable. Left
   deliberately for **#66**, so the operator-facing doc and the module change land together.
+
+- **D-96 (2026-08-27)** **A memoryless renderer has to write its contact time down, or it
+  cannot have a grace window at all.** #63's one genuine design problem, and it is the
+  SwiftBar plugin's alone.
+
+  D-91 measures both thresholds from the **last successful contact**. `/display` and the
+  admin console are long-lived pages and just keep a variable. **SwiftBar starts a fresh
+  process every five seconds and it dies with its answer**, so from inside one run "the
+  service has been down for two seconds" and "for two hours" are indistinguishable - and the
+  only safe thing a renderer with no memory can do with a failed poll is give up at once,
+  which is precisely the over-eager NO DATA this whole change exists to remove.
+
+  So the plugin records `{at, status, table}` to `~/.onair/swiftbar-contact.json` on every
+  successful poll, and consults it on a failed one. **Fail-closed is preserved and moved
+  somewhere stronger:** an absent, unreadable, malformed or FUTURE-DATED record all mean
+  *withhold calm*. D-64.3's incident was trusting a server field; now no server field feeds
+  the liveness decision at all, so there is nothing left to be renamed, skewed or absent. A
+  read-only home directory costs the grace window and nothing else - it degrades to
+  give-up-immediately, which is the safe direction.
+
+  Its test harness now redirects `HOME` into the scratch dir. It did not before, so the suite
+  was reading the operator's real `~/.onair` - harmless until this ticket, and a cross-test
+  contaminant the moment the plugin started WRITING there.
+
+- **D-97 (2026-08-27)** **D-82's asymmetric TREATMENT survives D-92's rejection of asymmetric
+  THRESHOLDS. They are different axes and conflating them would have deleted a judge-verified
+  result.**
+
+  D-92 rejects a shorter connection-lost window for calm rows than for busy ones: one minute
+  for everything, thirty for everything, no per-row branch. That is about **when** to stop
+  trusting a reading.
+
+  D-82 is about **how a reading you have stopped trusting should look**: an unrefreshed CALM
+  row loses its colours entirely, an unrefreshed BUSY row keeps its own colours and takes a
+  hatch. Two of three design prototypes drained both directions toward grey, and a judge
+  verified that draining reads calm from across the desk in the light theme - which is the
+  thing the invariant forbids. Both renderers that draw colour (admin console, SwiftBar) keep
+  that asymmetry; only its trigger moved, from the server's `stale` flag to the renderer's own
+  connection.
+
+- **D-98 (2026-08-27)** **The blanking DISCONNECTED overlay is deleted, and `/display`'s page
+  script is now executed by its tests rather than pattern-matched.**
+
+  `/display` covered a lost stream with an 82%-black full-screen overlay. Under condition 2
+  that is wrong on its face: the contract says the renderer **keeps drawing the last known
+  state** and adds a mark - *it does not go blank*. An overlay over the state word is going
+  blank. NO DATA is now drawn as the state itself, using the reserved row, because an overlay
+  on top of a held state is two claims at once and the honest one is the reserved row.
+
+  Three smaller corrections found while doing it, each of which was silent:
+  - `es.onopen` used to clear the mark. **Opening a socket is not contact** - a stream that
+    connects and then says nothing is the exact failure the thresholds exist to catch. Only a
+    parseable payload counts.
+  - `es.onerror` used to raise the overlay; a draft of this change had it call `connect()`.
+    Both are wrong. `onerror` fires immediately when the server is down, so reconnecting from
+    inside it is a tight loop against a box that is already struggling. The 10 s watchdog
+    retries on a clock; `onerror` is now empty, because a socket error is not a verdict - the
+    thresholds are.
+  - A query-string override matched a literal `"d"` rather than a digit. The page is a
+    TEMPLATE LITERAL, so the escape was eaten on the way out and the feature silently did
+    nothing. It uses a character class now, which cannot have that bug. **A regex over the
+    page source would never have caught this** - which is why the tests now run the script in
+    a stub DOM with a controllable clock and assert the three conditions as behaviour.

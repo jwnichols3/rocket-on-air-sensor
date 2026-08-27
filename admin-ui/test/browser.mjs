@@ -323,9 +323,41 @@ test('there is no section called "Light" anywhere on screen (D-78)');
 }
 
 // ---------------------------------------------------------------------------
-// THE BUSY RULE, as a picture (D-32, D-82). The asymmetry is the whole point.
+// THE BUSY RULE, as a picture (D-32, D-82), now triggered by THE CONNECTION (D-91).
+//
+// The asymmetric treatment is unchanged and still judge-verified. What moved is when it
+// fires: on our own loss of contact with the service, not on a `stale` flag the server no
+// longer sends. `lostContact()` below fakes that by winding back the page's own clock.
 
-test('a CALM state on stale evidence does NOT wear its own colour');
+const lostContact = (ms) => `lastContactAt = Date.now() - ${ms};`;
+
+test('an OLD WRITE on a LIVE connection is drawn fully lit - the D-91 headline');
+{
+  // This is the case the whole change exists for. Nothing has written state for two hours,
+  // the service is healthy and answering, so the state IS the state and the console says so
+  // plainly. The old code drained this to a withheld card on the server's `stale` flag.
+  const states = await (await fetch(`${base}/config/states`, {
+    headers: { authorization: 'Bearer onair' },
+  }).then((r) => r.json()).catch(() => ({ states: [] })));
+  const calm = (states.states || []).find((r) => !r.busy);
+
+  const painted = await page.evaluate((row) => {
+    lastContactAt = Date.now(); // the service answered just now
+    liveStatus = { state: row.id, confirmed: row.id, hold: null, source: 'human:test',
+                   busy: false, intended: 'off', ageSeconds: 7200, tableVersion: 1 };
+    renderTally();
+    const card = document.getElementById('tally');
+    return { cls: card.className, inline: card.style.background,
+             eyebrow: document.getElementById('tally-eyebrow').textContent };
+  }, calm);
+
+  check(/\blit\b/.test(painted.cls), `a 2-hour-old write on a live link was withheld: "${painted.cls}"`);
+  check(!/hatched/.test(painted.cls), `and it was hatched: "${painted.cls}"`);
+  check(painted.inline !== '', 'it lost its own colour');
+  check(/LAST WRITE 7200S AGO/.test(painted.eyebrow), `eyebrow reads: "${painted.eyebrow}"`);
+}
+
+test('a CALM state on a LOST connection does NOT wear its own colour');
 {
   // Drive the server to a calm row, then age the evidence past the threshold from the
   // page's side, so the treatment is exercised on real data rather than a fixture.
@@ -336,8 +368,9 @@ test('a CALM state on stale evidence does NOT wear its own colour');
   check(!!calm, 'the seeded table has no calm row to test with');
 
   const painted = await page.evaluate((row) => {
+    lastContactAt = Date.now() - 120000; // two minutes with no answer from the service
     liveStatus = { state: row.id, confirmed: row.id, hold: null, source: 'human:test',
-                   busy: false, intended: 'off', ageSeconds: 900, stale: true, tableVersion: 1 };
+                   busy: false, intended: 'off', ageSeconds: 900, tableVersion: 1 };
     renderTally();
     const card = document.getElementById('tally');
     return {
@@ -351,7 +384,7 @@ test('a CALM state on stale evidence does NOT wear its own colour');
   check(painted.inline === '', `the row's own colour was painted anyway: "${painted.inline}"`);
 }
 
-test('a BUSY state on stale evidence KEEPS its own colour - draining it weakens the signal');
+test('a BUSY state on a LOST connection KEEPS its own colour - draining it weakens the signal');
 {
   const states = await (await fetch(`${base}/config/states`, {
     headers: { authorization: 'Bearer onair' },
@@ -360,26 +393,77 @@ test('a BUSY state on stale evidence KEEPS its own colour - draining it weakens 
   check(!!busy, 'the seeded table has no busy row to test with');
 
   const painted = await page.evaluate((row) => {
+    lastContactAt = Date.now() - 120000;
     liveStatus = { state: row.id, confirmed: row.id, hold: null, source: 'human:test',
-                   busy: true, intended: 'on', ageSeconds: 900, stale: true, tableVersion: 1 };
+                   busy: true, intended: 'on', ageSeconds: 900, tableVersion: 1 };
     renderTally();
     const card = document.getElementById('tally');
     return { cls: card.className, inline: card.style.background };
   }, busy);
 
-  check(/\blit\b/.test(painted.cls), `a stale busy state lost its colour: "${painted.cls}"`);
-  check(/hatched/.test(painted.cls), 'a stale busy state is not marked as unconfirmed at all');
+  check(/\blit\b/.test(painted.cls), `an unrefreshed busy state lost its colour: "${painted.cls}"`);
+  check(/hatched/.test(painted.cls), 'an unrefreshed busy state is not marked at all');
   check(painted.inline !== '', 'the busy row was drained - false OFF is worse than false ON');
 }
 
-test('and a stale reading always says so, in words, next to the control that fixes it');
+test('and a lost connection always says so, in words, next to the control that fixes it');
 {
   const caution = await page.evaluate(() => {
     const c = document.getElementById('caution');
     return { hidden: c.hidden, text: c.textContent };
   });
-  check(!caution.hidden, 'the caution band is hidden on stale evidence');
-  check(/press a state below/i.test(caution.text), `caution reads: "${caution.text}"`);
+  check(!caution.hidden, 'the caution band is hidden while contact is lost');
+  check(/no answer from the service/i.test(caution.text), `caution reads: "${caution.text}"`);
+  check(/last state it reported/i.test(caution.text),
+        `the band must say the reading is not current: "${caution.text}"`);
+}
+
+test('THIRTY MINUTES with no answer: the console gives up on the state entirely');
+{
+  const painted = await page.evaluate(() => {
+    lastContactAt = Date.now() - 1801000;
+    renderTally();
+    const card = document.getElementById('tally');
+    return { cls: card.className, inline: card.style.background,
+             eyebrow: document.getElementById('tally-eyebrow').textContent };
+  });
+  check(/withheld/.test(painted.cls), `not withheld at 30 minutes: "${painted.cls}"`);
+  check(painted.inline === '', 'a colour was still painted after giving up');
+  check(/NO DATA/.test(painted.eyebrow), `eyebrow reads: "${painted.eyebrow}"`);
+}
+
+test('and TWENTY-NINE minutes is still condition 2 - the thresholds are not chained');
+{
+  const states = await (await fetch(`${base}/config/states`, {
+    headers: { authorization: 'Bearer onair' },
+  }).then((r) => r.json()).catch(() => ({ states: [] })));
+  const busy = (states.states || []).find((r) => r.busy && r.id !== 'unknown');
+  const painted = await page.evaluate((row) => {
+    lastContactAt = Date.now() - 1740000;
+    liveStatus = { state: row.id, confirmed: row.id, hold: null, source: 'human:test',
+                   busy: true, intended: 'on', ageSeconds: 1800, tableVersion: 1 };
+    renderTally();
+    const card = document.getElementById('tally');
+    return { cls: card.className, eyebrow: document.getElementById('tally-eyebrow').textContent };
+  }, busy);
+  check(!/NO DATA/.test(painted.eyebrow), `gave up 10 minutes early: "${painted.eyebrow}"`);
+  check(/NOT REFRESHED/.test(painted.eyebrow), `eyebrow reads: "${painted.eyebrow}"`);
+  check(/hatched/.test(painted.cls), 'held but unmarked');
+}
+
+test('a FAILED poll is what starts the clock - the console notices the service is gone');
+{
+  // The bug this closes: `if (r.status !== 200) return` threw the failure away, so a
+  // service that stopped answering left the console fully confident forever.
+  const marked = await page.evaluate(async () => {
+    lastContactAt = Date.now() - 120000;
+    const before = document.getElementById('caution').hidden;
+    // Let the liveness timer, not a poll, do the work.
+    await new Promise((r) => setTimeout(r, 1200));
+    return { before, hidden: document.getElementById('caution').hidden };
+  });
+  check(marked.before === false, 'the band was not up before the tick');
+  check(marked.hidden === false, 'the liveness timer did not keep the band up on its own clock');
 }
 
 test('the Device connection section links to the panel, in a new tab (#55)');
