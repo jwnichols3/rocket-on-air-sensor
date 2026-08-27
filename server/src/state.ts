@@ -57,9 +57,6 @@ export interface Shortcuts {
 }
 export const SEED_SHORTCUTS: Shortcuts = Object.freeze({ on: 'on-air', off: 'available' });
 
-/** `ageSeconds > 90` is stale. Matches the device's own STALE_MS. */
-export const STALE_AFTER_S = 90;
-
 /**
  * The table in force. Immutable once constructed - a config save builds a new one and
  * bumps `version`, which is what `tableVersion` on the wire reports.
@@ -216,8 +213,11 @@ export interface OnAirState {
 export interface StatusBody extends OnAirState {
   busy: boolean;
   intended: 'on' | 'off';
+  /**
+   * Provenance, not a judgement (D-91). The server reports how long ago the state was
+   * written and never branches on it; deciding what age MEANS is the client's job.
+   */
   ageSeconds: number;
-  stale: boolean;
   tableVersion: number;
 }
 
@@ -328,10 +328,6 @@ export class StateStore {
     return Math.max(0, Math.floor(age));
   }
 
-  stale(now: Date = new Date()): boolean {
-    return this.ageSeconds(now) > STALE_AFTER_S;
-  }
-
   /** The §2 object, with every derived field computed at read time so none can drift. */
   status(now: Date = new Date()): StatusBody {
     const s = this.get();
@@ -341,7 +337,6 @@ export class StateStore {
       busy,
       intended: busy ? 'on' : 'off',
       ageSeconds: this.ageSeconds(now),
-      stale: this.stale(now),
       tableVersion: this.table.version,
     };
   }

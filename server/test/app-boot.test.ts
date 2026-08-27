@@ -64,20 +64,19 @@ test('boot re-applies a fresh persisted state onto the light', async (t) => {
   assert.deepEqual(light.sets, ['recording']);
 });
 
-test('boot does NOT push a stale CALM state onto a device showing a busy one', async (t) => {
+test('boot pushes an OLD calm state onto a device showing a busy one, and adopts nothing (D-91)', async (t) => {
   const stateFile = await stateFileWith({ state: 'available' }, 120_000);
   const light = new FakeLight();
   light.device = 'on-air';
   const app = await boot(t, { stateFile, driver: light });
-  // THE BUSY RULE: no busy -> calm move on stale evidence. And the adoption is into
-  // `state`, not only `confirmed` - adopting halfway leaves the browser page green beside
-  // a red panel, the same lie in a different window.
-  assert.equal(app.store.get().state, 'on-air');
-  assert.equal(app.store.get().confirmed, 'on-air');
-  assert.deepEqual(light.sets, [], 'nothing was pushed down');
+  // The file is the last explicit write. Whatever the device holds is an echo of an
+  // earlier one, so there is nothing here to adopt and no clock to consult.
+  assert.equal(app.store.get().state, 'available');
+  assert.equal(app.store.get().confirmed, 'available');
+  assert.deepEqual(light.sets, ['available'], 'the latched state is re-applied at any age');
 });
 
-test('boot DOES apply a stale BUSY state: moving to busy never needs fresh evidence', async (t) => {
+test('boot applies an OLD BUSY state too: the latch does not care which way it points', async (t) => {
   const stateFile = await stateFileWith({ state: 'on-air' }, 120_000);
   const light = new FakeLight();
   light.device = 'available';

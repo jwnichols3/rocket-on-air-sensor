@@ -174,23 +174,17 @@ export async function createApp(opts: AppOptions): Promise<App> {
     }
   }
 
-  // Invariant: recover after restart - re-apply the state to the light on boot, subject to
-  // THE BUSY RULE. A stale file must not push the device from busy to calm.
+  // Invariant: recover after restart - re-apply the persisted state to the light on boot.
+  //
+  // Unconditionally, since D-91. This used to adopt a busy reading off the device when the
+  // persisted state was calm and older than 90s, which was the server reading a clock to
+  // decide what the state IS. The state is latched: the file is the last explicit write and
+  // the device only ever holds an echo of an earlier one, so there is nothing here to adopt.
   try {
     const table = store.getTable();
-    const cur = await driver.read();
     const want = store.get().state;
-    if (cur !== UNKNOWN_ID && table.has(cur) && table.busy(cur) && !table.busy(want) && store.stale()) {
-      log(`[onair] boot: device says ${cur}, our stale ${want} is calm - adopting the device`);
-      // Adopt into `state`, not only `confirmed`. `state` is what every other renderer
-      // draws, so adopting halfway leaves the browser page green beside a red panel - the
-      // same lie in a different window.
-      store.write(cur, { kind: 'auto', label: 'device', raw: 'auto:device' }, new Date());
-      store.setConfirmed(cur);
-    } else {
-      const got = await driver.set(want);
-      store.setConfirmed(table.has(got) ? got : UNKNOWN_ID);
-    }
+    const got = await driver.set(want);
+    store.setConfirmed(table.has(got) ? got : UNKNOWN_ID);
   } catch (err) {
     log(`[onair] boot driver re-apply failed: ${errorMessage(err)}`);
     store.setConfirmed(UNKNOWN_ID);

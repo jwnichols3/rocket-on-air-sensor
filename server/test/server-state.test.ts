@@ -61,7 +61,7 @@ test('GET /status returns the v2 object, with every derived field', async (t) =>
   assert.equal(s.confirmed, 'on-air');
   assert.equal(s.hold, null);
   assert.equal(s.source, 'auto:vcrec');
-  assert.equal(s.stale, false);
+  assert.equal('stale' in s, false, 'the server makes no judgement about age (D-91)');
   assert.equal(s.tableVersion, 1);
   assert.equal(typeof s.ageSeconds, 'number');
 });
@@ -383,7 +383,7 @@ test('a pin does not decay: an aged store still refuses', async (t) => {
   await pin(h, 'interruptible');
   // Age the write without touching the hold. No TTL, no decay, no auto-anything (D-6).
   h.store.write('interruptible', { kind: 'human', label: 'ui', raw: 'human:ui' }, new Date(Date.now() - 3600_000), true);
-  assert.equal((await status(h)).stale, true, 'staleness is VISIBLE...');
+  assert.equal(Number((await status(h)).ageSeconds) > 3000, true, 'the age is VISIBLE...');
   assert.equal((await put(h, { state: 'available', source: 'auto:vcrec' })).status, 409, '...and never acted on');
   assert.equal((await status(h)).hold, 'interruptible');
 });

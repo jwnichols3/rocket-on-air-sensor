@@ -3162,3 +3162,32 @@ else (state, light control, API) lives on the receiver.
   state persist for thirty. A calm row on a dead link is never drawn as a confident claim,
   because within a minute it is visibly no longer being refreshed - and there is no second
   rule, no per-row branch, and nothing to explain to whoever configures it next.
+
+- **D-93 (2026-08-27)** **Deleting `stale()` also deletes the two places the server CHANGED
+  STATE on its own, because both were the same clock read wearing a different hat.** Found
+  while implementing D-91 (#60); recorded because "delete a helper" turned out to mean
+  "delete a behaviour".
+
+  `stale()` had three server callers, not one. The wire field was the obvious one. The other
+  two were the **withheld heartbeat** (`supervise.ts`: refuse to assert a calm state older
+  than 90s, so the device's own watchdog trips to NO DATA) and the **boot adoption**
+  (`app.ts`: a device reading busy beats a persisted calm state older than 90s). Both are
+  gone, along with the supervisor's mid-tick adoption of a device that disagrees.
+
+  The reason is not tidiness. Under D-91 the server latches, so an assertion that is
+  withheld on age is the server making a judgement about time, and an adoption is the server
+  changing state with nobody having written anything - which D-90 forbids in as many words.
+  **The device is a RENDERER, not a source.** Every value it holds arrived from an earlier
+  assertion by this server or from a hand-poked entity; it is never newer than the state,
+  so there was never anything there to adopt. The supervisor now asserts `state` whenever
+  the heartbeat is due, at any age, and re-asserts over a device that disagrees.
+
+  **What is NOT deleted:** `decayMs` decaying `confirmed` to `unknown` after a run of failed
+  reads. `confirmed` describes the DEVICE, not the state - it is evidence, and an admission
+  that the evidence has run out is a fact about the reader, not a judgement about the state.
+  D-91's rule is that the server does not decay STATE, and `confirmed` is not state.
+
+  This makes the false-OFF exposure D-91 already named slightly wider and no less accepted:
+  the boot adoption was a partial cover for a dead writer (it caught the case where the
+  panel still held ON AIR), and it is now gone. The fix remains D-91's - report when the
+  writer was last seen, as a fact - not a re-litigation of decay.

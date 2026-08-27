@@ -282,7 +282,7 @@ Requests from the machine running the service are waived and need neither.</p>
 `;
 }
 
-// Every derived field - `busy`, `intended`, `ageSeconds`, `stale`, `tableVersion` - is
+// Every derived field - `busy`, `intended`, `ageSeconds`, `tableVersion` - is
 // computed at serialisation, so none of them can drift from `state`. Presentation
 // (`label`, `color`, `bgcolor`) is deliberately NOT here: it travels with the profile
 // (D-42), and putting it on a payload written many times an hour would weld configuration
@@ -314,7 +314,6 @@ function publicBody(deps: ServerDeps): Record<string, unknown> {
     // here. It discloses nothing the panel on the wall does not already show.
     message: s.message,
     ageSeconds: s.ageSeconds,
-    stale: s.stale,
     tableVersion: s.tableVersion,
   };
 }

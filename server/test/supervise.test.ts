@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { LightDriver } from '../src/driver.js';
 import { startSupervisor } from '../src/supervise.js';
-import { defaultState, STALE_AFTER_S, StateStore, StateTable, UNKNOWN_ID, type OnAirState } from '../src/state.js';
+import { defaultState, StateStore, StateTable, UNKNOWN_ID, type OnAirState } from '../src/state.js';
 
 class FakeLight implements LightDriver {
   sets: string[] = [];
@@ -81,24 +81,20 @@ test('supervisor: a mismatched device state triggers a re-assert', async () => {
   assert.equal(r.light.device, 'on-air', 'the device is pulled back to what the server intends');
 });
 
-test('supervisor: a stale CALM state is NOT asserted onto a device showing a busy one', async () => {
+test('supervisor: an OLD calm state is asserted over a busy device, and never adopted (D-91)', async () => {
   const old = { ...defaultState(new Date(Date.now() - 3600_000)), state: 'available' };
   const r = rig({}, old);
   r.light.device = 'on-air';
   await sleep(60);
   r.stop();
-  // THE BUSY RULE. The point is never "make no calls" - it is never to go CALM on stale
-  // evidence. Once the store adopts the device's state, heartbeating it back is healthy.
-  assert.equal(r.light.sets.includes('available'), false, 'a 1-hour-old available must never calm a live on-air');
-  assert.equal(r.light.device, 'on-air');
-  // Deferring must not mean "disagree forever". Leaving `state` stale strands every other
-  // renderer on the old value - the browser page reads calm while the panel reads ON AIR -
-  // and the supervisor re-logs the same deferral every tick with nothing converging.
-  assert.equal(r.store.get().state, 'on-air', 'the store adopts the device it just deferred to');
-  assert.equal(r.store.get().confirmed, 'on-air', 'and can then confirm it');
+  // The server latches. Age is not evidence, the device is a renderer rather than a
+  // source, and whatever it holds arrived from an earlier assertion by this server.
+  assert.equal(r.light.sets.includes('available'), true, 'the latched state is asserted at any age');
+  assert.equal(r.light.device, 'available');
+  assert.equal(r.store.get().state, 'available', 'the store never adopts the device');
 });
 
-test('supervisor: a FRESH calm state IS asserted - fresh evidence permits going calm', async () => {
+test('supervisor: a FRESH calm state IS asserted - age changes nothing either way', async () => {
   const fresh = { ...defaultState(), state: 'available' };
   const r = rig({}, fresh);
   r.light.device = 'on-air';
@@ -153,13 +149,13 @@ test('supervisor: every tick goes through the shared write queue', async () => {
   assert.equal(r.enqueued >= 3, true, `supervisor writes must serialise with HTTP writes, got ${r.enqueued}`);
 });
 
-test('supervisor: the withheld heartbeat - a stale available is not heartbeated to the device', async () => {
+test('supervisor: there is no withheld heartbeat - an old available is still heartbeated', async () => {
   const old = { ...defaultState(new Date(Date.now() - 3600_000)), state: 'available' };
   const r = rig({}, old);
-  r.light.device = 'available'; // device already agrees, so no re-assert branch either
+  r.light.device = 'available'; // device already agrees, so this is the heartbeat alone
   await sleep(80);
   r.stop();
-  assert.deepEqual(r.light.sets, [], 'withdraw the liveness assertion and let the device go STALE');
+  assert.equal(r.light.sets.includes('available'), true, 'the heartbeat does not expire (D-91)');
 });
 
 test('supervisor: stop() is synchronous and takes effect immediately', async () => {
@@ -171,19 +167,16 @@ test('supervisor: stop() is synchronous and takes effect immediately', async () 
   assert.equal(r.light.sets.length + r.light.reads <= before + 1, true, 'at most one in-flight tick finishes');
 });
 
-// --------------------------------------------- THE BUSY RULE, at its edges
+// ------------------------------------------- THE LATCH, at its edges (D-91)
 
-test('the staleness boundary is exactly 90s, and it lives in one place', async () => {
+test('no clock decides what the state is: age is reported and nothing branches on it', async () => {
   const at = (ageMs: number) => new StateStore({ ...defaultState(new Date(Date.now() - ageMs)), state: 'available' }, new StateTable());
-  assert.equal(at(90_000).stale(), false, '90s is not yet stale');
-  assert.equal(at(91_000).stale(), true);
-  // The device's own STALE_MS is the same 90s. If these ever disagree the panel and the
-  // server disagree about when to stop trusting a calm state, which is the one thing that
-  // must not happen quietly.
-  assert.equal(STALE_AFTER_S, 90);
+  assert.equal(at(91_000).status().ageSeconds >= 91, true, 'the fact is served');
+  assert.equal(at(91_000).status().state, 'available', 'and the state is untouched by it');
+  assert.equal('stale' in at(91_000).status(), false, 'the judgement is not served at all');
 });
 
-test('a stale BUSY state IS still heartbeated - staying busy never needs fresh evidence', async () => {
+test('an old BUSY state IS still heartbeated - unchanged by D-91, for a different reason', async () => {
   const old = { ...defaultState(new Date(Date.now() - 3600_000)), state: 'on-air' };
   const r = rig({}, old);
   r.light.device = 'on-air';
@@ -192,17 +185,16 @@ test('a stale BUSY state IS still heartbeated - staying busy never needs fresh e
   assert.equal(r.light.sets.includes('on-air'), true, 'the withheld heartbeat is for CALM states only');
 });
 
-test('no auto-raise: a stale calm state is withheld, never escalated on its own', async () => {
+test('no auto-raise: an old calm state is asserted as itself, never escalated on its own', async () => {
   const old = { ...defaultState(new Date(Date.now() - 3600_000)), state: 'available' };
   const r = rig({}, old);
   r.light.device = 'available';
   await sleep(80);
   r.stop();
-  // The server withdraws its liveness claim and lets the device watchdog trip to NO DATA.
-  // It does NOT invent a busy state to be safe - that would be a state change nobody asked
-  // for, and this system changes state only on an explicit write (D-6).
-  assert.deepEqual(r.light.sets, []);
-  assert.equal(r.store.get().state, 'available', 'staleness is visible, never acted on');
+  // The server does NOT invent a busy state to be safe - that would be a state change
+  // nobody asked for, and this system changes state only on an explicit write (D-6, D-91).
+  assert.equal(r.light.sets.every((v) => v === 'available'), true);
+  assert.equal(r.store.get().state, 'available', 'age is visible, never acted on');
 });
 
 test('no TTL: the supervisor never rewrites state on a timer', async () => {

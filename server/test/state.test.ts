@@ -167,14 +167,16 @@ test('a write clears confirmed: a new assertion is not evidence about the device
   assert.equal(store.get().confirmed, UNKNOWN_ID);
 });
 
-test('stale is ageSeconds > 90, and is presentation only', () => {
+test('ageSeconds is PROVENANCE: it grows, and the state it describes does not move (D-91)', () => {
   const store = new StateStore(defaultState(), new StateTable());
   const t0 = new Date('2026-08-24T12:00:00Z');
   store.write('available', HUMAN, t0);
-  assert.equal(store.stale(new Date(t0.getTime() + 90_000)), false);
-  assert.equal(store.stale(new Date(t0.getTime() + 91_000)), true);
-  // Staleness never changes the state itself. No TTL, no decay (D-6, §3).
-  assert.equal(store.get().state, 'available');
+  const hourLater = new Date(t0.getTime() + 3600_000);
+  assert.equal(store.status(hourLater).ageSeconds, 3600);
+  // The server latches. Nothing expires, nothing decays, and no judgement about that age
+  // is offered - `stale` left the wire because the server no longer makes judgements.
+  assert.equal(store.status(hourLater).state, 'available');
+  assert.equal('stale' in store.status(hourLater), false, 'no deprecated alias: a decoy is worse than a gap (D-83)');
 });
 
 // ------------------------------------------------------- lifecycle (D-34, §6)
@@ -342,7 +344,7 @@ test('no TTL: a pin an hour old is still in force', () => {
   const store = new StateStore(defaultState(), new StateTable());
   store.write('interruptible', HUMAN, new Date(Date.now() - 3600_000), true);
   assert.equal(store.get().hold, 'interruptible');
-  assert.equal(store.stale(), true, 'stale is VISIBLE...');
+  assert.equal(store.status().ageSeconds > 3000, true, 'the age is VISIBLE...');
   assert.equal(judgeWrite(store.get(), TABLE, 'available', AUTO).ok, false, '...and never acted on');
 });
 
