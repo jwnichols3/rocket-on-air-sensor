@@ -40,13 +40,34 @@ class OnAirInstance extends InstanceBase {
 		this.states = []
 		this.tableVersion = null
 		this.current = null
+		// When the server last answered. Every threshold is measured from here - see view().
+		this.lastContactAt = 0
+		// The last connection verdict published, so the liveness timer only redraws on a
+		// transition rather than once a second forever.
+		this.lastConnection = 'no data'
 		this.abort = null
 		this.retryTimer = null
+		this.livenessTimer = null
 		this.stopping = false
 
 		this.setActionDefinitions(this.buildActions())
 		this.setFeedbackDefinitions(this.buildFeedbacks())
 		this.setVariableDefinitions(this.buildVariables())
+
+		// CROSSING A THRESHOLD IS A CHANGE WITH NOTHING ARRIVING TO ANNOUNCE IT. Every other
+		// redraw in this module is triggered by a payload; this one cannot be, because the
+		// whole point is that payloads have stopped. Without it a dead server leaves every
+		// button frozen on its last confident reading forever.
+		this.livenessTimer = setInterval(() => {
+			if (this.stopping) return
+			const before = this.lastConnection
+			const now = this.view().connection
+			if (now === before) return
+			this.lastConnection = now
+			this.publishVariables()
+			this.checkFeedbacks('state_is', 'busy', 'connection_lost', 'no_data')
+		}, 1000)
+		this.livenessTimer.unref?.()
 
 		await this.refreshTable()
 		this.connectStream()
@@ -55,6 +76,7 @@ class OnAirInstance extends InstanceBase {
 	async destroy() {
 		this.stopping = true
 		if (this.retryTimer) clearTimeout(this.retryTimer)
+		if (this.livenessTimer) clearInterval(this.livenessTimer)
 		if (this.abort) this.abort.abort()
 	}
 
@@ -88,7 +110,71 @@ class OnAirInstance extends InstanceBase {
 				required: true,
 			},
 			{ type: 'textinput', id: 'passphrase', label: 'Passphrase', width: 12, required: true },
+			{
+				type: 'static-text',
+				id: 'liveness-intro',
+				width: 12,
+				label: 'Losing the server',
+				value:
+					'This module judges its own connection (D-91). The server latches state and never ' +
+					'decays it, so a state nobody has rewritten for hours is still the state - what these ' +
+					'two thresholds measure is how long since the SERVER last answered. They are ' +
+					'independent and both run from that same instant; the second is not counted from the ' +
+					'first.',
+			},
+			{
+				type: 'textinput',
+				id: 'lost_ms',
+				label: 'Say "not refreshing" after (ms)',
+				width: 6,
+				default: '60000',
+				regex: Regex.NUMBER,
+			},
+			{
+				type: 'textinput',
+				id: 'no_data_ms',
+				label: 'Give the state up after (ms)',
+				width: 6,
+				default: '1800000',
+				regex: Regex.NUMBER,
+			},
 		]
+	}
+
+	/**
+	 * THE CLIENT CONTRACT (D-91/D-92), and the module's single source of truth about what it
+	 * is entitled to claim. Every variable and every feedback goes through here.
+	 *
+	 * Three conditions, both thresholds measured from the LAST TIME THE SERVER ANSWERED, on
+	 * our own clock. Nothing reads a field off the wire to decide this: `stale` is gone from
+	 * the server because it was a judgement, and `ageSeconds` is provenance about the WRITE,
+	 * which decides nothing now that the server latches state.
+	 */
+	view() {
+		const lostMs = Number(this.config.lost_ms) || 60000
+		const noDataMs = Number(this.config.no_data_ms) || 1800000
+		const gap = this.lastContactAt === 0 ? Infinity : Date.now() - this.lastContactAt
+		const s = this.current
+
+		// CONDITION 3, and the reserved row is deliberate. `unknown` carries `busy: true`
+		// (D-34) because every degenerate path in this system lands on a conspicuous state,
+		// never a calm one - a stream deck going dark because the server died is a false OFF
+		// on a physical control, which is the failure this product exists to prevent.
+		if (!s || gap > noDataMs) {
+			return { state: 'unknown', label: 'NO DATA', busy: true, connection: 'no data', lostFor: gap }
+		}
+		const row = this.states.find((r) => r.id === s.state)
+		// CONDITION 2 holds the last known state unchanged and says so through `connection`.
+		// It does NOT rewrite `busy`: the state has not changed, the server latches it, and
+		// the honest report is the state we last heard plus the fact that we are no longer
+		// hearing it.
+		return {
+			state: s.state,
+			label: row?.label ?? s.label ?? '',
+			busy: s.busy === true,
+			connection: gap > lostMs ? 'not refreshing' : 'ok',
+			lostFor: gap,
+		}
 	}
 
 	base() {
@@ -137,7 +223,7 @@ class OnAirInstance extends InstanceBase {
 			this.setVariableDefinitions(this.buildVariables())
 			this.setPresetDefinitions(this.buildPresets())
 			this.publishVariables()
-			this.checkFeedbacks('state_is', 'busy')
+			this.checkFeedbacks('state_is', 'busy', 'connection_lost', 'no_data')
 			return true
 		} catch (err) {
 			this.updateStatus(InstanceStatus.ConnectionFailure, `state table: ${err.message}`)
@@ -213,6 +299,10 @@ class OnAirInstance extends InstanceBase {
 		if (!payload || typeof payload !== 'object' || payload.state === undefined) return
 
 		this.current = payload
+		// CONTACT. Only a parseable status payload counts: an unparseable one is not the
+		// server talking to us, and counting it would let a server emitting garbage hold
+		// every button confident forever - the fail-OPEN direction.
+		this.lastContactAt = Date.now()
 
 		// tableVersion moves whenever the table is saved. That is the regeneration trigger -
 		// no polling, and no restart.
@@ -222,7 +312,7 @@ class OnAirInstance extends InstanceBase {
 		}
 
 		this.publishVariables()
-		this.checkFeedbacks('state_is', 'busy')
+		this.checkFeedbacks('state_is', 'busy', 'connection_lost', 'no_data')
 	}
 
 	// ---- variables ------------------------------------------------------------------------
@@ -235,23 +325,28 @@ class OnAirInstance extends InstanceBase {
 			{ variableId: 'confirmed', name: 'Confirmed by the light' },
 			{ variableId: 'hold', name: 'Hold' },
 			{ variableId: 'source', name: 'Who wrote the state' },
-			{ variableId: 'stale', name: 'Stale (yes/no)' },
-			{ variableId: 'age_seconds', name: 'Seconds since the last write' },
+			// BREAKING: `stale` is gone, not renamed. It was a judgement the server no longer
+			// makes, and a variable that silently resolves to nothing on a stream deck is worse
+			// than one that is loudly absent.
+			{ variableId: 'connection', name: 'Connection to the server (ok / not refreshing / no data)' },
+			{ variableId: 'seconds_since_contact', name: 'Seconds since the server last answered' },
+			{ variableId: 'age_seconds', name: 'Seconds since the last write (provenance only)' },
 			{ variableId: 'table_version', name: 'State table version' },
 		]
 	}
 
 	publishVariables() {
 		const s = this.current
-		const row = s ? this.states.find((r) => r.id === s.state) : null
+		const v = this.view()
 		this.setVariableValues({
-			state: s?.state ?? '',
-			label: row?.label ?? s?.label ?? '',
-			busy: s?.busy ? 'yes' : 'no',
+			state: v.state,
+			label: v.label,
+			busy: v.busy ? 'yes' : 'no',
 			confirmed: s?.confirmed ?? '',
 			hold: s?.hold ?? '',
 			source: s?.source ?? '',
-			stale: s?.stale ? 'yes' : 'no',
+			connection: v.connection,
+			seconds_since_contact: Number.isFinite(v.lostFor) ? Math.floor(v.lostFor / 1000) : '',
 			age_seconds: s?.ageSeconds ?? '',
 			table_version: this.tableVersion ?? '',
 		})
@@ -344,7 +439,10 @@ class OnAirInstance extends InstanceBase {
 						allowCustom: true,
 					},
 				],
-				callback: (feedback) => this.current?.state === feedback.options.state,
+				// Through view(), not through `current`, so a button stops claiming its row once
+				// the module has given the state up. Reading `current` directly here would leave
+				// a stream deck lit for the last row it heard about, indefinitely.
+				callback: (feedback) => this.view().state === feedback.options.state,
 			},
 			busy: {
 				type: 'boolean',
@@ -354,15 +452,30 @@ class OnAirInstance extends InstanceBase {
 					'THE BUSY RULE (D-32) is what it means.',
 				defaultStyle: { color: combineRgb(255, 255, 255), bgcolor: combineRgb(193, 18, 31) },
 				options: [],
-				callback: () => this.current?.busy === true,
+				callback: () => this.view().busy,
 			},
-			stale: {
+			// BREAKING: the `stale` feedback is gone, replaced by these two. Staleness was a
+			// claim about the WRITE's age and the server no longer makes it; these are claims
+			// about THIS MODULE'S connection, which is what an operator actually needs to know.
+			connection_lost: {
 				type: 'boolean',
-				name: 'Stale',
-				description: 'True when the server has no fresh evidence for the current state',
+				name: 'Not refreshing',
+				description:
+					'True when the server has not answered for longer than the configured window. The ' +
+					'state shown is the last one it reported, not a current reading.',
 				defaultStyle: { color: combineRgb(0, 0, 0), bgcolor: combineRgb(232, 163, 23) },
 				options: [],
-				callback: () => this.current?.stale === true,
+				callback: () => this.view().connection === 'not refreshing',
+			},
+			no_data: {
+				type: 'boolean',
+				name: 'No data',
+				description:
+					'True once the server has been silent long enough that the module has given the ' +
+					'state up entirely.',
+				defaultStyle: { color: combineRgb(255, 0, 255), bgcolor: combineRgb(26, 26, 26) },
+				options: [],
+				callback: () => this.view().connection === 'no data',
 			},
 		}
 	}

@@ -3425,3 +3425,29 @@ else (state, light control, API) lives on the receiver.
   This is the second time this design has removed a class of bug rather than a bug (the first
   being D-96's fail-closed contact record). Both come from the same move: judge the thing you
   can observe directly - your own connection - instead of a number somebody else sent you.
+
+- **D-104 (2026-08-27)** **When a renderer gives the state up, it lands on the RESERVED ROW,
+  which is busy. Reporting "not busy" would be a false OFF on a physical control.** #66, and
+  the one place the Companion module needed a decision rather than a rename.
+
+  `stale` leaving the wire is mechanical. What is not mechanical is what a stream deck should
+  do 30 minutes into a server outage. The tempting answer - report the last known values and
+  let the operator notice the connection variable - is wrong for a button: buttons are read at
+  a glance across a room, and a calm-looking button is a claim.
+
+  So `view()` returns the reserved `unknown` row past `no_data_ms`: `state: 'unknown'`,
+  `label: 'NO DATA'`, **`busy: true`** (D-34's rule, that every degenerate path lands on a
+  conspicuous state), and the `State is` feedback stops matching the row it can no longer
+  confirm. Both feedbacks read through `view()` rather than through `current` - reading
+  `current` directly is what would leave a deck lit for the last row it heard about,
+  indefinitely.
+
+  **Breaking, deliberately, with no alias.** `$(stale)` and the `Stale` feedback are gone, not
+  renamed: a variable that silently resolves to nothing on a stream deck is worse than one that
+  is loudly absent, and an alias beside the real thing is the decoy D-83 records.
+  `docs/companion-setup.md` carries the migration table and says so at the top.
+
+  `$(age_seconds)` survives and is now labelled *provenance only* in both the module and the
+  docs. It is the field an operator would most naturally reach for to answer "can I trust
+  this", and it is exactly the wrong one - which is worth saying in the UI rather than only in
+  a decision record.

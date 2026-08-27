@@ -213,6 +213,143 @@ test('feedback follows the live state', async () => {
 	await fake.close()
 })
 
+// ---------------------------------------------------------------------------------------
+// THE CLIENT CONTRACT (D-91/D-92). The module judges its own connection now; `stale` is gone
+// from the server and from here. The tests wind `lastContactAt` back rather than waiting out
+// a real threshold - the clock is the module's own, which is the entire point.
+
+test('condition 1 - the server is answering: the state is reported plainly', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	assert.equal(seen.variables.connection, 'ok')
+	assert.equal(seen.variables.state, 'available')
+	assert.equal(seen.feedbacks.connection_lost.callback({}), false)
+	assert.equal(seen.feedbacks.no_data.callback({}), false)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('an OLD WRITE on a live connection is still the state - the D-91 headline', async () => {
+	// A state nobody has rewritten for two hours, on a server that is answering, is simply
+	// the state. This is the case that used to read as stale everywhere in the system.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	inst.current = { ...inst.current, ageSeconds: 7200 }
+	inst.publishVariables()
+
+	assert.equal(seen.variables.connection, 'ok', 'ageSeconds is provenance and decides nothing')
+	assert.equal(seen.variables.state, 'available')
+	assert.equal(seen.feedbacks.no_data.callback({}), false)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('condition 2 - contact lost: the last known state is HELD, and says so', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	inst.lastContactAt = Date.now() - 61_000
+	inst.publishVariables()
+
+	assert.equal(seen.variables.state, 'available', 'it does not go blank')
+	assert.equal(seen.variables.connection, 'not refreshing')
+	assert.equal(seen.feedbacks.connection_lost.callback({}), true)
+	assert.equal(seen.feedbacks.no_data.callback({}), false, 'it does not give up 29 minutes early')
+	assert.equal(seen.feedbacks.state_is.callback({ options: { state: 'available' } }), true)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('condition 3 - thirty minutes: the state is given up, and lands BUSY not calm', async () => {
+	// The reserved row carries busy: true (D-34). A stream deck going dark because the server
+	// died is a false OFF on a physical control, which is the failure this product prevents.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	inst.lastContactAt = Date.now() - 1_801_000
+	inst.publishVariables()
+
+	assert.equal(seen.variables.state, 'unknown')
+	assert.equal(seen.variables.label, 'NO DATA')
+	assert.equal(seen.variables.busy, 'yes', 'the degenerate path is conspicuous, never calm')
+	assert.equal(seen.variables.connection, 'no data')
+	assert.equal(seen.feedbacks.no_data.callback({}), true)
+	assert.equal(seen.feedbacks.busy.callback({}), true)
+	assert.equal(seen.feedbacks.state_is.callback({ options: { state: 'available' } }), false,
+		'it must stop claiming the row it can no longer confirm')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('the two thresholds are CONFIGURATION, and are not chained', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, lost_ms: '5000', no_data_ms: '20000' })
+	await settle()
+
+	inst.lastContactAt = Date.now() - 6_000
+	inst.publishVariables()
+	assert.equal(seen.variables.connection, 'not refreshing', 'a 5s window marks at 6s')
+
+	inst.lastContactAt = Date.now() - 19_000
+	inst.publishVariables()
+	assert.equal(seen.variables.connection, 'not refreshing', '19s is still condition 2')
+
+	inst.lastContactAt = Date.now() - 21_000
+	inst.publishVariables()
+	assert.equal(seen.variables.connection, 'no data')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('BREAKING: `stale` is gone from the variables and the feedbacks, with no alias', async () => {
+	// Not renamed and not aliased. A variable that silently resolves to nothing on a stream
+	// deck is worse than one that is loudly absent, and an alias beside the real thing is a
+	// decoy the next layout keys on (D-83).
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	assert.equal('stale' in seen.variables, false)
+	assert.equal('stale' in seen.feedbacks, false)
+	assert.equal(inst.buildVariables().some((v) => v.variableId === 'stale'), false)
+	assert.equal(seen.variables.connection !== undefined, true, 'and it is replaced, not just removed')
+
+	await inst.destroy()
+	await fake.close()
+})
+
 test('a wrong passphrase is reported as an auth failure, not a generic error', async () => {
 	const OnAir = await loadInstanceClass()
 	const fake = startFakeServer({ passphrase: 'the-right-one' })

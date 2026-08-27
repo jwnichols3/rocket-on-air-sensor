@@ -89,10 +89,53 @@ and coloured with its `color` on `bgcolor`, verbatim. Plus a **Refresh table** u
 |---|---|
 | State is | the light is showing that state |
 | Busy | the current row is busy. This is the server's own flag, not a colour test - THE BUSY RULE (D-32) is what it means |
-| Stale | the server has no fresh evidence for the current state |
+| Not refreshing | the server has not answered for longer than the configured window. The state shown is the last one it reported, not a current reading |
+| No data | the server has been silent long enough that the module has given the state up entirely |
 
-**Variables**: `state`, `label`, `busy`, `confirmed`, `hold`, `source`, `stale`,
-`age_seconds`, `table_version`.
+**Variables**: `state`, `label`, `busy`, `confirmed`, `hold`, `source`, `connection`,
+`seconds_since_contact`, `age_seconds`, `table_version`.
+
+## ⚠️ BREAKING CHANGE: `stale` is gone
+
+**If any of your buttons use the `Stale` feedback or the `$(stale)` variable, they will stop
+working and you have to re-bind them.** There is no alias and that is deliberate: a variable
+that silently resolves to nothing on a stream deck is worse than one that is loudly absent,
+and an alias sitting beside the real thing is a decoy the next layout keys on.
+
+`stale` meant *"the server has no fresh evidence for this state"*. **The server no longer makes
+that judgement** (D-91). It latches state and never decays it, so a state nobody has rewritten
+for three hours is simply the state - and the question an operator actually needs answered is
+not *how old is this write* but *am I still hearing from the server at all*.
+
+| Was | Now |
+|---|---|
+| `Stale` feedback | `Not refreshing` feedback, or `No data` for the harder case |
+| `$(stale)` = `yes`/`no` | `$(connection)` = `ok` / `not refreshing` / `no data` |
+| - | `$(seconds_since_contact)`, if you want to show the number |
+
+`$(age_seconds)` still exists and still means seconds since the last WRITE. It is **provenance
+only** now: nothing in the module reads it to decide anything, and neither should a button that
+is trying to say whether the reading can be trusted. Use `$(connection)` for that.
+
+## Losing the server
+
+The module judges its own connection, on its own clock, with two thresholds in the instance
+config. Both are measured from **the last time the server answered**, and they are independent -
+the second is not counted from the first.
+
+| Setting | Default | What happens |
+|---|---|---|
+| Say "not refreshing" after | 60000 ms | The last known state is still shown. `Not refreshing` goes true. |
+| Give the state up after | 1800000 ms | `state` becomes `unknown`, `label` becomes `NO DATA`, `No data` goes true. |
+
+Thirty minutes is deliberate: a meeting runs about that long, so the state has to survive a
+server restart without the buttons going dark mid-call. One minute is also deliberate - the
+honesty costs nothing and should arrive immediately.
+
+**When the module gives up, `busy` reads `yes`, not `no`.** The reserved `unknown` row carries
+`busy: true` (D-34) because every degenerate path in this system lands on a conspicuous state
+rather than a calm one. A stream deck going dark because the server died would be a false OFF
+on a physical control, which is the exact failure this product exists to prevent.
 
 ## Things worth knowing
 
