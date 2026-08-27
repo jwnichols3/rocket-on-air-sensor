@@ -2995,3 +2995,46 @@ else (state, light control, API) lives on the receiver.
   Corollary, and the thing that made this hard to see: **the driver's failure log is unusable
   for this.** 915 identical lines, no timestamp, no host, no give-up. There is no way to tell
   from it when a panel went away or for how long. Tracked separately.
+
+- **D-88 (2026-08-27)** **The firmware update port stays open, with no password, on purpose and
+  for now.** Port 3232 on every renderer accepts an OTA firmware upload from anyone on the LAN.
+  The renderer's own web upload endpoint is closed (`web_server: ota: false`), so this is the
+  one remaining unauthenticated path.
+
+  Rocket's call, with his reasons recorded because they are what a later reader will need:
+  he is new to ESP32 work, the network and the physical location are trusted, and **the cost
+  of a forgotten OTA password is losing the ability to reflash a board without a USB cable.**
+  While he is still learning the hardware, the risk of locking himself out is larger than the
+  risk of someone on his own LAN reflashing a light.
+
+  **The trigger for revisiting is named, not vague:** when a renderer leaves this network, or
+  when the system becomes more production-like. Adding `password: !secret web_server_password`
+  to `ota:` in `onair-core.yaml` is the whole change, and it is safe in one direction - a
+  running board with no password still accepts the upload that adds one.
+
+- **D-89 (2026-08-27)** **The state table is PULLED and the current state is PUSHED, and a
+  naive state poll would break THE BUSY RULE rather than merely duplicate work.**
+
+  Recorded because the asymmetry looks arbitrary until you try to remove it. Verified against
+  the firmware: the only outbound request it ever makes is `GET /config/states`. It never
+  reads `/status`.
+
+  **Why the table is pulled:** it changes monthly, and a renderer that fetches it needs no
+  server-side registration to stay current (D-38). Five triggers, one cadence nobody notices.
+
+  **Why the state is pushed:** it changes many times an hour and matters within a second, and
+  push is what produces the **confirmed state** - the On-air API writes, then reads back, which
+  is genuine device evidence rather than an echo of intent (D-22.3).
+
+  **The trap, and the real reason a state poll is not a free addition.** The device's staleness
+  timer measures *how long since someone asserted this state*. A poll asserts nothing new. If a
+  polling device stamped `last_write_ms` on receipt, then a server sitting on hour-old data
+  would be refreshed into looking current on the glass, and a calm row would keep its colours
+  for ever. **That is a false OFF manufactured by the safety net**, which is the one error
+  D-32 exists to prevent. A state poll must therefore carry the server's own `updatedAt`
+  forward and never stamp its own receipt time.
+
+  So a poll is worth adding as a **backstop, not a transport** - it corrects a renderer that
+  missed a push, and it is what makes an extra renderer cost no server configuration (#57
+  stage 3). It must not become an option that can turn the push OFF: a light that is slow to
+  come ON is the failure this whole system exists to avoid.
