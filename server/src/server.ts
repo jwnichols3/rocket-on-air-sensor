@@ -12,6 +12,7 @@ import {
   timingSafeStringEqual,
   waiverApplies,
 } from './auth.js';
+import { envOverrides, effectiveLight } from './config.js';
 import { validateConfig, type OnAirConfig } from './config-store.js';
 import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
@@ -609,7 +610,16 @@ async function handle(
       return;
     }
     if (method === 'GET') {
-      sendJson(res, 200, { config: deps.config(), problem: deps.configProblem?.() });
+      // `env` tells the console which fields it must NOT present as authoritative, and what
+      // the service is actually driving. Names of the overriding variables, never their
+      // values (D-79). `lightHost` is the resolved address and is not a secret - it is a LAN
+      // address, and the document beside it in this same response already carries one.
+      const cfg = deps.config();
+      sendJson(res, 200, {
+        config: cfg,
+        problem: deps.configProblem?.(),
+        env: { overrides: envOverrides(), lightHost: effectiveLight(cfg.light).host },
+      });
       return;
     }
     let body: unknown;

@@ -2818,3 +2818,40 @@ else (state, light control, API) lives on the receiver.
   that a section is actually revealed, that the palette repaints when the theme flips, and that
   a preference survives a reload. 53 checks. The text suite in `server/test/admin-ui.test.ts`
   survives as the cheap sibling.
+
+- **D-83 (2026-08-27)** **The device-connection precedence now lives in one function, and the
+  console links to the panel using it. A field that lies can be re-read; a link that lies gets
+  clicked.**
+
+  D-79 decided the environment keeps outranking the config document and the console must say
+  so. Implementing it exposed the real defect underneath, which was not the missing notice.
+
+  **The precedence was written out in exactly one place - `makeDriver` in
+  `server/src/index.ts` - and that place was not reachable by anything else.** So the admin
+  console had no way to know what the driver had resolved, and rendered the document's value as
+  though it were in effect. `deploy/onair`'s `cmd_ui` had to reimplement the same rule in bash
+  to print a correct URL, and `deploy/test-ui.sh` pins it there with a test named *"the overlay
+  wins over the document"*. Three copies of one rule, and the web console held the only copy
+  that was wrong.
+
+  `effectiveLight()` in `server/src/config.ts` is now the single expression of it. `makeDriver`
+  calls it, and `GET /admin/config` reports its result as `env.lightHost` alongside
+  `env.overrides` - **names of the overriding variables, never their values.** An overridden
+  field renders read-only and names the variable and the file to edit.
+
+  **Rocket asked for a link to the panel from that section** (#55), which is what made the
+  single-source fix urgent rather than tidy. A text field showing a stale address is a thing
+  you can re-read and doubt. A link is a thing you click, and it takes you to a box the service
+  is not driving while looking exactly like success. The links are built from `env.lightHost`
+  for that reason, and a browser test asserts the link follows the override when the two
+  disagree.
+
+  Two smaller decisions inside it. The **scheme is ours and only the authority comes from
+  config**: the host is validated as host-shaped before it reaches an `href`, and an unset or
+  malformed address emits no anchor at all rather than a dead `http:///onair`. And the bundle's
+  **"no external resources" test changed shape.** It banned the string `http://` outright,
+  which was a proxy for "loads nothing remote" and would have banned this feature rather than
+  the hazard. It now asserts the hazard directly - no remote `src`, no `url()`, no `@import`,
+  no `fetch` to an absolute URL, no hardcoded absolute anchor - and pins the one surviving
+  scheme literal to the runtime-built link. Proven stricter, not looser: three planted hazards
+  are each caught.

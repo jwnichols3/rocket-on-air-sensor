@@ -27,6 +27,7 @@ var editing = {};        // id -> the in-progress edit for one row, not yet stag
 var liveStatus = null;       // the gated /status readout
 var lastRenderedState = null; // which row last wore the LIVE badge - see refreshStatus()
 var nags = {};
+var envInfo = { overrides: [], lightHost: null };  // what the environment is overriding (D-79)
 var view = 'simple';
 var section = 'states';
 
@@ -662,6 +663,26 @@ function openModal(title, bullets, okLabel, promptLabel, onOk) {
   $('modal-cancel').onclick = function () { $('modal').hidden = true; };
 }
 
+// Which env var is winning over a given config key, or null. Names only - the VALUE never
+// leaves the server for anything but `light.host`, which is a LAN address (D-79).
+function overriddenBy(key) {
+  var hit = (envInfo.overrides || []).filter(function (o) { return o.key === key; })[0];
+  return hit ? hit.variable : null;
+}
+
+// A host is only turned into a link once it looks like one. The value is operator-set and
+// reaches an href, so an arbitrary string must not: `javascript:` and friends never get to
+// be a scheme here, because the scheme is ours and only the authority comes from config.
+var HOSTISH = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:\d{1,5})?$/i;
+function panelLink(box, label, host, path) {
+  if (!host || !HOSTISH.test(host)) return;
+  var a = el('a', 'panel-link', label);
+  a.href = 'http://' + host + path;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  box.appendChild(a);
+}
+
 function renderFields() {
   function textField(box, label, get, set, opts) {
     opts = opts || {};
@@ -673,12 +694,23 @@ function renderFields() {
     var input = el('input');
     input.id = id;
     input.type = opts.type || 'text';
-    input.value = get();
-    input.addEventListener('input', function () {
-      set(opts.type === 'number' ? Number(input.value) : input.value);
-      renderCommit(); renderRail();
-    });
+    input.value = opts.override ? '' : get();
+    // AN OVERRIDDEN FIELD IS NOT EDITABLE, and says who is winning (D-79). Leaving it
+    // editable is what made saving a new address succeed and change nothing.
+    if (opts.override) {
+      input.readOnly = true;
+      input.placeholder = opts.overrideValue === undefined ? '' : String(opts.overrideValue || '');
+      input.value = opts.overrideValue === undefined ? '' : String(opts.overrideValue || '');
+    } else {
+      input.addEventListener('input', function () {
+        set(opts.type === 'number' ? Number(input.value) : input.value);
+        renderCommit(); renderRail();
+      });
+    }
     f.appendChild(input);
+    if (opts.override) {
+      f.appendChild(el('div', 'nag', 'Set by ' + opts.override + ' in ~/.onair/config.env.'));
+    }
     if (opts.nag) f.appendChild(el('div', 'nag', opts.nag));
     box.appendChild(f);
     return input;
@@ -745,13 +777,28 @@ function renderFields() {
   // the object and the JSON key stays `light`.
   var device = $('device-fields'); clear(device);
   textField(device, 'Address', function () { return draft.light.host || ''; },
-    function (v) { draft.light.host = v || null; saveDraft(); });
+    function (v) { draft.light.host = v || null; saveDraft(); },
+    { override: overriddenBy('light.host'), overrideValue: envInfo.lightHost });
   textField(device, 'Entity name', function () { return draft.light.entity; },
-    function (v) { draft.light.entity = v; saveDraft(); });
+    function (v) { draft.light.entity = v; saveDraft(); },
+    { override: overriddenBy('light.entity') });
   textField(device, 'Device user', function () { return draft.light.username || ''; },
-    function (v) { draft.light.username = v || null; saveDraft(); });
+    function (v) { draft.light.username = v || null; saveDraft(); },
+    { override: overriddenBy('light.username') });
   textField(device, 'Device password', function () { return draft.light.password || ''; },
-    function (v) { draft.light.password = v || null; saveDraft(); }, { type: 'password' });
+    function (v) { draft.light.password = v || null; saveDraft(); },
+    { type: 'password', override: overriddenBy('light.password') });
+
+  // THE LINKS NAME THE HOST THE SERVICE IS ACTUALLY DRIVING, not the document's. A field
+  // that lies can be re-read; a link that lies gets clicked. `deploy/onair`'s cmd_ui
+  // resolves the overlay first for exactly this reason (D-79, #55).
+  var host = envInfo.lightHost || draft.light.host;
+  if (host && HOSTISH.test(host)) {
+    var links = el('div', 'links');
+    panelLink(links, 'Open the panel', host, '/onair');
+    panelLink(links, 'Panel settings', host, '/onair/config');
+    device.appendChild(links);
+  }
 }
 
 function renderAll() {
@@ -884,6 +931,7 @@ function start() {
     }
     return api('/admin/config').then(function (r) {
       live = r.body.config;
+      envInfo = r.body.env || envInfo;
       return refreshStatus().then(showConsole);
     });
   });
@@ -905,6 +953,7 @@ $('login').addEventListener('submit', function (e) {
     nags = r.body.nags || {};
     api('/admin/config').then(function (c) {
       live = c.body.config;
+      envInfo = c.body.env || envInfo;
       refreshStatus().then(showConsole);
     });
   });

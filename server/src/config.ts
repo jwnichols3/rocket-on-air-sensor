@@ -28,3 +28,68 @@ export function loadEnvOverlay(path?: string): void {
 
 /** @deprecated Kept so existing callers and tests keep compiling. Use `loadEnvOverlay`. */
 export const loadConfig = loadEnvOverlay;
+
+// ---------------------------------------------------------------------------
+// WHAT THE ENVIRONMENT IS OVERRIDING (D-79, #53)
+//
+// The overlay outranks the config document, deliberately - that is D-14's rule and the
+// documented way to point a box at a different light over SSH when its own UI cannot be
+// reached. The cost is that a field in the admin console can render a value the running
+// service is ignoring: type a new address, stage it, save it, get a success, and the server
+// carries on talking to the old one. Silently.
+//
+// `deploy/onair`'s `cmd_ui` already resolves the overlay first for exactly this reason, and
+// deploy/test-ui.sh pins it with a test called "the overlay wins over the document". The
+// resolution lived in three places and the web console had the only copy that got it wrong.
+// It lives HERE now, once, and index.ts and the admin route both call it - which is the
+// actual fix. Reporting the override is only how the page stops lying about it.
+
+/** The env var that outranks each config key. Order is the order the console shows them. */
+export const ENV_OVERRIDABLE: ReadonlyArray<{ key: string; variable: string }> = [
+  { key: 'light.host', variable: 'ONAIR_LIGHT_HOST' },
+  { key: 'light.entity', variable: 'ONAIR_LIGHT_ENTITY' },
+  { key: 'light.username', variable: 'ONAIR_LIGHT_USER' },
+  { key: 'light.password', variable: 'ONAIR_LIGHT_PASS' },
+];
+
+export type EnvOverride = { key: string; variable: string };
+
+/**
+ * Which config keys the environment is currently overriding.
+ *
+ * **NAMES ONLY, NEVER VALUES.** `ONAIR_LIGHT_PASS` is a device credential, and while this
+ * travels on a gated route today, a list of names is useful to every caller and a list of
+ * values is useful to none of them. There is no reason to put a secret on a wire that does
+ * not need it.
+ *
+ * An empty string counts as unset: `ONAIR_LIGHT_HOST=` in the overlay file is someone
+ * clearing it, not someone pointing the service at a host called "".
+ */
+export function envOverrides(env: NodeJS.ProcessEnv = process.env): EnvOverride[] {
+  return ENV_OVERRIDABLE.filter((o) => {
+    const v = env[o.variable];
+    return v !== undefined && v !== '';
+  }).map((o) => ({ key: o.key, variable: o.variable }));
+}
+
+type LightBlock = { host: string | null; entity: string; username: string | null; password: string | null };
+
+/**
+ * The device settings the service is ACTUALLY using: the overlay over the document.
+ *
+ * The one place this precedence is expressed. index.ts builds its driver from this, and the
+ * admin route reports the resulting host from it, so the console cannot drift from the
+ * driver the way it did before.
+ */
+export function effectiveLight(light: LightBlock, env: NodeJS.ProcessEnv = process.env): LightBlock {
+  const pick = (variable: string, fallback: string | null): string | null => {
+    const v = env[variable];
+    return v !== undefined && v !== '' ? v : fallback;
+  };
+  return {
+    host: pick('ONAIR_LIGHT_HOST', light.host),
+    entity: pick('ONAIR_LIGHT_ENTITY', light.entity) ?? light.entity,
+    username: pick('ONAIR_LIGHT_USER', light.username),
+    password: pick('ONAIR_LIGHT_PASS', light.password),
+  };
+}

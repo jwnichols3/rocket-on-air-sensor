@@ -382,6 +382,101 @@ test('and a stale reading always says so, in words, next to the control that fix
   check(/press a state below/i.test(caution.text), `caution reads: "${caution.text}"`);
 }
 
+test('the Device connection section links to the panel, in a new tab (#55)');
+{
+  await page.click('#view-advanced');
+  await page.click('#rail button[data-sec="device"]');
+  // The throwaway config has no device address - correctly, a fresh install has not been
+  // pointed at a light yet - so give it one before asking what it links to.
+  await page.evaluate(() => {
+    draft.light.host = '10.42.12.77';
+    envInfo = { overrides: [], lightHost: '10.42.12.77' };
+    renderFields();
+  });
+  const links = await page.$$eval('#device-fields .panel-link', (as) =>
+    as.map((a) => ({ href: a.getAttribute('href'), target: a.target, rel: a.rel, text: a.textContent.trim() })));
+
+  check(links.length === 2, `expected two panel links, got ${links.length}`);
+  check(links.every((l) => l.target === '_blank'), 'a link does not open in a new tab');
+  check(
+    links.every((l) => /noopener/.test(l.rel) && /noreferrer/.test(l.rel)),
+    `rel is wrong: ${links.map((l) => l.rel).join(' | ')}`,
+  );
+  check(links.some((l) => /\/onair$/.test(l.href || '')), `no status link: ${links.map((l) => l.href).join(', ')}`);
+  check(links.some((l) => /\/onair\/config$/.test(l.href || '')), 'no settings link');
+  check(links.every((l) => /^http:\/\//.test(l.href || '')), 'a link is not an http URL');
+}
+
+test('with NO device address configured, no link is emitted at all');
+{
+  const emitted = await page.evaluate(() => {
+    const keptEnv = envInfo;
+    const keptHost = draft.light.host;
+    envInfo = { overrides: [], lightHost: null };
+    draft.light.host = null;
+    renderFields();
+    const n = document.querySelectorAll('#device-fields .panel-link').length;
+    envInfo = keptEnv; draft.light.host = keptHost; renderFields();
+    return n;
+  });
+  check(emitted === 0, `a dead link was emitted for an unset host: ${emitted}`);
+}
+
+test('a host that is not host-shaped never reaches an href');
+{
+  // The value is operator-set and lands in an href. The SCHEME is ours and only the
+  // authority comes from config, but a string that is not host-shaped must not be linked
+  // at all rather than trusted to be harmless once prefixed.
+  const emitted = await page.evaluate(() => {
+    const keptEnv = envInfo;
+    const keptHost = draft.light.host;
+    envInfo = { overrides: [], lightHost: 'javascript:alert(1)' };
+    draft.light.host = 'javascript:alert(1)';
+    renderFields();
+    const hrefs = [...document.querySelectorAll('#device-fields .panel-link')].map((a) => a.getAttribute('href'));
+    envInfo = keptEnv; draft.light.host = keptHost; renderFields();
+    return hrefs;
+  });
+  check(emitted.length === 0, `a non-host was linked: ${emitted.join(', ')}`);
+}
+
+test('an ENV-OVERRIDDEN field is read-only and names the variable winning (D-79)');
+{
+  const shown = await page.evaluate(() => {
+    const keptEnv = envInfo;
+    envInfo = { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], lightHost: '10.0.0.99' };
+    renderFields();
+    const input = document.querySelector('#device-fields input');
+    const nag = document.querySelector('#device-fields .nag');
+    const out = { readOnly: input.readOnly, value: input.value, nag: nag ? nag.textContent : '' };
+    envInfo = keptEnv; renderFields();
+    return out;
+  });
+  check(shown.readOnly, 'an overridden field is still editable - saving it would change nothing');
+  check(shown.value === '10.0.0.99', `the field should show the EFFECTIVE value, got "${shown.value}"`);
+  check(/ONAIR_LIGHT_HOST/.test(shown.nag), `the note should name the variable: "${shown.nag}"`);
+  check(/config\.env/.test(shown.nag), `the note should name the file: "${shown.nag}"`);
+}
+
+test('and the link follows the OVERRIDE, not the document - a link gets clicked');
+{
+  const href = await page.evaluate(() => {
+    const keptEnv = envInfo;
+    const keptHost = draft.light.host;
+    draft.light.host = '10.0.0.1';
+    envInfo = { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], lightHost: '10.0.0.99' };
+    renderFields();
+    const a = document.querySelector('#device-fields .panel-link');
+    const out = a ? a.getAttribute('href') : null;
+    envInfo = keptEnv; draft.light.host = keptHost; renderFields();
+    return out;
+  });
+  check(
+    href === 'http://10.0.0.99/onair',
+    `the link must name the box the service drives, got "${href}"`,
+  );
+}
+
 test('no page errors were raised at any point');
 check(pageErrors.length === 0, pageErrors.join(' | '));
 

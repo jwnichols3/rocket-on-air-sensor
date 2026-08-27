@@ -384,6 +384,27 @@ silence even with no socket error. Unauthenticated.
 The admin surface. Session-token gated, never passphrase-gated. Specified in the design doc
 (§ Auth and § Config store), not here - it is the owner's console, not a client contract.
 
+One field of `GET /admin/config` is worth stating here, because it is about the wire and not
+about the console:
+
+```json
+{
+  "config": { "...": "the document" },
+  "env": {
+    "overrides": [{ "key": "light.host", "variable": "ONAIR_LIGHT_HOST" }],
+    "lightHost": "10.42.12.77"
+  }
+}
+```
+
+`env.overrides` names the config keys the **environment overlay is currently outranking**, and
+the variable doing it. **Names only, never values** - `ONAIR_LIGHT_PASS` is a device credential
+and a list of names serves every caller while a list of values serves none (D-79).
+
+`env.lightHost` is the **effective** device address: the overlay over the document, the same
+resolution `makeDriver` uses. A consumer that wants to reach the panel must use this and not
+`config.light.host`, which may not be the box the service is driving.
+
 ---
 
 ## 6. Lifecycle: what happens when the table changes under you

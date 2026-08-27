@@ -2,7 +2,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from './app.js';
-import { loadEnvOverlay } from './config.js';
+import { effectiveLight, loadEnvOverlay } from './config.js';
 import type { OnAirConfig } from './config-store.js';
 import { EsphomeTextDriver } from './esphome-driver.js';
 
@@ -39,13 +39,16 @@ if (token !== undefined && token.trim() === '') {
  * rather than being folded into the document on load.
  */
 function makeDriver(config: OnAirConfig): EsphomeTextDriver | undefined {
-  const host = process.env.ONAIR_LIGHT_HOST ?? config.light.host;
-  if (!host) return undefined;
+  // effectiveLight() is the ONE expression of this precedence (D-79). It used to be written
+  // out here and nowhere else, so the admin console had no way to know what the driver had
+  // resolved and rendered the document's value as if it were in effect.
+  const light = effectiveLight(config.light);
+  if (!light.host) return undefined;
   return new EsphomeTextDriver({
-    host,
-    entity: process.env.ONAIR_LIGHT_ENTITY ?? config.light.entity,
-    username: process.env.ONAIR_LIGHT_USER ?? config.light.username ?? undefined,
-    password: process.env.ONAIR_LIGHT_PASS ?? config.light.password ?? undefined,
+    host: light.host,
+    entity: light.entity,
+    username: light.username ?? undefined,
+    password: light.password ?? undefined,
   });
 }
 

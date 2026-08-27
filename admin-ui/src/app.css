@@ -188,3 +188,9 @@ h3 { margin: 0 0 10px; font-size: 15px; }
 .modal ul { margin: 8px 0 0; padding-left: 20px; }
 .modal input { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
                padding: 7px 10px; width: 100%; margin-top: 10px; }
+
+.links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+.panel-link { border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px;
+              color: inherit; text-decoration: none; font-size: 13px; }
+.panel-link:hover { border-color: var(--muted); }
+.panel-link::after { content: " \2197"; opacity: 0.6; }

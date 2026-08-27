@@ -40,7 +40,28 @@ test('the bundle is one self-contained file with no external resources', () => {
   // from is the thing that is broken.
   assert.equal(/<script[^>]+src=/.test(page), false, 'no external script');
   assert.equal(/<link[^>]+stylesheet/.test(page), false, 'no external stylesheet');
-  assert.equal(/https?:\/\//.test(page.replace(/https?:\/\/127\.0\.0\.1/g, '')), false, 'no remote URLs');
+
+  // THE RULE IS "LOADS NOTHING REMOTE", and this used to be enforced by banning the string
+  // `http://` outright. That proxy stopped working when the console gained a link to the
+  // panel (#55): `'http://' + host + path` is a hyperlink a HUMAN CLICKS, on the operator's
+  // own LAN, and it loads nothing at page load. Banning the scheme would have banned the
+  // feature rather than the hazard.
+  //
+  // So the rule is asserted directly instead, and more narrowly than before: nothing may be
+  // FETCHED from a remote origin, in any of the positions that would do it.
+  assert.equal(/\ssrc\s*=\s*["']?https?:/i.test(page), false, 'no remote src');
+  assert.equal(/url\(\s*["']?https?:/i.test(page), false, 'no remote url() in CSS');
+  assert.equal(/@import/i.test(page), false, 'no CSS import');
+  assert.equal(/fetch\(\s*["'`]https?:/i.test(page), false, 'no fetch to an absolute URL');
+  assert.equal(/<a[^>]+href\s*=\s*["']https?:/i.test(page), false, 'no hardcoded absolute anchor');
+
+  // And the one scheme literal that survives is the panel link, built at runtime from the
+  // operator's own configured address - never a host baked into the shell (D-35).
+  const schemes = page.match(/https?:\/\/[^"'` )]*/g) ?? [];
+  assert.deepEqual(schemes, ['http://'], `unexpected URL literal: ${schemes.join(', ')}`);
+  assert.match(page, /'http:\/\/' \+ host \+ path/, 'the scheme is a prefix, the authority is config');
+  assert.match(page, /a\.target = '_blank'/);
+  assert.match(page, /a\.rel = 'noopener noreferrer'/);
   assert.equal(page.includes('/*STYLES*/'), false, 'the build substituted the CSS');
   assert.equal(page.includes('//SCRIPT'), false, 'the build substituted the JS');
 });
