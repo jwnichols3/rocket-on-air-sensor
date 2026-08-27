@@ -2923,3 +2923,50 @@ else (state, light control, API) lives on the receiver.
   SKU. **The CrowPanel 5.0" numbers on `devices.esphome.io` are not interchangeable** despite
   being the same resolution: that page assigns the same physical pins to different colour
   channels and swaps `de_pin` with `vsync_pin`.
+
+- **D-85 (2026-08-27)** **The on-air firmware is now a shared package, `onair-core.yaml`, and a
+  board file owns nothing but its own hardware. The split is enforced by a rule with teeth:
+  if a block names a pin, it is board knowledge.**
+
+  Two boards sharing ~450 lines of state-table machinery by copy-paste would drift, and D-83
+  had just finished demonstrating what that costs - a rule written in three places, with the
+  copy nobody was looking at being the wrong one. Duplicating it here would have undone
+  `compute_view()`'s single-decision guarantee one level up: two panels standing next to each
+  other, disagreeing, each correct according to its own copy.
+
+  `configs/onair-core.yaml` holds the state table and its pull, the entities the server
+  drives, the scripts, the served pages and the rendering decision. Board files hold
+  `substitutions`, `esp32`, `logger`, `i2c`, `font`, `display` **and nothing else**.
+
+  **The refactor is proven, not asserted.** `esphome config` on the Elegoo board is
+  **content-identical** before and after - the resolved output differs only in key ORDER, and
+  a sorted diff is empty. That is the whole safety argument for touching a working device's
+  config: the live panel's build is unchanged, so it does not need reflashing to stay correct.
+
+  The rule found its own first violation immediately. A vestigial "Onboard LED" switch on
+  `GPIO2` had been sitting in what became the core - and `GPIO2` is the CrowPanel's
+  **backlight**, so the config failed outright rather than subtly. It named a pin, so it moved
+  to `elegoo-esp32.yaml`. A style rule that fails a build is worth more than one that reads well.
+
+- **D-86 (2026-08-27)** **The colour glass draws the operator's colours; it does not re-decide
+  what they mean. THE BUSY RULE was already asymmetric one layer down, and the second renderer
+  is what proved it.**
+
+  Writing the CrowPanel's display lambda, the obvious move was to implement D-82's asymmetric
+  treatment on the glass: calm+stale withholds colour, busy+stale keeps it under a hatch.
+  **Half of that was already done and the branch could never have run.** `compute_view()` in
+  `onair_table.h` turns `stale && !busy` into `NO_DATA` before any renderer sees it, because a
+  calm claim is the only one that can be a false OFF. So a colours-withheld case cannot reach
+  the row branch, and code written to handle it is dead - along with a comment claiming the
+  glass enforces a rule the shared header enforces for every renderer at once.
+
+  Both were removed. What the glass legitimately decides is the **busy** half: a stale busy row
+  keeps its own colours and takes a hatch. Verified on hardware rather than argued -
+  `on-air` stays `BUSY` after 98 seconds without a write, `available` becomes `NO DATA`.
+
+  **`CALM_HEAVY` and `CALM_LIGHT` collapse to one picture on this panel.** That split exists
+  only because a 1-bit display has no colour and has to pick a SHAPE by luminance; a colour
+  panel just draws the row. But `render_branch` still reports the shape `compute_view` CHOSE,
+  not the picture that was painted, so both boards report **the same vocabulary** over HTTP.
+  That is not tidiness: comparing what two panels believe is the whole of #57 stage 3, and it
+  is impossible if they answer in different words.
