@@ -2970,3 +2970,28 @@ else (state, light control, API) lives on the receiver.
   not the picture that was painted, so both boards report **the same vocabulary** over HTTP.
   That is not tidiness: comparing what two panels believe is the whole of #57 stage 3, and it
   is impossible if they answer in different words.
+
+- **D-87 (2026-08-27)** **The CrowPanel is the active panel; the Elegoo board is a TEST board
+  that is normally absent. An absent panel is a normal condition, not a fault, and stage 3 has
+  to be built for that from the start.**
+
+  `ONAIR_LIGHT_HOST` now points at the CrowPanel and the end-to-end path is proven: a write to
+  `POST /state/{id}` reaches the glass and comes back as `confirmed`, for `on-air`,
+  `interruptible`, `recording` and `available`.
+
+  The repoint exposed that the previous address was already dead - `10.42.12.77` does not
+  answer and `elegoo-esp32.local` does not resolve, and the daemon log holds **915 consecutive
+  `[esphome-driver] fetch failed` lines** ending exactly at the restart. That was not a
+  regression and is not a fault: **Rocket's Elegoo board is a bench board and is normally off.**
+
+  What that settles for #57 stage 3, which was its hardest open question: **`confirmed` cannot
+  mean "every panel agreed".** If one renderer is expected to be absent for weeks, an AND over
+  all panels would make `confirmed` permanently false and the system would report a fault as
+  its resting state. The shape that survives is **one authoritative panel for `confirmed`, all
+  others best-effort** - a secondary that does not answer is logged and otherwise ignored. That
+  also keeps THE BUSY RULE (D-32) intact: `confirmed` continues to mean a genuine device read
+  from the panel that matters, rather than a quorum that can be gamed by adding hardware.
+
+  Corollary, and the thing that made this hard to see: **the driver's failure log is unusable
+  for this.** 915 identical lines, no timestamp, no host, no give-up. There is no way to tell
+  from it when a panel went away or for how long. Tracked separately.
