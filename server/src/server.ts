@@ -615,10 +615,18 @@ async function handle(
       // values (D-79). `lightHost` is the resolved address and is not a secret - it is a LAN
       // address, and the document beside it in this same response already carries one.
       const cfg = deps.config();
+      const eff = effectiveLight(cfg.light);
       sendJson(res, 200, {
         config: cfg,
         problem: deps.configProblem?.(),
-        env: { overrides: envOverrides(), lightHost: effectiveLight(cfg.light).host },
+        env: {
+          overrides: envOverrides(),
+          // The EFFECTIVE non-credential values, so an overridden field shows what is
+          // actually in force rather than an empty box that reads as "not configured".
+          // `username` and `password` are deliberately absent: they are a device credential,
+          // and a field that says "Set by ONAIR_LIGHT_PASS" already tells you where to look.
+          effective: { host: eff.host, entity: eff.entity },
+        },
       });
       return;
     }

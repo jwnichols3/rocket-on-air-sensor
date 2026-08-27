@@ -390,7 +390,7 @@ test('the Device connection section links to the panel, in a new tab (#55)');
   // pointed at a light yet - so give it one before asking what it links to.
   await page.evaluate(() => {
     draft.light.host = '10.42.12.77';
-    envInfo = { overrides: [], lightHost: '10.42.12.77' };
+    envInfo = { overrides: [], effective: { host: '10.42.12.77' } };
     renderFields();
   });
   const links = await page.$$eval('#device-fields .panel-link', (as) =>
@@ -412,7 +412,7 @@ test('with NO device address configured, no link is emitted at all');
   const emitted = await page.evaluate(() => {
     const keptEnv = envInfo;
     const keptHost = draft.light.host;
-    envInfo = { overrides: [], lightHost: null };
+    envInfo = { overrides: [], effective: {} };
     draft.light.host = null;
     renderFields();
     const n = document.querySelectorAll('#device-fields .panel-link').length;
@@ -430,7 +430,7 @@ test('a host that is not host-shaped never reaches an href');
   const emitted = await page.evaluate(() => {
     const keptEnv = envInfo;
     const keptHost = draft.light.host;
-    envInfo = { overrides: [], lightHost: 'javascript:alert(1)' };
+    envInfo = { overrides: [], effective: { host: 'javascript:alert(1)' } };
     draft.light.host = 'javascript:alert(1)';
     renderFields();
     const hrefs = [...document.querySelectorAll('#device-fields .panel-link')].map((a) => a.getAttribute('href'));
@@ -444,7 +444,7 @@ test('an ENV-OVERRIDDEN field is read-only and names the variable winning (D-79)
 {
   const shown = await page.evaluate(() => {
     const keptEnv = envInfo;
-    envInfo = { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], lightHost: '10.0.0.99' };
+    envInfo = { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], effective: { host: '10.0.0.99' } };
     renderFields();
     const input = document.querySelector('#device-fields input');
     const nag = document.querySelector('#device-fields .nag');
@@ -464,7 +464,7 @@ test('and the link follows the OVERRIDE, not the document - a link gets clicked'
     const keptEnv = envInfo;
     const keptHost = draft.light.host;
     draft.light.host = '10.0.0.1';
-    envInfo = { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], lightHost: '10.0.0.99' };
+    envInfo = { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], effective: { host: '10.0.0.99' } };
     renderFields();
     const a = document.querySelector('#device-fields .panel-link');
     const out = a ? a.getAttribute('href') : null;
@@ -474,6 +474,42 @@ test('and the link follows the OVERRIDE, not the document - a link gets clicked'
   check(
     href === 'http://10.0.0.99/onair',
     `the link must name the box the service drives, got "${href}"`,
+  );
+}
+
+test('an overridden NON-credential shows its effective value; a credential does not');
+{
+  const seen = await page.evaluate(() => {
+    const keptEnv = envInfo;
+    envInfo = {
+      overrides: [
+        { key: 'light.entity', variable: 'ONAIR_LIGHT_ENTITY' },
+        { key: 'light.password', variable: 'ONAIR_LIGHT_PASS' },
+      ],
+      effective: { host: '10.0.0.99', entity: 'RealEntity' },
+    };
+    renderFields();
+    const byLabel = {};
+    document.querySelectorAll('#device-fields .field').forEach((f) => {
+      const l = f.querySelector('label');
+      const i = f.querySelector('input');
+      if (l && i) byLabel[l.textContent.trim()] = { value: i.value, placeholder: i.placeholder };
+    });
+    envInfo = keptEnv; renderFields();
+    return byLabel;
+  });
+
+  check(
+    seen['Entity name'] && seen['Entity name'].value === 'RealEntity',
+    `an overridden entity should show what is in force, got "${seen['Entity name'] && seen['Entity name'].value}"`,
+  );
+  check(
+    seen['Device password'] && seen['Device password'].value === '',
+    'a device credential must never be shown as an effective value',
+  );
+  check(
+    seen['Device password'] && seen['Device password'].placeholder === 'not shown',
+    'an empty credential box must say why it is empty, not read as unconfigured',
   );
 }
 

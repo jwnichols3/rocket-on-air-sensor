@@ -392,7 +392,7 @@ about the console:
   "config": { "...": "the document" },
   "env": {
     "overrides": [{ "key": "light.host", "variable": "ONAIR_LIGHT_HOST" }],
-    "lightHost": "10.42.12.77"
+    "effective": { "host": "10.42.12.77", "entity": "PresenceKey" }
   }
 }
 ```
@@ -401,9 +401,14 @@ about the console:
 the variable doing it. **Names only, never values** - `ONAIR_LIGHT_PASS` is a device credential
 and a list of names serves every caller while a list of values serves none (D-79).
 
-`env.lightHost` is the **effective** device address: the overlay over the document, the same
-resolution `makeDriver` uses. A consumer that wants to reach the panel must use this and not
-`config.light.host`, which may not be the box the service is driving.
+`env.effective` carries the device settings **actually in force** - the overlay over the
+document, the same resolution `makeDriver` uses. A consumer that wants to reach the panel must
+use `env.effective.host` and not `config.light.host`, which may not be the box the service is
+driving.
+
+`effective` carries **`host` and `entity` only**. `username` and `password` are a device
+credential and are never reported as effective values; an overridden credential is named in
+`overrides` and nothing more, which is enough to say where it is set.
 
 ---
 

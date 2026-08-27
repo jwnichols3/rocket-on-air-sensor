@@ -71,12 +71,19 @@ test('GET /admin/config reports the overrides BY NAME and never their values', a
   assert.equal(res.status, 200);
   const text = await res.text();
   const body = JSON.parse(text) as {
-    env: { overrides: { key: string; variable: string }[]; lightHost: string | null };
+    env: { overrides: { key: string; variable: string }[]; effective: Record<string, unknown> };
   };
 
   assert.deepEqual(body.env.overrides.map((o) => o.key).sort(), ['light.host', 'light.password']);
   assert.equal(body.env.overrides.find((o) => o.key === 'light.host')?.variable, 'ONAIR_LIGHT_HOST');
-  assert.equal(body.env.lightHost, '10.0.0.77', 'the EFFECTIVE host, so a link cannot point at the wrong box');
+  assert.equal(body.env.effective.host, '10.0.0.77', 'the EFFECTIVE host, so a link cannot point at the wrong box');
+
+  // A credential is NAMED as overridden and never valued. `host` and `entity` are neither
+  // secret nor useful to withhold - an empty box reads as "not configured", which is a
+  // different claim from "set elsewhere".
+  assert.deepEqual(Object.keys(body.env.effective).sort(), ['entity', 'host']);
+  assert.equal('username' in body.env.effective, false, 'a device credential must not be valued');
+  assert.equal('password' in body.env.effective, false, 'a device credential must not be valued');
 
   // THE ONE THING THIS ROUTE MUST NEVER DO. ONAIR_LIGHT_PASS is a device credential and a
   // list of names is useful to every caller while a list of values is useful to none.

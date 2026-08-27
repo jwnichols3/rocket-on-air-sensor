@@ -27,8 +27,11 @@ does not skip quietly.
 
 **There is a live device.** A real ESP32 drives a real light, supervised by a
 LaunchDaemon on 8484. `onair restart` needs sudo with a TTY, so an agent cycles the
-daemon by killing the process listening on 8484 and letting `KeepAlive` respawn it
-against a rebuilt `server/dist/`. Never foreground `esphome logs` or `make -C firmware
+daemon by killing the process **listening** on 8484 and letting `KeepAlive` respawn it
+against a rebuilt `server/dist/`. Use `lsof -ti :8484 -sTCP:LISTEN` and nothing else:
+a bare `lsof -ti :8484` also lists every CLIENT with a socket open to it, so
+`lsof -ti :8484 | head -1` can return a browser and kill that instead, leaving the
+daemon running the old build while the restart appears to have worked. Never foreground `esphome logs` or `make -C firmware
 flash` - they tail with no timeout and hang the turn.
 
 ## Agent skills

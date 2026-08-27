@@ -27,7 +27,7 @@ var editing = {};        // id -> the in-progress edit for one row, not yet stag
 var liveStatus = null;       // the gated /status readout
 var lastRenderedState = null; // which row last wore the LIVE badge - see refreshStatus()
 var nags = {};
-var envInfo = { overrides: [], lightHost: null };  // what the environment is overriding (D-79)
+var envInfo = { overrides: [], effective: {} };  // what the environment is overriding (D-79)
 var view = 'simple';
 var section = 'states';
 
@@ -699,8 +699,13 @@ function renderFields() {
     // editable is what made saving a new address succeed and change nothing.
     if (opts.override) {
       input.readOnly = true;
-      input.placeholder = opts.overrideValue === undefined ? '' : String(opts.overrideValue || '');
-      input.value = opts.overrideValue === undefined ? '' : String(opts.overrideValue || '');
+      // A credential's effective value is deliberately not sent (D-79), so the box stays
+      // empty and the note beneath it is the whole answer. A non-credential shows what is
+      // actually in force - an empty box would read as "not configured", which is a
+      // different and wrong claim.
+      input.value = opts.overrideValue === undefined || opts.overrideValue === null
+        ? '' : String(opts.overrideValue);
+      if (input.value === '') input.placeholder = 'not shown';
     } else {
       input.addEventListener('input', function () {
         set(opts.type === 'number' ? Number(input.value) : input.value);
@@ -778,10 +783,10 @@ function renderFields() {
   var device = $('device-fields'); clear(device);
   textField(device, 'Address', function () { return draft.light.host || ''; },
     function (v) { draft.light.host = v || null; saveDraft(); },
-    { override: overriddenBy('light.host'), overrideValue: envInfo.lightHost });
+    { override: overriddenBy('light.host'), overrideValue: envInfo.effective.host });
   textField(device, 'Entity name', function () { return draft.light.entity; },
     function (v) { draft.light.entity = v; saveDraft(); },
-    { override: overriddenBy('light.entity') });
+    { override: overriddenBy('light.entity'), overrideValue: envInfo.effective.entity });
   textField(device, 'Device user', function () { return draft.light.username || ''; },
     function (v) { draft.light.username = v || null; saveDraft(); },
     { override: overriddenBy('light.username') });
@@ -792,7 +797,7 @@ function renderFields() {
   // THE LINKS NAME THE HOST THE SERVICE IS ACTUALLY DRIVING, not the document's. A field
   // that lies can be re-read; a link that lies gets clicked. `deploy/onair`'s cmd_ui
   // resolves the overlay first for exactly this reason (D-79, #55).
-  var host = envInfo.lightHost || draft.light.host;
+  var host = envInfo.effective.host || draft.light.host;
   if (host && HOSTISH.test(host)) {
     var links = el('div', 'links');
     panelLink(links, 'Open the panel', host, '/onair');
