@@ -3191,3 +3191,34 @@ else (state, light control, API) lives on the receiver.
   the boot adoption was a partial cover for a dead writer (it caught the case where the
   panel still held ON AIR), and it is now gone. The fix remains D-91's - report when the
   writer was last seen, as a fact - not a re-litigation of decay.
+
+- **D-94 (2026-08-27)** **Best-effort push means the tick must always finish, not merely that
+  the request may fail.** #61's server half, and the one place it was not already true.
+
+  The HTTP write path already met D-92: `doWrite` catches around `driver.set` and around the
+  version nudge, so an unreachable panel surfaces as `confirmed: "unknown"` on a `200`. The
+  SSE hub already met it too - `sse.ts` detaches a client whose `write` throws and carries on
+  broadcasting, with tests for both the broadcast and the heartbeat path. **Neither needed
+  building; both were confirmed against the tests that already cover them.**
+
+  The gap was the **supervisor**. Its driver calls were unguarded, and a throw abandoned the
+  tick before the `confirmed` bookkeeping at the bottom. The failure that produces is not a
+  crash - `enqueue().catch()` swallows it - it is that `confirmed` FREEZES at its last good
+  value: the decay to `unknown` lives in the code the throw jumped over. A panel that fell
+  over would therefore keep reporting `confirmed: "on-air"` indefinitely, which is a claim
+  about evidence the server no longer has. Every driver call in the tick now goes through a
+  `bestEffort` wrapper that logs and returns "no evidence", so the tick always reaches the
+  decay.
+
+  **Deliberately NOT changed here, and named because it is a real cost:** a write with the
+  panel unplugged takes **13 seconds** to answer (measured, this ticket - `retries` then
+  `confirmTries` against a dead host, each on a 2s timeout). The write SUCCEEDS, which is
+  what #61 asked for, but the caller waits out a retry ladder belonging to a push that D-92
+  says is not a delivery guarantee - and D-90's detector retries every ~5s, so writes overlap
+  before the first one has answered. Filed as its own ticket rather than folded in here: it
+  is a latency and concurrency question about `confirmed`'s contract, not a non-fatality one.
+
+  `verifyEntity()`'s `DriverConfigError` stays FATAL at boot. A 404 on the entity name or a
+  401 is a deploy bug, not a missed push, and it fails identically every time; an unplugged
+  panel returns `null` from the same call and boots fine. That distinction predates D-92 and
+  survives it.

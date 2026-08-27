@@ -9,7 +9,7 @@ export interface SuperviseOptions {
   /** Called only when `confirmed` actually changes: one event per transition. */
   onChange: (state: OnAirState) => void;
   pollMs?: number;
-  /** Also refreshes the device's own STALE watchdog. */
+  /** How often to re-push `state` to the panel. A NOTIFICATION, not a delivery guarantee (D-92). */
   reassertMs?: number;
   decayMs?: number;
   log?: (line: string) => void;
@@ -35,6 +35,22 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
    * that used to live here now lives in each renderer, about its own connection.
    */
 
+  /**
+   * PUSH IS BEST EFFORT (D-92). A driver that throws is a panel that is not listening, and
+   * that is not an error the supervisor propagates: it is logged and reported as `unknown`,
+   * which is "no evidence" rather than a claim. Letting the throw escape would abandon the
+   * tick before the `confirmed` bookkeeping below, so a panel that fell over mid-tick would
+   * freeze `confirmed` at its last good value forever instead of decaying it.
+   */
+  async function bestEffort<T>(what: string, fn: () => Promise<T>, fallback: T): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      log(`[supervisor] ${what} failed: ${err instanceof Error ? err.message : String(err)}`);
+      return fallback;
+    }
+  }
+
   async function tick(): Promise<void> {
     const table = o.store.getTable();
     const want = o.store.get().state;
@@ -42,10 +58,10 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
 
     let got: string;
     if (due) {
-      got = await o.driver.set(want);
+      got = await bestEffort(`set(${want})`, () => o.driver.set(want), UNKNOWN_ID);
       if (got === want) lastAssertAt = Date.now(); // ONLY a successful set() refreshes it
     } else {
-      got = await o.driver.read();
+      got = await bestEffort('read()', () => o.driver.read(), UNKNOWN_ID);
     }
 
     if (got !== UNKNOWN_ID && got !== want) {
@@ -56,7 +72,7 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
           ? `[supervisor] device says ${got}, want ${want} - re-asserting`
           : `[supervisor] device holds "${got}", which is not in the table - re-asserting ${want}`,
       );
-      got = await o.driver.set(want);
+      got = await bestEffort(`set(${want})`, () => o.driver.set(want), UNKNOWN_ID);
       if (got === want) lastAssertAt = Date.now();
     }
 
@@ -64,7 +80,9 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
 
     // confirmed must describe PIXELS, not a variable.
     let painting: boolean | null = null;
-    if (got === settled && o.driver.repainted) painting = await o.driver.repainted();
+    if (got === settled && o.driver.repainted) {
+      painting = await bestEffort('repainted()', () => o.driver.repainted!(), null);
+    }
 
     let next: string;
     if (got === settled && painting !== false) {

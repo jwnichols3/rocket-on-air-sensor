@@ -126,6 +126,28 @@ test('supervisor: an unreachable device for longer than decayMs decays confirmed
   assert.equal(r.changes.length >= 1, true, 'the decay is broadcast');
 });
 
+test('supervisor: a driver that THROWS is logged, never fatal, and confirmed still decays (D-92)', async () => {
+  // Push is a notification, not a delivery guarantee. A panel that is not listening must
+  // not abandon the tick before the `confirmed` bookkeeping, or a device that fell over
+  // freezes `confirmed` at its last good value forever instead of admitting ignorance.
+  class DeadLight implements LightDriver {
+    async set(): Promise<string> {
+      throw new Error('connect ECONNREFUSED');
+    }
+    async read(): Promise<string> {
+      throw new Error('fetch failed');
+    }
+  }
+  const lines: string[] = [];
+  const r = rig({ driver: new DeadLight(), log: (l: string) => lines.push(l) });
+  r.store.setConfirmed('on-air');
+  await sleep(80);
+  r.stop();
+  assert.equal(r.store.get().confirmed, UNKNOWN_ID, 'no evidence is reported as unknown, not held');
+  assert.equal(lines.some((l) => /failed: (fetch failed|connect ECONNREFUSED)/.test(l)), true, lines.join('\n'));
+  assert.equal(lines.some((l) => /^\[supervisor\] Error/.test(l)), false, 'the throw never escapes the tick');
+});
+
 test('supervisor: confirmed reaches the wanted state once the device agrees', async () => {
   const r = rig();
   await sleep(40);
