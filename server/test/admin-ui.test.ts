@@ -171,38 +171,40 @@ test('/admin (the shell) is public, but /admin/config (the data) is not', async 
   assert.equal((await fetch(`${h.base}/admin/config`, { headers: remote })).status, 401);
 });
 
-test('the status poll does NOT rebuild the rows - it swapped the DOM out from under the user', () => {
+test('the poll rebuilds NEITHER the chips NOR the rows (#54)', () => {
   const page = html();
-  // Found by driving the page. renderRows() replaces every row node, and the poll ran
-  // every five seconds: typing went into an input that no longer existed a moment later,
-  // and a click on Edit landed on a button detached between mousedown and click, so the
-  // handler never ran. Both were completely silent - no error, no console entry, the page
-  // just did not respond. No test would have caught either.
-  assert.match(page, /ROWS ARE NOT REBUILT ON A POLL/);
-  assert.match(page, /var liveChanged = lastRenderedState !== liveStatus\.state/);
-  assert.match(page, /if \(liveChanged && Object\.keys\(editing\)\.length === 0\) renderRows\(\)/);
-});
-
-test('the state buttons are NOT rebuilt on a poll either (#54)', () => {
-  const page = html();
-  // The sibling of the test above, and the defect it describes went unfixed for six weeks
-  // because the guard that fixed the rows was written around renderRows() alone. These are
-  // the most-clicked controls on the page: a mousedown landing before a tick hit a node that
-  // was detached before the click, so the handler never ran and nothing at all happened.
+  // Found twice, by driving the page, and silent both times. renderRows() replaced every
+  // row node: typing went into an input that no longer existed a moment later, and a click
+  // on Edit landed on a button detached between mousedown and click, so the handler never
+  // ran. The guard written for that covered the rows alone, and the state buttons - the
+  // MOST-CLICKED controls on the page - kept being rebuilt every five seconds. No error, no
+  // console entry, the page just did not respond.
   //
   // Structural only. What actually settles this is admin-ui/test/browser.mjs, which holds a
-  // reference to a live button across two polls and asserts it is the same object - the one
-  // thing no amount of reading the source can establish.
-  assert.match(page, /THE STATE BUTTONS ARE NOT REBUILT ON A POLL EITHER/);
-  assert.match(page, /function buildStateControls\(\)/);
-  assert.match(page, /function markStateControls\(\)/);
-  assert.match(page, /if \(builtForVersion !== \(live \? live\.version : null\)\) buildStateControls\(\)/);
-  // markStateControls touches text and classes only. If it ever calls clear() or appendChild
-  // the split has been undone and the bug is back.
-  const mark = /function markStateControls\(\)\s*\{[\s\S]*?\n\}/.exec(page);
-  assert.ok(mark, 'markStateControls should be findable');
+  // reference to a live chip across two polls and asserts it is the same object still in
+  // the document - the one thing no amount of reading the source can establish.
+  assert.match(page, /NEITHER THE CHIPS NOR THE ROWS ARE REBUILT ON A POLL/);
+
+  // The rows: rebuilt only when the LIVE badge moves, and never while a row is being edited.
+  assert.match(page, /var liveChanged = lastRenderedState !== liveStatus\.state/);
+  assert.match(page, /if \(liveChanged && Object\.keys\(editing\)\.length === 0\) renderRows\(\)/);
+
+  // The chips: built once per table version, marked on every tick.
+  assert.match(page, /function buildChips\(\)/);
+  assert.match(page, /function markChips\(\)/);
+  assert.match(page, /if \(builtForVersion !== \(live \? live\.version : null\)\) buildChips\(\)/);
+
+  // markChips is the poll path. If it ever creates or appends a node the split is undone.
+  const mark = /function markChips\(\)\s*\{[\s\S]*?\n\}/.exec(page);
+  assert.ok(mark, 'markChips should be findable');
   assert.equal(/clear\(|appendChild|createElement/.test(mark[0]), false,
     'the poll path must never touch a node');
+
+  // And the chips read LIVE, never the draft: a staged rename must not appear on the
+  // buttons that command the server. One of the design prototypes got this wrong.
+  const build = /function buildChips\(\)\s*\{[\s\S]*?\n\}/.exec(page);
+  assert.ok(build, 'buildChips should be findable');
+  assert.equal(/draft\.states/.test(build[0]), false, 'the chips must be built from live');
 });
 
 test('the console does not name its state global `status`', () => {

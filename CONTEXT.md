@@ -2776,3 +2776,45 @@ else (state, light control, API) lives on the receiver.
   set to the default* and stops there. Consistent with the standing position that these
   defaults are documented and fine, like a router's - the note exists so the operator knows
   which state they are in, not to push them out of it.
+
+- **D-82 (2026-08-27)** **The console is a command surface with sections revealed beneath it,
+  and the busy rule is drawn ASYMMETRICALLY: a stale calm state loses its colour, a stale busy
+  state keeps it.**
+
+  Rocket on the old page: *"it reads like just a list of things you can do. There is no
+  organization to speak of and it is way too busy"*, and the five rail links *"don't actually
+  scroll to the right thing"*. The second half was literally true - the rail was
+  `href="#status"` against sections id'd `sec-status`, so **every link was inert**, had always
+  been, and no test noticed because no test drove the page.
+
+  Three variations were prototyped and judged (`docs/design/admin-console-2026-08-27/`). The
+  winner is **A, command-first**: the tally and the state chips are the first and biggest thing
+  on screen, identical in both views, above every section, so the job the page is opened for
+  costs one glance and zero navigation. The rail below **reveals** one section and hides the
+  rest; it never scrolls, and it carries per-section signal (staged counts, a stale mark)
+  grafted from variant B.
+
+  **The asymmetry in `treatment()` is the most valuable thing the bench produced**, and it came
+  from the losing variant C. Two of the three prototypes handled stale evidence by draining the
+  row's colour toward the page background - the intuitive move, and wrong in one direction:
+
+  - **calm + stale** -> withhold the colours entirely. Painting a calm room on evidence that
+    cannot support it is the failure this product exists to prevent (D-32).
+  - **busy + stale** -> keep the row's own colours, under a hatch. **Draining a stale ON AIR
+    toward grey weakens a busy signal**, and false OFF is worse than false ON.
+
+  A judge verified the drained treatment reads calm from across the desk in the light theme,
+  which is exactly what the rule forbids. Six lines decide it, and both directions are now
+  browser tests.
+
+  **Simple view carries States and Admin and nothing else.** Not advanced-with-things-hidden:
+  Status, Network and Device connection are absent from the rail, because the command surface
+  already carries the one fact that matters and it is on screen in both views. The judges
+  scored one variant 9/9/10 on simplicity for a view holding three paragraphs of prose above
+  its controls; that was scoring the calm rather than the word count, and no prose shipped.
+
+  **Tested in a browser, and that is new.** `admin-ui/test/browser.mjs` runs inside
+  `npm run verify` and asserts what no text assertion can reach: that a node survives a poll,
+  that a section is actually revealed, that the palette repaints when the theme flips, and that
+  a preference survives a reload. 53 checks. The text suite in `server/test/admin-ui.test.ts`
+  survives as the cheap sibling.

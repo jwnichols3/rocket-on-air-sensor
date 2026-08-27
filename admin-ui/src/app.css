@@ -1,12 +1,25 @@
+/* THEME (D-80).
+   Three states, two of them explicit. Bare :root is the light palette; the dark palette is
+   declared twice - once under prefers-color-scheme for the untouched default, once under
+   [data-theme="dark"] so the toggle wins in BOTH directions. A palette whose only definition
+   lives inside a media query cannot be overridden by a button. */
 :root {
-  color-scheme: light dark;
-  --bg: #0d0f12; --card: #14171b; --border: #262a30; --text: #e6e6e6; --muted: #8b9096;
-  --accent: #e03131; --ok: #2f9e44; --warn: #e0a931; --focus: #4c8dff;
+  --bg: #f6f7f9; --card: #fff; --border: #d9dde2; --text: #16191d; --muted: #626973;
+  --accent: #e03131; --ok: #2f9e44; --warn: #b8860b; --focus: #4c8dff;
+  --hatch: rgba(0,0,0,0.10);
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-@media (prefers-color-scheme: light) {
-  :root { --bg: #f6f7f9; --card: #fff; --border: #d9dde2; --text: #16191d; --muted: #626973; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d0f12; --card: #14171b; --border: #262a30; --text: #e6e6e6; --muted: #8b9096;
+    --warn: #e0a931; --hatch: rgba(255,255,255,0.10);
+  }
 }
+:root[data-theme="dark"] {
+  --bg: #0d0f12; --card: #14171b; --border: #262a30; --text: #e6e6e6; --muted: #8b9096;
+  --warn: #e0a931; --hatch: rgba(255,255,255,0.10);
+}
+
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
        font: 14px/1.5 system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; }
@@ -16,7 +29,10 @@ button, input, select { font: inherit; color: inherit; }
 
 .boot { padding: 40px; color: var(--muted); font-family: var(--mono); }
 .muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
 .err { color: var(--accent); }
+.small-note { font-size: 12px; }
+.spacer { flex: 1; }
 
 .btn { background: transparent; border: 1px solid var(--border); border-radius: 6px;
        padding: 6px 12px; cursor: pointer; }
@@ -25,8 +41,16 @@ button, input, select { font: inherit; color: inherit; }
 .btn.primary { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
 .btn.primary:disabled { background: transparent; color: inherit; border-color: var(--border); }
 .btn.small { padding: 3px 9px; font-size: 12.5px; }
-.btn.on { border-color: var(--ok); color: var(--ok); font-weight: 700; }
 .danger-btn { border-color: var(--accent); color: var(--accent); }
+
+.seg-group { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.seg { background: transparent; border: 0; padding: 5px 13px; cursor: pointer;
+       font-size: 12.5px; letter-spacing: 0.04em; color: var(--muted); }
+.seg.on { background: var(--focus); color: #fff; font-weight: 700; }
+.iconbtn { background: transparent; border: 1px solid var(--border); border-radius: 999px;
+           width: 32px; height: 32px; display: inline-flex; align-items: center;
+           justify-content: center; cursor: pointer; color: var(--muted); }
+.iconbtn:hover { color: var(--text); border-color: var(--muted); }
 
 /* ---- the landing tally (logged out) ---- */
 .landing { max-width: 560px; margin: 8vh auto; padding: 0 20px; text-align: center; }
@@ -37,27 +61,78 @@ button, input, select { font: inherit; color: inherit; }
 .login input { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; }
 #login-open { margin-top: 20px; }
 
-/* ---- the commit bar: in the header, and it never scrolls away ---- */
 .bar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px;
        justify-content: space-between; padding: 10px 16px; background: var(--card);
        border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .bar-left, .bar-right { display: flex; align-items: center; gap: 10px; }
 .brand { font-family: var(--mono); font-weight: 700; }
-.pill { border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px;
-        font-size: 12px; font-weight: 700; letter-spacing: 0.06em; }
-.staged { font-size: 13px; color: var(--warn); font-weight: 600; min-width: 6ch; text-align: right; }
 
+/* ---- the command surface ---- */
+.command { padding: 14px 16px 0; }
+
+/* THE TALLY, and the two treatments the busy rule demands.
+   `.lit` paints the row's own colours, set inline from the table. `.withheld` paints none of
+   them: the card falls back to the page's own surface and a dashed warn border. The
+   asymmetry is deliberate and is argued in the comment on treatment() in app.js - a stale
+   CALM row must lose its colour, a stale BUSY row must keep it. */
+.tally { position: relative; border-radius: 12px; padding: 20px 22px; display: flex;
+         align-items: flex-start; gap: 16px; overflow: hidden; border: 2px solid transparent; }
+.tally.withheld { background: var(--card); color: var(--text);
+                  border: 2px dashed var(--warn); }
+.tally.hatched::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(135deg, transparent 0 9px, var(--hatch) 9px 18px); }
+.tally-main { flex: 1; min-width: 0; position: relative; }
+.tally-side { position: relative; text-align: right; display: flex; flex-direction: column;
+              align-items: flex-end; gap: 6px; }
+.tally-eyebrow { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em;
+                 text-transform: uppercase; opacity: 0.85; }
+.tally-word { font-size: 46px; font-weight: 800; letter-spacing: 0.01em; line-height: 1.08;
+              overflow-wrap: anywhere; }
+.tally-marks { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 8px; }
+.mark { border: 1px solid currentColor; border-radius: 999px; padding: 1px 9px;
+        font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+
+.caution { margin-top: 8px; border: 1px solid var(--warn); border-radius: 8px;
+           padding: 8px 12px; color: var(--warn); font-size: 13px; }
+
+.chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+         gap: 10px; margin-top: 12px; }
+.chip { width: 100%; border: 0; border-radius: 10px; padding: 20px 10px; cursor: pointer;
+        font-weight: 800; font-size: 15px; letter-spacing: 0.03em; text-align: center;
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        overflow: hidden; }
+.chip:hover { filter: brightness(1.08); }
+.chip.on { outline: 3px solid var(--text); outline-offset: 2px; }
+.chip-mark { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+             border: 1px solid currentColor; border-radius: 999px; padding: 0 7px;
+             text-transform: uppercase; opacity: 0.9; }
+.chip-id { font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center;
+           margin-top: 4px; }
+
+/* ---- the commit bar ---- */
+.commit { position: sticky; top: 52px; z-index: 15; display: flex; align-items: center;
+          gap: 12px; padding: 9px 16px; margin: 14px 0 0; background: var(--card);
+          border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.staged { font-size: 13px; color: var(--warn); font-weight: 700; }
 .banner { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .err-banner { background: rgba(224,49,49,0.12); color: var(--accent); }
 
-.body { display: flex; align-items: flex-start; }
-.rail { position: sticky; top: 56px; display: flex; flex-direction: column; gap: 2px;
-        padding: 16px 8px; min-width: 150px; }
-.rail a { color: var(--muted); text-decoration: none; padding: 6px 10px; border-radius: 6px; }
-.rail a:hover { color: var(--text); }
-.rail a.on { color: var(--text); background: var(--card); }
-.sections { flex: 1; padding: 16px; max-width: 900px; }
-section { margin-bottom: 40px; }
+/* ---- the rail: a strip that carries signal, not just links ---- */
+.rail { display: flex; align-items: stretch; gap: 4px; padding: 12px 16px 0;
+        border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.rail button { background: transparent; border: 0; border-bottom: 2px solid transparent;
+               padding: 7px 12px 9px; cursor: pointer; color: var(--muted);
+               font-size: 12.5px; letter-spacing: 0.07em; text-transform: uppercase;
+               display: inline-flex; align-items: center; gap: 7px; }
+.rail button:hover { color: var(--text); }
+.rail button[aria-current="true"] { color: var(--text); border-bottom-color: var(--focus);
+                                    font-weight: 700; }
+.rail .sig { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+             border-radius: 999px; padding: 0 6px; border: 1px solid currentColor; }
+.rail .sig.staged { color: var(--warn); }
+.rail .sig.warn { color: var(--warn); }
+
+.sections { padding: 18px 16px 60px; max-width: 900px; }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
      margin: 0 0 12px; }
 h3 { margin: 0 0 10px; font-size: 15px; }
@@ -65,9 +140,9 @@ h3 { margin: 0 0 10px; font-size: 15px; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
-.controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.facts dd.warn { color: var(--warn); }
 
-.fields { display: grid; gap: 12px; max-width: 520px; }
+.fields { display: grid; gap: 12px; max-width: 520px; margin-bottom: 20px; }
 .field { display: grid; gap: 4px; }
 .field label { color: var(--muted); font-size: 13px; }
 .field input, .field select { background: var(--card); border: 1px solid var(--border);

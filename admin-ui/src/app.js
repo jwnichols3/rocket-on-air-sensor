@@ -6,8 +6,15 @@
 // because it was a design artifact; Rocket's note on it was that there was a lot of extra
 // information and some of it was not clearly relevant. A hint survives here only where it
 // changes what someone types. The reasoning lives in these comments and in CONTEXT.md.
+//
+// LAYOUT (#52, D-82). The command surface - tally, caution, chips - sits above every
+// section and is identical in both views, so the job this page is opened for costs one
+// glance and zero navigation. The rail below it REVEALS one section and hides the rest; it
+// never scrolls. Simple view carries the two sections that hold things you set.
 
 var DRAFT_KEY = 'onair.draft.v1';
+var VIEW_KEY = 'onair.view.v1';
+var THEME_KEY = 'onair.theme.v1';
 
 var session = null;      // the admin bearer token, in MEMORY only - never a cookie (D-35)
 var live = null;         // the config document as the server has it
@@ -20,6 +27,8 @@ var editing = {};        // id -> the in-progress edit for one row, not yet stag
 var liveStatus = null;       // the gated /status readout
 var lastRenderedState = null; // which row last wore the LIVE badge - see refreshStatus()
 var nags = {};
+var view = 'simple';
+var section = 'states';
 
 var $ = function (id) { return document.getElementById(id); };
 function el(tag, cls, text) {
@@ -29,6 +38,8 @@ function el(tag, cls, text) {
   return n;
 }
 function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+function store(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* private mode */ } }
+function recall(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
 
 // ---------------------------------------------------------------- transport
 
@@ -43,6 +54,111 @@ function api(path, opts) {
       try { body = text ? JSON.parse(text) : null; } catch (e) { body = { error: text }; }
       return { status: r.status, body: body };
     });
+  });
+}
+
+// ---------------------------------------------------------------- view and theme
+//
+// BOTH ARE localStorage AND NEITHER TOUCHES THE DRAFT (D-80). Putting a view preference in
+// the config document would mean that changing what you are LOOKING at marks the
+// configuration dirty, increments the staged count and arms the beforeunload guard. That
+// teaches the staged count to cry wolf. They apply instantly and follow the browser.
+
+function setView(next) {
+  view = next === 'advanced' ? 'advanced' : 'simple';
+  store(VIEW_KEY, view);
+  $('view-simple').className = 'seg' + (view === 'simple' ? ' on' : '');
+  $('view-advanced').className = 'seg' + (view === 'advanced' ? ' on' : '');
+  $('admin-view').value = view;
+  // A section that simple view does not carry must not stay open when the view narrows.
+  if (sectionsFor().indexOf(section) === -1) section = 'states';
+  renderRail();
+  showSection(section);
+}
+
+function setTheme(next) {
+  // Explicit only. There is no third "system" setting: Rocket asked for an icon that
+  // toggles between the two, and a tri-state control that silently passes through a mode
+  // with no icon of its own is a worse answer to that than two states.
+  var dark = next === 'dark';
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  store(THEME_KEY, dark ? 'dark' : 'light');
+  $('icon-sun').hidden = dark;
+  $('icon-moon').hidden = !dark;
+}
+
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+
+function bootPreferences() {
+  var savedTheme = recall(THEME_KEY);
+  if (savedTheme !== 'dark' && savedTheme !== 'light') {
+    savedTheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark' : 'light';
+  }
+  setTheme(savedTheme);
+  setView(recall(VIEW_KEY) === 'advanced' ? 'advanced' : 'simple');
+}
+
+// ---------------------------------------------------------------- sections
+
+// Simple view carries only the sections that hold things you SET. Status, Network and
+// Device connection hold facts and machine settings; the command surface above already
+// carries the one fact that matters, and it is on screen in both views.
+var SECTIONS = [
+  { id: 'status', label: 'Status', simple: false },
+  { id: 'states', label: 'States', simple: true },
+  { id: 'admin', label: 'Admin', simple: true },
+  { id: 'network', label: 'Network', simple: false },
+  { id: 'device', label: 'Device connection', simple: false }
+];
+
+function sectionsFor() {
+  return SECTIONS.filter(function (s) { return view === 'advanced' || s.simple; })
+                 .map(function (s) { return s.id; });
+}
+
+function showSection(id) {
+  section = id;
+  SECTIONS.forEach(function (s) {
+    $('sec-' + s.id).hidden = s.id !== id;
+  });
+  renderRail();
+}
+
+// The rail carries live signal per section, not just links: how many changes are staged in
+// each, and whether a section has something to say. Without it the commit bar can report
+// "2 staged" with nothing on screen naming where they are.
+function railSignal(id) {
+  if (id === 'states') {
+    var n = stagedRowIds().length;
+    return n ? { text: n + ' staged', cls: 'staged' } : null;
+  }
+  if (id === 'network' || id === 'device' || id === 'admin') {
+    return sectionDirty(id) ? { text: 'staged', cls: 'staged' } : null;
+  }
+  if (id === 'status') {
+    return liveStatus && liveStatus.stale ? { text: 'stale', cls: 'warn' } : null;
+  }
+  return null;
+}
+
+function renderRail() {
+  var rail = $('rail');
+  clear(rail);
+  var allowed = sectionsFor();
+  SECTIONS.forEach(function (s) {
+    if (allowed.indexOf(s.id) === -1) return;
+    var b = el('button', null);
+    b.type = 'button';
+    b.dataset.sec = s.id;
+    b.setAttribute('aria-current', s.id === section ? 'true' : 'false');
+    b.appendChild(el('span', null, s.label));
+    var sig = railSignal(s.id);
+    if (sig) b.appendChild(el('span', 'sig ' + sig.cls, sig.text));
+    b.addEventListener('click', function () { showSection(s.id); });
+    rail.appendChild(b);
   });
 }
 
@@ -91,12 +207,20 @@ function stagedRowIds() {
   });
   return out;
 }
-function settingsChanged() {
+
+// Which SECTION a settings change belongs to, so the rail can point at it.
+function sectionDirty(id) {
   if (!draft || !live) return false;
-  return ['port', 'bind'].some(function (k) { return draft[k] !== live[k]; }) ||
-    JSON.stringify(draft.auth) !== JSON.stringify(live.auth) ||
-    JSON.stringify(draft.light) !== JSON.stringify(live.light) ||
-    JSON.stringify(draft.shortcuts) !== JSON.stringify(live.shortcuts);
+  if (id === 'admin') return JSON.stringify(draft.auth) !== JSON.stringify(live.auth);
+  if (id === 'device') return JSON.stringify(draft.light) !== JSON.stringify(live.light);
+  if (id === 'network') {
+    return ['port', 'bind'].some(function (k) { return draft[k] !== live[k]; }) ||
+      JSON.stringify(draft.shortcuts) !== JSON.stringify(live.shortcuts);
+  }
+  return false;
+}
+function settingsChanged() {
+  return sectionDirty('admin') || sectionDirty('device') || sectionDirty('network');
 }
 function stagedCount() { return stagedRowIds().length + (settingsChanged() ? 1 : 0); }
 
@@ -127,72 +251,157 @@ function slugify(label) {
 }
 var HEX = /^#[0-9a-f]{6}$/;
 
-// ---------------------------------------------------------------- rendering
-
-function renderBar() {
-  var n = stagedCount();
-  $('staged-count').textContent = n === 0 ? '' : n + (n === 1 ? ' staged' : ' staged');
-  $('discard-all').disabled = n === 0;
-  $('save-all').disabled = n === 0;
-  if (liveStatus && live) {
-    var pill = $('live-pill');
-    pill.textContent = liveStatus.state.toUpperCase();
-    var row = (live ? live.states : []).filter(function (r) { return r.id === liveStatus.state; })[0];
-    pill.style.background = row ? row.bgcolor : 'transparent';
-    pill.style.color = row ? row.color : 'inherit';
-    pill.style.borderColor = row ? row.bgcolor : '';
-    $('live-age').textContent = liveStatus.stale ? liveStatus.ageSeconds + 's - stale' : liveStatus.ageSeconds + 's';
-  }
+// ---------------------------------------------------------------- the busy rule, drawn
+//
+// THE ASYMMETRY IS THE WHOLE POINT (D-32, D-82).
+//
+// Stale evidence is handled DIFFERENTLY depending on which way being wrong would hurt:
+//
+//   calm + stale  -> withhold the row's colours entirely. Painting a calm room on evidence
+//                    that cannot support it is the failure this product exists to prevent.
+//   busy + stale  -> keep the row's own colours, and hatch them. Draining a stale ON AIR
+//                    toward the page background WEAKENS a busy signal, and false OFF is
+//                    worse than false ON.
+//
+// Two of the three design prototypes drained both directions toward grey. That is the
+// intuitive move and it is wrong in the busy direction: a judge verified that the drained
+// treatment reads calm from across the desk in the light theme, which is exactly what the
+// rule forbids.
+function treatment(row, st) {
+  if (!row || !st) return { lit: false, hatch: true, eyebrow: 'NO DATA' };
+  if (!st.stale) return { lit: true, hatch: false, eyebrow: 'CONFIRMED ' + st.ageSeconds + 'S AGO' };
+  if (row.busy) return { lit: true, hatch: true, eyebrow: 'UNCONFIRMED FOR ' + st.ageSeconds + 'S' };
+  return { lit: false, hatch: true, eyebrow: 'UNCONFIRMED FOR ' + st.ageSeconds + 'S - COLOURS WITHHELD' };
 }
 
-// THE STATE BUTTONS ARE NOT REBUILT ON A POLL EITHER.
-//
-// The same defect the comment in refreshStatus() describes, on the other control - and the
-// guard that fixed it there covered renderRows() only. renderStatus() ran on every 5s tick
-// and cleared #status-controls, so every state button was destroyed and re-created, listener
-// and all. A mousedown landing just before a tick hit a node detached before the click, the
-// handler never ran, and the page did nothing: no error, no console entry. These are the
-// MOST-CLICKED controls on the page. The fix landed on the rare job and left the frequent
-// one exposed for six weeks (#54).
-//
-// Split, therefore: buildStateControls() creates nodes and attaches listeners, and runs only
-// when the table it is built from actually changes. markStateControls() runs on every tick
-// and touches textContent and className only - never a node.
-var stateButtons = {};      // row id -> its button node
-var pinButton = null;
-var builtForVersion = null; // the table version the buttons above were built from
+function rowFor(id) {
+  return (live ? live.states : []).filter(function (r) { return r.id === id; })[0] || null;
+}
 
-function buildStateControls() {
-  var box = $('status-controls');
+// ---------------------------------------------------------------- the command surface
+
+function renderTally() {
+  if (!liveStatus) return;
+  var row = rowFor(liveStatus.state);
+  var t = treatment(row, liveStatus);
+  var card = $('tally');
+
+  card.className = 'tally' + (t.lit ? ' lit' : ' withheld') + (t.hatch ? ' hatched' : '');
+  if (t.lit && row) {
+    card.style.background = row.bgcolor;
+    card.style.color = row.color;
+    card.style.borderColor = row.bgcolor;
+  } else {
+    card.style.background = '';
+    card.style.color = '';
+    card.style.borderColor = '';
+  }
+
+  $('tally-eyebrow').textContent = t.eyebrow;
+  $('tally-word').textContent = row ? row.label : liveStatus.state.toUpperCase();
+
+  var marks = $('tally-marks');
+  clear(marks);
+  marks.appendChild(el('span', 'mark', 'light asked for ' + liveStatus.intended));
+  if (liveStatus.confirmed !== liveStatus.state) {
+    marks.appendChild(el('span', 'mark', 'light says ' + liveStatus.confirmed));
+  }
+
+  // The caution band sits BETWEEN the tally and the chips, so the sentence saying the
+  // reading may already be wrong physically touches the control that fixes it.
+  var caution = $('caution');
+  if (liveStatus.stale) {
+    caution.textContent = 'No confirmation for ' + liveStatus.ageSeconds +
+      's. Press a state below to assert one now.';
+    caution.hidden = false;
+  } else {
+    caution.hidden = true;
+  }
+
+  $('pin').textContent = liveStatus.hold === null ? 'Pin this state' : 'Release pin';
+  $('pin-note').textContent = liveStatus.hold === null ? 'auto' : 'pinned';
+  $('table-ver').textContent = 'table v' + liveStatus.tableVersion;
+}
+
+// THE CHIPS ARE BUILT ONCE AND ONLY MARKED ON A POLL (#54).
+//
+// renderStatus() used to clear #status-controls and rebuild every button on every 5s tick.
+// A mousedown landing just before a tick hit a node detached before the click, so the
+// handler never ran and the page did nothing - silently. That is the same defect the
+// comment in refreshStatus() describes for the rows, on the control that gets clicked most.
+//
+// They are also built from LIVE, never from the draft: a staged rename must not put an
+// unsaved word on the buttons that command the server.
+var chipNodes = {};
+var builtForVersion = null;
+
+function buildChips() {
+  var box = $('chips');
   clear(box);
-  stateButtons = {};
-  (live ? live.states : []).forEach(function (r) {
-    var b = el('button', 'btn small', r.label);
-    b.addEventListener('click', function () {
-      api('/state/' + encodeURIComponent(r.id) + '?source=human:admin', { method: 'POST' }).then(refreshStatus);
+  chipNodes = {};
+  (live ? live.states : []).slice()
+    .sort(function (a, b) { return a.order - b.order || a.id.localeCompare(b.id); })
+    .forEach(function (r) {
+      var wrap = el('div');
+      var b = el('button', 'chip');
+      b.type = 'button';
+      b.dataset.id = r.id;
+      b.style.background = r.bgcolor;
+      b.style.color = r.color;
+      b.appendChild(el('span', null, r.label));
+      var mark = el('span', 'chip-mark');
+      mark.hidden = true;
+      b.appendChild(mark);
+      b.addEventListener('click', function () {
+        api('/state/' + encodeURIComponent(r.id) + '?source=human:admin', { method: 'POST' })
+          .then(refreshStatus);
+      });
+      wrap.appendChild(b);
+      wrap.appendChild(el('div', 'chip-id', r.id));
+      chipNodes[r.id] = { button: b, mark: mark };
+      box.appendChild(wrap);
     });
-    stateButtons[r.id] = b;
-    box.appendChild(b);
-  });
-  // Everything the pin needs is read AT CLICK TIME. Capturing `pinned` at build time was
-  // harmless when the node was rebuilt every five seconds and is a bug the moment it is not.
-  pinButton = el('button', 'btn small', '');
-  pinButton.addEventListener('click', function () {
-    if (!liveStatus) return;
-    var pinned = liveStatus.hold !== null;
-    api('/state/' + encodeURIComponent(liveStatus.state) + '?source=human:admin&hold=' + (pinned ? '0' : '1'),
-        { method: 'POST' }).then(refreshStatus);
-  });
-  box.appendChild(pinButton);
   builtForVersion = live ? live.version : null;
 }
 
-function markStateControls() {
-  if (!pinButton || !liveStatus) return;
-  pinButton.textContent = liveStatus.hold === null ? 'Pin current state' : 'Release pin';
-  Object.keys(stateButtons).forEach(function (id) {
-    stateButtons[id].className = 'btn small' + (id === liveStatus.state ? ' on' : '');
+function markChips() {
+  if (!liveStatus) return;
+  Object.keys(chipNodes).forEach(function (id) {
+    var n = chipNodes[id];
+    var isLive = id === liveStatus.state;
+    n.button.className = 'chip' + (isLive ? ' on' : '');
+    // A chip only claims to be live when the evidence supports it. On stale evidence it
+    // says what it actually knows: something wrote this, and the light has not agreed since.
+    if (isLive && liveStatus.stale) {
+      n.mark.textContent = 'unconfirmed';
+      n.mark.hidden = false;
+    } else if (isLive) {
+      n.mark.textContent = 'live';
+      n.mark.hidden = false;
+    } else {
+      n.mark.hidden = true;
+    }
   });
+}
+
+// ---------------------------------------------------------------- rendering
+
+function renderCommit() {
+  var n = stagedCount();
+  $('commit').hidden = n === 0;
+  $('staged-count').textContent = n === 0 ? '' : n + ' staged';
+  $('discard-all').disabled = n === 0;
+  $('save-all').disabled = n === 0;
+  // Name WHERE, so the count never refers to something no section is showing.
+  var where = [];
+  var rows = stagedRowIds().length;
+  if (rows) where.push(rows + ' in States');
+  ['admin', 'network', 'device'].forEach(function (id) {
+    if (sectionDirty(id)) {
+      where.push('1 in ' + SECTIONS.filter(function (s) { return s.id === id; })[0].label);
+    }
+  });
+  $('staged-where').textContent = where.join(' · ');
 }
 
 function renderStatus() {
@@ -200,24 +409,20 @@ function renderStatus() {
   clear(dl);
   if (!liveStatus) return;
   var facts = [
-    ['State', liveStatus.state],
-    ['Busy', liveStatus.busy ? 'yes' : 'no'],
-    ['Confirmed by the light', liveStatus.confirmed],
-    ['Written by', liveStatus.source],
-    ['Last write', liveStatus.ageSeconds + 's ago' + (liveStatus.stale ? ' (stale)' : '')],
-    ['Pinned at', liveStatus.hold === null ? 'auto' : liveStatus.hold],
-    ['Table version', String(liveStatus.tableVersion)]
+    ['State', liveStatus.state, false],
+    ['Busy', liveStatus.busy ? 'yes' : 'no', false],
+    ['Confirmed by the light', liveStatus.confirmed, liveStatus.confirmed !== liveStatus.state],
+    ['Written by', liveStatus.source, false],
+    ['Last write', liveStatus.ageSeconds + 's ago' + (liveStatus.stale ? ' - stale' : ''), liveStatus.stale],
+    ['Light output (intended)', liveStatus.intended, false],
+    ['Pinned at', liveStatus.hold === null ? 'auto' : liveStatus.hold, false],
+    ['Table version', String(liveStatus.tableVersion), false]
   ];
-  if (liveStatus.stateResolvedFrom) facts.push(['Fell back from', liveStatus.stateResolvedFrom]);
+  if (liveStatus.stateResolvedFrom) facts.push(['Fell back from', liveStatus.stateResolvedFrom, true]);
   facts.forEach(function (f) {
     dl.appendChild(el('dt', null, f[0]));
-    dl.appendChild(el('dd', null, f[1]));
+    dl.appendChild(el('dd', f[2] ? 'warn' : null, f[1]));
   });
-
-  // The buttons are built from the TABLE, which a poll never changes. Rebuild only when the
-  // table itself has moved - a save, or the first render.
-  if (builtForVersion !== (live ? live.version : null)) buildStateControls();
-  markStateControls();
 }
 
 function rowNode(row, isNew) {
@@ -248,7 +453,7 @@ function rowNode(row, isNew) {
   if (row.busy) { line.appendChild(document.createTextNode(' ')); line.appendChild(el('span', 'badge busy', 'BUSY')); }
   if (liveRow && liveStatus && liveStatus.state === row.id) {
     line.appendChild(document.createTextNode(' '));
-    line.appendChild(el('span', 'badge live', 'LIVE'));
+    line.appendChild(el('span', 'badge live', liveStatus.stale ? 'CLAIMED' : 'LIVE'));
   }
   if (stagedIds.indexOf(row.id) !== -1) {
     line.appendChild(document.createTextNode(' '));
@@ -274,7 +479,7 @@ function rowNode(row, isNew) {
       } else {
         draft.states = draft.states.filter(function (r) { return r.id !== row.id; });
       }
-      saveDraft(); renderRows(); renderBar();
+      saveDraft(); renderRows(); renderCommit(); renderRail();
     });
     actions.appendChild(revert);
   }
@@ -367,14 +572,14 @@ function editorNode(row, isNew) {
       if (!draft.states.some(function (r) { return r.id === frozen.id; })) draft.states.push(frozen);
     }
     delete editing[row.id];
-    saveDraft(); renderRows(); renderBar();
+    saveDraft(); renderRows(); renderCommit(); renderRail();
   });
   var cancel = el('button', 'btn small', 'Cancel');
   cancel.addEventListener('click', function () {
     // Back to the LAST STAGED value, not to live - see the comment on the commit levels.
     delete editing[row.id];
     if (isNew) draft.states = draft.states.filter(function (r) { return r.id !== row.id; });
-    saveDraft(); renderRows(); renderBar();
+    saveDraft(); renderRows(); renderCommit(); renderRail();
   });
   actions.appendChild(save); actions.appendChild(cancel); actions.appendChild(err);
   box.appendChild(actions);
@@ -408,7 +613,7 @@ function renderRows() {
     var undo = el('button', 'btn small', 'Undo delete');
     undo.addEventListener('click', function () {
       draft.states.push(JSON.parse(JSON.stringify(r)));
-      saveDraft(); renderRows(); renderBar();
+      saveDraft(); renderRows(); renderCommit(); renderRail();
     });
     clear(n.querySelector('.row-actions'));
     n.querySelector('.row-actions').appendChild(undo);
@@ -426,7 +631,7 @@ function confirmDelete(row) {
   openModal('Delete ' + row.id + '?', consequences, 'Stage the delete', null, function () {
     draft.states = draft.states.filter(function (r) { return r.id !== row.id; });
     delete editing[row.id];
-    saveDraft(); renderRows(); renderBar();
+    saveDraft(); renderRows(); renderCommit(); renderRail();
   });
 }
 
@@ -461,27 +666,37 @@ function renderFields() {
   function textField(box, label, get, set, opts) {
     opts = opts || {};
     var f = el('div', 'field');
-    f.appendChild(el('label', null, label));
+    var id = 'f-' + label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    var lab = el('label', null, label);
+    lab.htmlFor = id;
+    f.appendChild(lab);
     var input = el('input');
+    input.id = id;
     input.type = opts.type || 'text';
     input.value = get();
-    input.addEventListener('input', function () { set(opts.type === 'number' ? Number(input.value) : input.value); renderBar(); });
+    input.addEventListener('input', function () {
+      set(opts.type === 'number' ? Number(input.value) : input.value);
+      renderCommit(); renderRail();
+    });
     f.appendChild(input);
     if (opts.nag) f.appendChild(el('div', 'nag', opts.nag));
     box.appendChild(f);
+    return input;
   }
 
   var admin = $('admin-fields'); clear(admin);
-  // Shown in plaintext, deliberately: it has to be read to be typed into the ESP32 and
-  // Companion, and a reveal control would only add a click to that.
+  // THE PASSPHRASE STAYS READABLE AND THE ADMIN PASSWORD DOES NOT (D-81). They have
+  // opposite jobs: this one is read off the page and typed into the ESP32 and Companion, so
+  // masking it would add a reveal click to every client setup for no gain. The admin
+  // password is typed in here and never read back, so masking costs nothing.
   textField(admin, 'Passphrase (machine clients)', function () { return draft.auth.passphrase; },
     function (v) { draft.auth.passphrase = v; saveDraft(); },
-    { nag: nags.passphrase ? 'Still the shipped default.' : '' });
+    { nag: nags.passphrase ? 'Currently set to the default.' : '' });
   textField(admin, 'Admin user', function () { return draft.auth.adminUser; },
     function (v) { draft.auth.adminUser = v; saveDraft(); });
   textField(admin, 'Admin password', function () { return draft.auth.adminPassword; },
     function (v) { draft.auth.adminPassword = v; saveDraft(); },
-    { nag: nags.adminPassword ? 'Still the shipped default.' : '' });
+    { type: 'password', nag: nags.adminPassword ? 'Currently set to the default.' : '' });
 
   var net = $('network-fields'); clear(net);
   textField(net, 'Port', function () { return draft.port; }, function (v) { draft.port = v; saveDraft(); }, { type: 'number' });
@@ -497,7 +712,9 @@ function renderFields() {
     var opt = el('option', null, draft.bind); opt.value = draft.bind; opt.selected = true;
     bindSel.appendChild(opt);
   }
-  bindSel.addEventListener('change', function () { draft.bind = bindSel.value; saveDraft(); renderBar(); });
+  bindSel.addEventListener('change', function () {
+    draft.bind = bindSel.value; saveDraft(); renderCommit(); renderRail();
+  });
   bindField.appendChild(bindSel);
   bindField.appendChild(el('div', 'nag', 'Loopback is always bound.'));
   net.appendChild(bindField);
@@ -515,7 +732,7 @@ function renderFields() {
     });
     sel.addEventListener('change', function () {
       draft.shortcuts[key] = sel.value === '' ? null : sel.value;
-      saveDraft(); renderBar();
+      saveDraft(); renderCommit(); renderRail();
     });
     f.appendChild(sel);
     box.appendChild(f);
@@ -523,18 +740,30 @@ function renderFields() {
   shortcut(net, 'POST /on sets', 'on');
   shortcut(net, 'POST /off sets', 'off');
 
-  var light = $('light-fields'); clear(light);
-  textField(light, 'Device host', function () { return draft.light.host || ''; },
+  // "Device connection", not "Light" (D-78). The four fields are about how the server
+  // REACHES the on-air light, not about the light; the glossary keeps "on-air light" for
+  // the object and the JSON key stays `light`.
+  var device = $('device-fields'); clear(device);
+  textField(device, 'Address', function () { return draft.light.host || ''; },
     function (v) { draft.light.host = v || null; saveDraft(); });
-  textField(light, 'Entity name', function () { return draft.light.entity; },
+  textField(device, 'Entity name', function () { return draft.light.entity; },
     function (v) { draft.light.entity = v; saveDraft(); });
-  textField(light, 'Device user', function () { return draft.light.username || ''; },
+  textField(device, 'Device user', function () { return draft.light.username || ''; },
     function (v) { draft.light.username = v || null; saveDraft(); });
-  textField(light, 'Device password', function () { return draft.light.password || ''; },
-    function (v) { draft.light.password = v || null; saveDraft(); });
+  textField(device, 'Device password', function () { return draft.light.password || ''; },
+    function (v) { draft.light.password = v || null; saveDraft(); }, { type: 'password' });
 }
 
-function renderAll() { renderBar(); renderStatus(); renderRows(); renderFields(); }
+function renderAll() {
+  renderCommit();
+  renderTally();
+  if (builtForVersion !== (live ? live.version : null)) buildChips();
+  markChips();
+  renderStatus();
+  renderRows();
+  renderFields();
+  renderRail();
+}
 
 // ---------------------------------------------------------------- actions
 
@@ -546,19 +775,21 @@ function refreshStatus() {
     // landing path there is no console at all. Rendering the console from here without
     // checking throws on a page that otherwise looks like it is still connecting.
     if (!live || !draft) return;
-    renderBar();
+    renderTally();
+    // NEITHER THE CHIPS NOR THE ROWS ARE REBUILT ON A POLL.
+    //
+    // This runs every five seconds. Rebuilding a node swaps the DOM out from under whatever
+    // the user is doing: typing went into an input that no longer existed a moment later,
+    // and a click on a button detached between mousedown and click never ran its handler.
+    // Both were completely silent - no error, no console entry, the page just did not
+    // respond. It happened twice, on the rows (#50-era) and on the state buttons (#54).
+    //
+    // markChips() touches text and classes only. The rows depend on `draft` and `live`,
+    // which a poll never changes; the only thing it CAN change is which row wears the LIVE
+    // badge, so rebuild only when that moves, and never while a row is open for editing.
+    markChips();
     renderStatus();
-    // ROWS ARE NOT REBUILT ON A POLL.
-    //
-    // This runs every five seconds and renderRows() replaces every row node. That is not
-    // merely wasteful: it swaps the DOM out from under whatever the user is doing. Typing
-    // went into an input that no longer existed a moment later, and a click on Edit landed
-    // on a button that had been detached between mousedown and click - so the handler
-    // never ran and the page just sat there. Both were silent.
-    //
-    // The rows depend on `draft` and `live`, which a poll never changes. The only thing it
-    // CAN change is which row wears the LIVE badge, so rebuild only when that moves, and
-    // never while a row is open for editing.
+    renderRail();
     var liveChanged = lastRenderedState !== liveStatus.state;
     lastRenderedState = liveStatus.state;
     if (liveChanged && Object.keys(editing).length === 0) renderRows();
@@ -588,7 +819,7 @@ function saveAll() {
 function factoryReset() {
   openModal('Factory reset', [
     'Credentials, the state table, the pin, the live state, the port and the bind mode all return to their defaults.',
-    'The device host and its credentials are kept.',
+    'The device address and its credentials are kept.',
     'Every admin session ends, including this one.'
   ], 'Reset', 'Admin password', function (password, errLine) {
     api('/admin/factory-reset', { method: 'POST', body: JSON.stringify({ password: password }) }).then(function (r) {
@@ -608,7 +839,9 @@ function showConsole() {
   $('console').hidden = false;
   var restored = loadDraft();
   draft = restored || JSON.parse(JSON.stringify(live));
+  bootPreferences();
   renderAll();
+  showSection(section);
   setInterval(refreshStatus, 5000);
 }
 
@@ -689,19 +922,28 @@ $('add-row').addEventListener('click', function () {
               order: draft.states.length };
   draft.states.push(row);
   editing[id] = JSON.parse(JSON.stringify(row));
-  saveDraft(); renderRows(); renderBar();
+  saveDraft(); renderRows(); renderCommit(); renderRail();
 });
 $('factory-reset').addEventListener('click', factoryReset);
 
-window.addEventListener('beforeunload', function (e) {
-  if (stagedCount() > 0) { e.preventDefault(); e.returnValue = ''; }
+// The pin reads its state AT CLICK TIME. Capturing it at build time was harmless only while
+// the node was being rebuilt every five seconds (#54).
+$('pin').addEventListener('click', function () {
+  if (!liveStatus) return;
+  var pinned = liveStatus.hold !== null;
+  api('/state/' + encodeURIComponent(liveStatus.state) + '?source=human:admin&hold=' + (pinned ? '0' : '1'),
+      { method: 'POST' }).then(refreshStatus);
 });
 
-Array.prototype.forEach.call(document.querySelectorAll('.rail a'), function (a) {
-  a.addEventListener('click', function () {
-    Array.prototype.forEach.call(document.querySelectorAll('.rail a'), function (x) { x.classList.remove('on'); });
-    a.classList.add('on');
-  });
+$('view-simple').addEventListener('click', function () { setView('simple'); });
+$('view-advanced').addEventListener('click', function () { setView('advanced'); });
+$('admin-view').addEventListener('change', function () { setView($('admin-view').value); });
+$('theme').addEventListener('click', function () {
+  setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+});
+
+window.addEventListener('beforeunload', function (e) {
+  if (stagedCount() > 0) { e.preventDefault(); e.returnValue = ''; }
 });
 
 start();

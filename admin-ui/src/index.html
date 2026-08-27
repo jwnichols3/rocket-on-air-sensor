@@ -36,41 +36,95 @@
   <header class="bar">
     <div class="bar-left">
       <span class="brand">on-air</span>
-      <span id="live-pill" class="pill"></span>
-      <span id="live-age" class="muted"></span>
+      <span id="table-ver" class="muted mono"></span>
     </div>
     <div class="bar-right">
-      <span id="staged-count" class="staged"></span>
-      <button id="discard-all" class="btn" disabled>Discard all</button>
-      <button id="save-all" class="btn primary" disabled>Save configuration</button>
-      <button id="logout" class="btn">Log out</button>
+      <div class="seg-group" role="group" aria-label="View">
+        <button id="view-simple" class="seg" type="button">Simple</button>
+        <button id="view-advanced" class="seg" type="button">Advanced</button>
+      </div>
+      <button id="theme" class="iconbtn" type="button" aria-label="Switch theme">
+        <svg id="icon-sun" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+          <circle cx="12" cy="12" r="4.2" fill="currentColor"></circle>
+          <g stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+            <path d="M12 2.6v2.4M12 19v2.4M2.6 12h2.4M19 12h2.4"></path>
+            <path d="M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M18.6 5.4l-1.7 1.7M7.1 16.9l-1.7 1.7"></path>
+          </g>
+        </svg>
+        <svg id="icon-moon" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" hidden>
+          <path d="M20 14.4A8.6 8.6 0 019.6 4a8.6 8.6 0 100 17 8.6 8.6 0 0010.4-6.6z" fill="currentColor"></path>
+        </svg>
+      </button>
+      <button id="logout" class="btn" type="button">Log out</button>
     </div>
   </header>
+
+  <!--
+    THE COMMAND SURFACE. Identical in both views and above every section, so the job this
+    page is opened for - set the state - never involves travelling anywhere (#52).
+  -->
+  <div class="command">
+    <div id="tally" class="tally">
+      <div class="tally-main">
+        <div id="tally-eyebrow" class="tally-eyebrow"></div>
+        <div id="tally-word" class="tally-word"></div>
+        <div id="tally-marks" class="tally-marks"></div>
+      </div>
+      <div class="tally-side">
+        <button id="pin" class="btn" type="button"></button>
+        <div id="pin-note" class="muted small-note"></div>
+      </div>
+    </div>
+    <div id="caution" class="caution" hidden></div>
+    <div id="chips" class="chips"></div>
+  </div>
+
+  <div id="commit" class="commit" hidden>
+    <span id="staged-count" class="staged"></span>
+    <span id="staged-where" class="muted mono"></span>
+    <span class="spacer"></span>
+    <button id="discard-all" class="btn" type="button">Discard all</button>
+    <button id="save-all" class="btn primary" type="button">Save configuration</button>
+  </div>
   <div id="save-err" class="banner err-banner" hidden></div>
 
-  <div class="body">
-    <nav class="rail">
-      <a href="#status" data-sec="status">Status</a>
-      <a href="#states" data-sec="states">States</a>
-      <a href="#admin" data-sec="admin">Admin settings</a>
-      <a href="#network" data-sec="network">Network</a>
-      <a href="#light" data-sec="light">Light</a>
-    </nav>
-    <main class="sections">
-      <section id="sec-status"><h2>Status</h2><dl id="status-facts" class="facts"></dl>
-        <div id="status-controls" class="controls"></div></section>
-      <section id="sec-states"><h2>States</h2>
-        <div id="rows"></div>
-        <button id="add-row" class="btn">Add a state</button></section>
-      <section id="sec-admin"><h2>Admin settings</h2><div id="admin-fields" class="fields"></div>
-        <div class="danger">
-          <button id="factory-reset" class="btn danger-btn">Factory reset</button>
-          <span class="muted">Asks for the admin password.</span>
-        </div></section>
-      <section id="sec-network"><h2>Network</h2><div id="network-fields" class="fields"></div></section>
-      <section id="sec-light"><h2>Light</h2><div id="light-fields" class="fields"></div></section>
-    </main>
-  </div>
+  <nav id="rail" class="rail" aria-label="Sections"></nav>
+
+  <main class="sections">
+    <section id="sec-status" hidden>
+      <dl id="status-facts" class="facts"></dl>
+    </section>
+
+    <section id="sec-states" hidden>
+      <div id="rows"></div>
+      <button id="add-row" class="btn" type="button">Add a state</button>
+    </section>
+
+    <section id="sec-admin" hidden>
+      <div class="fields">
+        <div class="field">
+          <label for="admin-view">View</label>
+          <select id="admin-view">
+            <option value="simple">Simple</option>
+            <option value="advanced">Advanced</option>
+          </select>
+        </div>
+      </div>
+      <div id="admin-fields" class="fields"></div>
+      <div class="danger">
+        <button id="factory-reset" class="btn danger-btn" type="button">Factory reset</button>
+        <span class="muted">Asks for the admin password.</span>
+      </div>
+    </section>
+
+    <section id="sec-network" hidden>
+      <div id="network-fields" class="fields"></div>
+    </section>
+
+    <section id="sec-device" hidden>
+      <div id="device-fields" class="fields"></div>
+    </section>
+  </main>
 </div>
 
 <div id="modal" class="modal" hidden>
@@ -78,8 +132,8 @@
     <h3 id="modal-title"></h3>
     <div id="modal-body"></div>
     <div class="modal-actions">
-      <button id="modal-cancel" class="btn">Cancel</button>
-      <button id="modal-ok" class="btn primary"></button>
+      <button id="modal-cancel" class="btn" type="button">Cancel</button>
+      <button id="modal-ok" class="btn primary" type="button"></button>
     </div>
   </div>
 </div>
