@@ -183,6 +183,28 @@ test('the status poll does NOT rebuild the rows - it swapped the DOM out from un
   assert.match(page, /if \(liveChanged && Object\.keys\(editing\)\.length === 0\) renderRows\(\)/);
 });
 
+test('the state buttons are NOT rebuilt on a poll either (#54)', () => {
+  const page = html();
+  // The sibling of the test above, and the defect it describes went unfixed for six weeks
+  // because the guard that fixed the rows was written around renderRows() alone. These are
+  // the most-clicked controls on the page: a mousedown landing before a tick hit a node that
+  // was detached before the click, so the handler never ran and nothing at all happened.
+  //
+  // Structural only. What actually settles this is admin-ui/test/browser.mjs, which holds a
+  // reference to a live button across two polls and asserts it is the same object - the one
+  // thing no amount of reading the source can establish.
+  assert.match(page, /THE STATE BUTTONS ARE NOT REBUILT ON A POLL EITHER/);
+  assert.match(page, /function buildStateControls\(\)/);
+  assert.match(page, /function markStateControls\(\)/);
+  assert.match(page, /if \(builtForVersion !== \(live \? live\.version : null\)\) buildStateControls\(\)/);
+  // markStateControls touches text and classes only. If it ever calls clear() or appendChild
+  // the split has been undone and the bug is back.
+  const mark = /function markStateControls\(\)\s*\{[\s\S]*?\n\}/.exec(page);
+  assert.ok(mark, 'markStateControls should be findable');
+  assert.equal(/clear\(|appendChild|createElement/.test(mark[0]), false,
+    'the poll path must never touch a node');
+});
+
 test('the console does not name its state global `status`', () => {
   const page = html();
   // `var status` at top level in a classic script binds window.status, a legacy STRING

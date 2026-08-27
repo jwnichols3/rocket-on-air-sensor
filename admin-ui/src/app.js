@@ -145,6 +145,56 @@ function renderBar() {
   }
 }
 
+// THE STATE BUTTONS ARE NOT REBUILT ON A POLL EITHER.
+//
+// The same defect the comment in refreshStatus() describes, on the other control - and the
+// guard that fixed it there covered renderRows() only. renderStatus() ran on every 5s tick
+// and cleared #status-controls, so every state button was destroyed and re-created, listener
+// and all. A mousedown landing just before a tick hit a node detached before the click, the
+// handler never ran, and the page did nothing: no error, no console entry. These are the
+// MOST-CLICKED controls on the page. The fix landed on the rare job and left the frequent
+// one exposed for six weeks (#54).
+//
+// Split, therefore: buildStateControls() creates nodes and attaches listeners, and runs only
+// when the table it is built from actually changes. markStateControls() runs on every tick
+// and touches textContent and className only - never a node.
+var stateButtons = {};      // row id -> its button node
+var pinButton = null;
+var builtForVersion = null; // the table version the buttons above were built from
+
+function buildStateControls() {
+  var box = $('status-controls');
+  clear(box);
+  stateButtons = {};
+  (live ? live.states : []).forEach(function (r) {
+    var b = el('button', 'btn small', r.label);
+    b.addEventListener('click', function () {
+      api('/state/' + encodeURIComponent(r.id) + '?source=human:admin', { method: 'POST' }).then(refreshStatus);
+    });
+    stateButtons[r.id] = b;
+    box.appendChild(b);
+  });
+  // Everything the pin needs is read AT CLICK TIME. Capturing `pinned` at build time was
+  // harmless when the node was rebuilt every five seconds and is a bug the moment it is not.
+  pinButton = el('button', 'btn small', '');
+  pinButton.addEventListener('click', function () {
+    if (!liveStatus) return;
+    var pinned = liveStatus.hold !== null;
+    api('/state/' + encodeURIComponent(liveStatus.state) + '?source=human:admin&hold=' + (pinned ? '0' : '1'),
+        { method: 'POST' }).then(refreshStatus);
+  });
+  box.appendChild(pinButton);
+  builtForVersion = live ? live.version : null;
+}
+
+function markStateControls() {
+  if (!pinButton || !liveStatus) return;
+  pinButton.textContent = liveStatus.hold === null ? 'Pin current state' : 'Release pin';
+  Object.keys(stateButtons).forEach(function (id) {
+    stateButtons[id].className = 'btn small' + (id === liveStatus.state ? ' on' : '');
+  });
+}
+
 function renderStatus() {
   var dl = $('status-facts');
   clear(dl);
@@ -164,22 +214,10 @@ function renderStatus() {
     dl.appendChild(el('dd', null, f[1]));
   });
 
-  var box = $('status-controls');
-  clear(box);
-  (live ? live.states : []).forEach(function (r) {
-    var b = el('button', 'btn small', r.label);
-    b.addEventListener('click', function () {
-      api('/state/' + encodeURIComponent(r.id) + '?source=human:admin', { method: 'POST' }).then(refreshStatus);
-    });
-    box.appendChild(b);
-  });
-  var pinned = liveStatus.hold !== null;
-  var pin = el('button', 'btn small', pinned ? 'Release pin' : 'Pin current state');
-  pin.addEventListener('click', function () {
-    api('/state/' + encodeURIComponent(liveStatus.state) + '?source=human:admin&hold=' + (pinned ? '0' : '1'),
-        { method: 'POST' }).then(refreshStatus);
-  });
-  box.appendChild(pin);
+  // The buttons are built from the TABLE, which a poll never changes. Rebuild only when the
+  // table itself has moved - a save, or the first render.
+  if (builtForVersion !== (live ? live.version : null)) buildStateControls();
+  markStateControls();
 }
 
 function rowNode(row, isNew) {

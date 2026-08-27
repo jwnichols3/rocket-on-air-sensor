@@ -5,6 +5,7 @@
   "description": "The admin console: the state table editor and settings console.",
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node test/browser.mjs"
   }
 }
