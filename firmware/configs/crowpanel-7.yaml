@@ -90,6 +90,26 @@ font:
     id: band_text
     size: 22
 
+# ---- the repaint request, consumed (#64) -----------------------------------------
+#
+# The core sets `repaint_pending` when something that changes the picture happens; this is
+# where a board turns that into a paint of ITS OWN display. The id `my_display` never
+# leaves this file, which is D-85's rule: a block that names board hardware is board
+# knowledge. See the global's comment in onair-core.yaml for why this is a flag and not a
+# trigger on the entity - the direct form was measured and does not work.
+#
+# 100ms, so a state change reaches the glass within a tenth of a second. The cost is one
+# bool test per tick against the ~150ms repaint it replaces.
+interval:
+  - interval: 100ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(repaint_pending);'
+          then:
+            - lambda: 'id(repaint_pending) = false;'
+            - component.update: my_display
+
 display:
   - platform: mipi_rgb
     model: RPI
@@ -116,17 +136,21 @@ display:
       blue: [15, 7, 6, 5, 4]
     color_order: RGB
     auto_clear_enabled: false
-    # A full repaint of 800x480 costs ~150ms, measured - 47 times the Elegoo panel's
-    # pixels, which repaints every 500ms. At 1s that is ~15% of the loop, and the paint
-    # blocks, so an HTTP request can be delayed by up to one paint. Tolerable against the
-    # driver's 2s timeout, and 1s keeps the panel responsive enough for a light that has
-    # to come ON quickly.
+    # NEVER. The paint is driven entirely by `repaint_pending` (#64) - see the interval
+    # above. A full repaint of 800x480 costs ~150ms, measured, so on the old 1s timer this
+    # panel spent ~15% of its loop redrawing an identical frame, and the paint BLOCKS, so
+    # an HTTP request could be delayed by a whole paint. #65 wants to poll as fast as
+    # 250ms, which that would not survive.
     #
-    # Repainting ON STATE CHANGE instead of on a timer is the right answer and is NOT done
-    # here: `presence_key` is a core entity and `my_display` is board-local, so the trigger
-    # has nowhere to live without the core learning a display id. Left as a follow-up on
-    # #57 rather than solved badly.
-    update_interval: 1s
+    # `never` rather than a slow number, so that EVERY repaint in this system arrives
+    # through `repaint_pending` and there is exactly one place to look when asking why the
+    # glass redrew. The safety net is a timed SET of the flag in onair-core.yaml, which
+    # also puts it where it belongs: "something should redraw every 30s" is true of any
+    # panel, while "which display" is board knowledge (D-85).
+    #
+    # MEASURED on the live CrowPanel: 1.0 fps before, 0.033 fps idle after - a 30x cut -
+    # and a state change repaints within one 100ms tick.
+    update_interval: never
     lambda: |-
       // ---- WHAT to draw: the SAME decision the Elegoo panel makes, from the same
       //      function. compute_view() lives in onair_table.h and is shared by both

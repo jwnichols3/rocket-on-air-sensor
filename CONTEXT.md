@@ -3318,3 +3318,53 @@ else (state, light control, API) lives on the receiver.
     nothing. It uses a character class now, which cannot have that bug. **A regex over the
     page source would never have caught this** - which is why the tests now run the script in
     a stub DOM with a controllable clock and assert the three conditions as behaviour.
+
+- **D-99 (2026-08-27)** **The paint is driven by a core-owned FLAG that each board consumes,
+  because the obvious form does not exist in ESPHome.** #64.
+
+  The natural shape is `on_value: component.update: my_display` on `presence_key`. It cannot
+  be written: `presence_key` is a **core** entity and `my_display` is **board-local**, and
+  D-85's rule is that anything naming board hardware is board knowledge. Extending the core's
+  entity from the board file does not work either - **measured, not assumed: ESPHome 2026.8.0
+  does not merge package list entries by `id`**, so a board-side `text:` block carrying the
+  same id produces a SECOND entity and a validation error rather than an extra trigger.
+
+  So the core says WHAT happened (`repaint_pending`, set on a state change and on a table
+  install - not on a 304, since the table did not move) and each board decides what to do
+  about it (a 100ms interval that consumes the flag and updates its own display). The display
+  id never leaves the board file, and the cost is a bool test per tick instead of a repaint.
+
+  Displays are set to `update_interval: never` and **the safety net is a timed set of the
+  flag in the core**, not a slow `update_interval` per board. One currency for every repaint
+  means one place to look when asking why the glass redrew, and "something should redraw
+  every 30s" is board-independent in a way that "which display" is not.
+
+  **Measured on the live CrowPanel:** 1.0 fps before, **0.033 fps idle after** - one repaint
+  per 30s, a 30x cut - and a state change repaints within one 100ms tick (`Render` moved
+  `NO DATA -> BUSY -> CALM LIGHT` while `Frames` advanced 3 in the 8s containing the change
+  and 0 in the 8s before it). That is what makes #65's 250ms floor safe: a ~150ms blocking
+  repaint at 1 Hz was ~15% of the loop, and it is now ~0.5%.
+
+  Only the CrowPanel consumes the flag. The Elegoo's 128x64 repaint is trivial, its display
+  has no `id:` today, and it is a bench board that is normally off (D-87) - adding the
+  mechanism there would be speculative work with no measurement behind it.
+
+- **D-100 (2026-08-27)** **`esphome upload` does not compile, and a stale build flashes
+  silently and successfully.** An operational trap, recorded because it cost real work and
+  produced a FALSE MEASUREMENT that was nearly committed as fact.
+
+  `firmware/Makefile` documented OTA flashing as `esphome upload --device <ip> <config>`.
+  That command ships whatever binary is already in `configs/.esphome/build/`. With a stale
+  build it prints `INFO OTA successful` and `Successfully uploaded program`, the panel
+  reboots, answers HTTP, and looks completely healthy - while running the OLD firmware.
+
+  The damage was not the wasted flash. Twice, an idle repaint rate was measured at exactly
+  1.0 fps and attributed to the change under test; the conclusion drawn was *"`update_interval`
+  does not govern the paint on this platform"*, which is false, and it was written into a YAML
+  comment as a measurement before being caught. What caught it was checking
+  `build/crowpanel-7/src/main.cpp` for a value that had just been changed:
+  `my_display->set_update_interval(1000)` where the config said `never`.
+
+  The Makefile now names both steps in order and says why. **The generated `main.cpp` is the
+  cheap way to tell a flash that took from one that did not** - far cheaper than reasoning
+  about hardware that is answering every request perfectly while running last week's code.

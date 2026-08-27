@@ -38,7 +38,18 @@ dashboard:
 	$(BUILDER) configs --host 127.0.0.1 --port 6052
 
 # NEVER run this from an agent turn - `esphome run` tails logs with no timeout and
-# hangs. Flash over the air with: .venv/bin/esphome upload --device <ip> $(CONFIG)
+# hangs. Flash over the air with BOTH steps, in this order:
+#
+#   .venv/bin/esphome compile $(CONFIG)
+#   .venv/bin/esphome upload --device <ip> $(CONFIG)
+#
+# `upload` ALONE DOES NOT COMPILE. It ships whatever binary is already in
+# configs/.esphome/build/, so with a stale build it reports "OTA successful" while
+# flashing the OLD firmware - and the panel comes back up, answers HTTP and looks entirely
+# healthy. Cost the first time it happened: two flashes and a measurement of the previous
+# build's behaviour, recorded as if it were the new one (#64). Check
+# build/<name>/src/main.cpp for a value you just changed if a flash seems not to have
+# taken.
 flash:
 	$(ESPHOME) run $(CONFIG)
 

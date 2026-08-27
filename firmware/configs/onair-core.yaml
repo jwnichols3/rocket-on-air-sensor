@@ -145,6 +145,29 @@ globals:
     type: int
     restore_value: false
     initial_value: '0'
+  # ---- the repaint request (#64) ---------------------------------------------------
+  #
+  # THE PAINT IS DRIVEN BY CHANGE, NOT BY A TIMER. A full 800x480 repaint costs ~150 ms
+  # (measured), so at 1 s the CrowPanel spent ~15% of its loop redrawing an identical
+  # frame while also serving HTTP - and #65 wants to poll four times a second, which is
+  # not safe until the paint stops doing that.
+  #
+  # WHY A FLAG AND NOT A TRIGGER. The obvious shape is `on_value: component.update:
+  # my_display` on `presence_key`. It cannot be written: `presence_key` is a CORE entity
+  # and `my_display` is board-local, and D-85's rule is that anything naming board
+  # hardware is board knowledge. Extending the core's entity from the board file does not
+  # work either - MEASURED, not assumed: ESPHome 2026.8.0 does not merge package list
+  # entries by `id`, so a board-side `text:` block with the same id produces a SECOND
+  # entity and a validation error, rather than an additional trigger.
+  #
+  # So the core says WHAT happened and each board decides what to do about it. The core
+  # sets this; a board-local interval consumes it and updates its own display. That keeps
+  # the display id where it belongs and costs a bool test per tick instead of a repaint.
+  - id: repaint_pending
+    type: bool
+    restore_value: false
+    # True at boot so the first frame is drawn without waiting for anything to change.
+    initial_value: 'true'
 
 text:
   # THE state entity. The `select` it replaced is gone (D-38, proven on hardware in D-44),
@@ -183,6 +206,9 @@ text:
         - lambda: |-
             uint32_t t = millis();
             id(last_write_ms) = (t == 0) ? 1 : t;
+            // The state moved, so the glass is now wrong. This is the trigger the whole
+            // on-change paint hangs off (#64).
+            id(repaint_pending) = true;
         # A key this table does not contain means the server moved and we are stale. Pull
         # at once rather than waiting out the interval, so the panel self-heals in one
         # round trip (D-38). The UNKNOWN KEY branch is what it looks like until then.
@@ -405,11 +431,31 @@ script:
                         // move that would pull the strings out from under a reader on the
                         // HTTP task.
                         onair::install_table(next, version, response->get_response_header("etag"));
+                        // A new table can change the label and both colours of the row
+                        // already on the glass, so it is a repaint just as much as a
+                        // state change is. A 304 is NOT - the table did not move.
+                        id(repaint_pending) = true;
                         ESP_LOGI("onair", "config pull: table v%s, %u rows, etag %s",
                                  version.c_str(), (unsigned) onair::held().table.size(),
                                  onair::held().etag.c_str());
 
 interval:
+  # ---- the repaint safety net (#64) ------------------------------------------------
+  #
+  # A missed trigger must not be able to freeze the glass: a panel stuck on a frame that
+  # is no longer true is exactly the lie this product exists to prevent, and one wasted
+  # repaint every 30s is a cheap premium against it. It also picks up the diagnostics
+  # band's IP address and signal strength, which nothing else requests a repaint for.
+  #
+  # Expressed as a timed SET OF THE FLAG rather than as each display's `update_interval`,
+  # so that every repaint in the system arrives through one mechanism and there is a single
+  # place to look when asking why the glass redrew. It also belongs here rather than in a
+  # board file: "something should redraw every 30s" is true of any panel, while "which
+  # display" is board knowledge (D-85).
+  - interval: 30s
+    then:
+      - lambda: 'id(repaint_pending) = true;'
+
   # The device-served page's side of the fence (#33).
   #
   # esp-idf runs web handlers on the httpd task. Nothing there touches an ESPHome
