@@ -3133,8 +3133,11 @@ else (state, light control, API) lives on the receiver.
   | Setting | Default | Meaning |
   |---|---|---|
   | poll interval | **1000 ms** | how often a renderer asks the server |
-  | connection lost after | **30 minutes** | unreachable this long -> hold last known state, show the mark |
-  | no data after | **10 minutes beyond that** | 40 minutes total unreachable -> NO DATA |
+  | connection lost after | **1 minute** | mark the display as no longer refreshing; state unchanged |
+  | no data after | **30 minutes** | give up on the state entirely -> NO DATA |
+
+  Both thresholds are measured from the **last successful contact with the server**, not
+  chained off each other. Two independent numbers, one clock.
 
   **Milliseconds, as one bounded integer, not a menu of named speeds.** Range 250..60000,
   default 1000. A fixed enum of 1/5/30/60s is always slightly wrong for somebody and needs a
@@ -3145,11 +3148,17 @@ else (state, light control, API) lives on the receiver.
   on-change before a fast poll is safe. The poll itself is cheap - a LAN round trip - so once
   paint is on-change, 250 ms costs a few percent of the loop.
 
-  **The 30 minute hold is deliberate and Rocket's reasoning is recorded:** a meeting runs about
-  thirty minutes, so a panel that keeps saying ON AIR through a server outage is doing the
-  right thing rather than nagging. **Open, and flagged rather than settled:** that argument is
-  strongest for a BUSY row and weakest for a calm one. Holding ON AIR silently for 30 minutes
-  is a false ON, which D-32 calls the safe error. Holding AVAILABLE silently for 30 minutes on
-  a dead link is a false OFF, which it calls the error that matters. An asymmetric default -
-  busy holds 30 minutes, calm shows the mark sooner - would preserve the meeting rationale
-  exactly while removing the confident-green case. Not adopted without Rocket's say-so.
+  **The two thresholds are deliberately far apart, and that separation is the whole design.**
+  A meeting runs about thirty minutes, so the STATE must survive a server outage for at least
+  that long or the panel goes dark mid-call. But the honesty about not being refreshed costs
+  nothing and should arrive immediately.
+
+  This resolves an asymmetric-threshold proposal that was raised and **rejected in favour of
+  something simpler**. The concern was real: holding ON AIR silently for 30 minutes is a false
+  ON, which D-32 calls the safe error, while holding AVAILABLE silently for 30 minutes on a
+  dead link is a false OFF, the error that matters. The proposed fix was a shorter
+  connection-lost window for calm rows than for busy ones. **Rocket's split is better and
+  needs no asymmetry at all:** mark every state as unrefreshed after one minute, and let every
+  state persist for thirty. A calm row on a dead link is never drawn as a confident claim,
+  because within a minute it is visibly no longer being refreshed - and there is no second
+  rule, no per-row branch, and nothing to explain to whoever configures it next.
