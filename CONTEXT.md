@@ -3038,3 +3038,31 @@ else (state, light control, API) lives on the receiver.
   missed a push, and it is what makes an extra renderer cost no server configuration (#57
   stage 3). It must not become an option that can turn the push OFF: a light that is slow to
   come ON is the failure this whole system exists to avoid.
+
+- **D-90 (2026-08-27)** **The WRITER is responsible for making a state change stick. The On-air
+  API is reactive: it answers writes, answers questions, and accepts configuration. It does not
+  chase anybody.**
+
+  Rocket's design for the **Detector** (VCREC): on a transition it writes the new state, then
+  **reads it back to validate**, and repeats on a cycle - of the order of five seconds - until
+  the state is confirmed or it runs out of retries or time. Delivery is the writer's problem,
+  not the reader's.
+
+  This is a bigger statement than it looks, because it removes the main argument for decay.
+  **Staleness exists to cover a write that might have been lost.** If the writer retries until
+  it has confirmed the change, a lost write is DETECTED BY THE WRITER rather than inferred by
+  the server from silence. Silence then means what a state machine says it means: nothing has
+  changed.
+
+  It also settles a question the polling discussion kept circling. **The server must not poll
+  anything to ask whether it should change state.** Nor should it need to: a renderer already
+  pulls the **state table** by itself (D-38), and the writer now guarantees the state. The two
+  remaining pull-shaped questions are separable - the **confirmed state** (already a genuine
+  device read-back, D-22.3) and whether a renderer needs a slow backstop poll to self-correct
+  after a missed push (open, D-89).
+
+  **What this does NOT solve, and must not be assumed to:** a writer that dies entirely writes
+  nothing and retries nothing. Retry-until-confirmed makes delivery reliable; it says nothing
+  about whether anyone is still watching. That is a **liveness** question about the writer, and
+  it is a different question from what the state is. Conflating the two into one 90-second
+  timer is the thing now under review.
