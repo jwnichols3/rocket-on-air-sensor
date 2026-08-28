@@ -4062,3 +4062,58 @@ else (state, light control, API) lives on the receiver.
   **Not added to the logged-out landing page.** That page is deliberately not a dashboard
   (D-39), and the audience for a client guide is someone who has already logged in or who is
   reading `curl` output, not someone looking at the tally.
+
+- **D-118 (2026-08-28)** **The client guide was reviewed adversarially, and the review found
+  the page was wrong about the server in three places.**
+
+  Rocket asked for an adversarial review of `/docs` for LLM-isms, self-references and unclear
+  language. The subagent returned 17 defects and 12 preferences, and **found no LLM-isms worth
+  reporting** - the prose survived. What it found instead was worse: the error table and both
+  worked examples were factually wrong.
+
+  **Every factual claim in the review was re-verified against the server before acting, and one
+  was rejected.** The reviewer's replacement for the `?hold=` copy asserted that `true` and
+  `false` are ignored. `holdFromQuery` (`server.ts:374`) accepts `1|true` and `0|false`. Taking
+  the finding on trust would have replaced vague-but-correct text with confident-but-false
+  text. The concern behind it was real and the rewrite kept it; the proposed words did not
+  survive contact with the code.
+
+  What was really wrong:
+
+  - **A body over 16 KB is a `400`, not the `500` the page claimed.** `readBody()` throws
+    inside the same `try` as `JSON.parse` on `/state` and `/message`, so it arrives as
+    `malformed JSON body: request body too large`. Measured with a 20 KB body against the live
+    service. The page had been telling clients to retry with backoff on a request that can
+    never succeed, watching for a code they never get.
+  - **`409` is three different things and only one carries a status body.** The pin refusal
+    merges the state in; an unset `/on`/`/off` shortcut and a stale config `version` send
+    `{"error":...}` alone. "Read the status body attached to it" was false for two of the
+    three, and "do not retry" was wrong for the stale version, which is exactly
+    refetch-and-retry. Now three rows.
+  - **The `403` row blamed the client for a server misconfiguration** - `/admin/restart` with
+    no token sends the reader hunting a `source` field on a route that has none.
+  - **Both worked examples failed the rules stated directly above them.** The writer never
+    confirmed, contradicting section 4.5 and the checklist, and `write on-air || true`
+    discarded every exit code it had just computed. The renderer used constants eleven lines
+    after "make all three configuration", and its `await refreshTable()` at the top level meant
+    **a server already down at boot threw at import: no interval, no first paint, a display
+    that stays blank in exactly the condition it exists to report.** Proven by running the old
+    boot sequence against a dead port: it painted nothing at all.
+
+  **The examples are now run, not read.** `server/test/docs.test.ts` extracts the renderer from
+  the markdown, drives it by hand against a booted server and a dead port, and asserts it
+  paints NO DATA at boot, the right row when healthy, and never hands an undefined row to the
+  renderer. Reverting either fix fails it - the empty-table revert hands over `UNDEFINED-ROW`
+  exactly as predicted. The bash example was exercised against the live service on all four
+  branches (`400` exit 2 in 0 s, pin `409` exit 0 in 0 s, transient 3 attempts over 12 s,
+  happy path confirmed), targeting the state the light was already in so the wall never changed.
+
+  The self-references are gone (`#82`, `D-` ids, "the ESP32 polls this", "there used to be a
+  `stale` field", "this file is the bug"). The 27-hour menu-bar incident stays: a concrete
+  failure earns trust, and it was rewritten so it no longer depends on a removed field the
+  reader never saw. Emphasis went from one bold span every 43 words to one every 48, with the
+  connective `**and**`s cut.
+
+  **The typecheck caught what the test run did not.** The new test passed under `tsx`, which
+  strips types, and `tsc --noEmit` rejected the `setInterval` stub cast. Running a test is not
+  the same as running the gate.

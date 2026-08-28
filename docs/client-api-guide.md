@@ -1,8 +1,9 @@
 # Client guide: constructing on-air API calls
 
-How to call the on-air service from your own code. This is the practical companion to
-`docs/api-contract.md`, which is the normative spec. **Where the two disagree, the contract
-wins** and this file is the bug.
+How to call the on-air service from your own code. A normative contract sits behind this page
+(`docs/api-contract.md` in the repository). **Where the two disagree, the contract wins.** If
+anything here does not match what the server actually does, trust the server and report the
+page.
 
 Everything below was checked against a running service on 2026-08-28.
 
@@ -19,9 +20,9 @@ Your answer picks your routes, your credential and your `source` for the rest of
 | **A renderer** | a panel, a menu bar item, a wall display | `GET /status` + `GET /config/states` | none, you never write |
 | **A dumb kiosk** | a browser pointed at a screen | `GET /public/status`, or just `GET /display` | none |
 
-Two of these choices are load-bearing and are explained in section 4: an automated writer
-that uses a human route silently acquires the authority to override the owner's holds, and a
-renderer that reads `/public/status` gets a view that is free to change shape underneath it.
+Two of these choices are load-bearing. An automated writer that uses a human route silently
+acquires the authority to override the owner's holds (section 4.1), and a renderer that reads
+`/public/status` gets a view that is free to change shape underneath it (section 7).
 
 ---
 
@@ -62,12 +63,12 @@ deprecated alias that still works.
 
 ### The local waiver: why your first curl succeeded without a passphrase
 
-Both credentials are waived when **all** of these hold:
+Both credentials are waived when **every one** of these holds:
 
-- the connection is from loopback, **and**
-- `Host` names a loopback name on our port, **and**
-- `Origin` is absent or is exactly ours, **and**
-- `Sec-Fetch-Site` is absent, `same-origin`, or `none`.
+- the connection is from loopback
+- `Host` names a loopback name on our port
+- `Origin` is absent or is exactly ours
+- `Sec-Fetch-Site` is absent, `same-origin`, or `none`
 
 Every clause is there because of a measured attack, not a hypothetical: a page served from
 another address can perform a CORS-simple `POST` at a loopback port, and the server sees
@@ -103,8 +104,10 @@ kind   := "auto" | "human"
 label  := free text, 1..32 chars, display only
 ```
 
-`auto:` writers are subject to the pin rule. `human:` writers are not, and may set and clear
-pins. **This is an authority boundary, not a label.**
+A **hold** is a pin the owner puts on a state so that automated writers cannot move the light
+off it. Section 4.4 gives the exact rule; what matters here is who may trip it. `auto:` writers
+are subject to a hold. `human:` writers are not, and may set and clear holds.
+**This is an authority boundary, not a label.**
 
 The rule is split by route so neither audience pays for the other's convenience:
 
@@ -154,8 +157,10 @@ is `on-air` and `/off` is `available`, but the owner can point them anywhere. **
 is unset you get a `409`, not a guess** - falling back to the first row would mean an unset
 `/off` turning the light red.
 
-Query parameters: `?source=`, `?hold=1`, `?hold=0`. Anything else in `hold` is ignored rather
-than rejected.
+Query parameters: `?source=`, and `?hold=` to pin or release. `1` and `true` pin; `0` and
+`false` release. **Any other value is silently treated as if you had not sent the parameter**,
+leaving the hold exactly as it was, with no error - so a typo here fails quietly. Send one of
+those four words and nothing else.
 
 ### 4.4 Holds
 
@@ -187,8 +192,11 @@ is caught by the writer, never inferred by the server from silence.
 Two different fields, two different questions:
 
 - `state` - did the server accept my write? Present in the write's own response.
-- `confirmed` - did the **light** acknowledge it, read back from the device? `unknown` when the
-  device is unreachable or not repainting. Never guessed.
+- `confirmed` - did the **light** acknowledge it, read back from the device? Never guessed.
+  `confirmed` is always a row id. When the device is unreachable or is not repainting it reads
+  `unknown` - which is **also a real row a light can legitimately be displaying**, so this one
+  field cannot tell the two apart. Read `confirmed: "unknown"` as *not confirmed*, never as
+  *the light is showing the unknown row*.
 
 A write with a valid body **always succeeds** even when the light is dead. The light failure
 surfaces as `confirmed: "unknown"`, not as a status code. If you care about the glass, check
@@ -208,7 +216,7 @@ echo "light never confirmed on-air" >&2; exit 1
 
 **Known limitation.** `confirmed` currently tracks the panel's repaint counter, which keeps
 advancing while the backlight is off - so `confirmed` can read healthy while the glass is dark.
-Tracked as issue #82. Do not treat `confirmed` as proof that a human can see anything.
+Do not treat `confirmed` as proof that a human can see anything.
 
 ---
 
@@ -228,13 +236,13 @@ curl -sS http://127.0.0.1:8484/status -H 'Authorization: Bearer <passphrase>'
 
 | Field | Use it for |
 |---|---|
-| `state` | The row id in force. **A reference to a row, never a copy of one.** |
+| `state` | The row id in force. A reference to a row, never a copy of one. |
 | `busy` | Does this state mean the camera may be live. Semantics, not presentation. |
 | `intended` | `busy ? "on" : "off"`. Derived and read-only. Key your logic here if you want to survive a row invented next year without a code change. |
 | `confirmed` | The row the light acknowledged. See 4.5. |
 | `hold` | The pinned row, or `null`. |
 | `source` | Who wrote it. |
-| `updatedAt`, `ageSeconds` | **Provenance. Facts, not judgements.** |
+| `updatedAt`, `ageSeconds` | When the state was last written, and how long ago. The server never judges whether that is too old. You do. |
 | `tableVersion` | Bumped on every config save. A change means refetch the table. |
 | `stateResolvedFrom` | Present only when the live row was deleted and the state fell back to `unknown`. Names the dead id. |
 | `message` | Optional display text. Independent of state; a state write never touches it. |
@@ -243,9 +251,10 @@ curl -sS http://127.0.0.1:8484/status -H 'Authorization: Bearer <passphrase>'
 current; how that row looks comes from `GET /config/states` on your own slow schedule. See
 section 7.
 
-**There is no `stale` field.** There used to be, and it was removed rather than renamed,
-because a field still called `stale` beside the real thing is a decoy the next renderer keys
-on. The server reports when the state was written and refuses to tell you what that means.
+**The server never tells you whether the state is fresh, and it never will.** It reports when
+the state was written and refuses to draw a conclusion from it. There is no `stale` flag to key
+on, and asking for one is asking the server to make your display's judgement for you. Freshness
+is a judgement about *your* connection, on *your* clock, and it is yours to make.
 
 ### The client contract: three conditions, not two
 
@@ -254,8 +263,10 @@ Every renderer polls and decides for itself when it has lost the server.
 1. **Reachable** - draw the current state, plainly.
 2. **Unreachable, inside the grace window** - **keep drawing the last known state** with a
    visible connection-lost mark. Say what you last knew *and* that you are no longer being
-   refreshed. Do not go blank. Do not go calm.
-3. **Unreachable past the timeout** - **NO DATA**.
+   refreshed. Do not go blank, and do not go **calm** - calm here means any rendering a
+   passer-by reads as "not in a call": green, grey, blank or dark.
+3. **Unreachable past the timeout** - stop asserting a state at all. Show whatever your
+   display's equivalent of "no data" is. Never the last state, and never anything calm.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -263,10 +274,11 @@ Every renderer polls and decides for itself when it has lost the server.
 | connection lost after | 1 minute | mark the display unrefreshed; state unchanged |
 | no data after | 30 minutes | give up on the state entirely |
 
-Both thresholds run from **the last successful contact**, as two independent numbers on one
-clock. They are not chained. They are far apart on purpose: a meeting runs about half an hour,
-so the state has to outlive a server outage or the panel goes dark mid-call, while the honesty
-about not being refreshed costs nothing and should arrive immediately.
+Both thresholds run from the last successful contact, as **two independent numbers on one
+clock** - the second does not start when the first expires. They are far apart on purpose: a
+meeting runs about half an hour, so the state has to outlive a server outage or the panel goes
+dark mid-call, while the honesty about not being refreshed costs nothing and should arrive
+immediately.
 
 Make all three configuration, not constants.
 
@@ -275,16 +287,15 @@ Make all three configuration, not constants.
 > **Absence of information never renders calm.**
 
 Absent, malformed or unparseable input means **withhold calm**, never **assume calm**. This is
-a measured incident, not a precaution: trusting a server flag once drew a calm menu bar on
-27-hour-old evidence.
+not a precaution: a client that trusted a freshness signal instead of its own clock once drew a
+calm menu bar on 27-hour-old evidence.
 
 The failure this system exists to prevent is a **false OFF** - the light saying "not in a call"
 while the camera is live. When you are unsure, err loud.
 
 **What this does not cover.** A dead *writer*. If your detector dies while the state reads
 `available`, the server is healthy, every poll succeeds and every panel paints confident green.
-That exposure is named rather than hidden. If you are writing a detector, this is your problem
-to own.
+If you are writing a detector, this is your problem to own.
 
 ---
 
@@ -308,8 +319,9 @@ Same payload, heartbeat and auth as `/events`, **server-push-only**. Accepts `?p
 the upgrade. Inbound frames are ignored except `ping` and `close`. It is hand-rolled and
 minimal, aimed at Companion's `generic-websocket` module - not a general-purpose WS server.
 
-A JSON-path feedback on `intended == "on"` keeps working under any state table. Anything keyed
-to specific row names does not.
+Key your logic on `intended` rather than on row ids and it survives any state table the owner
+builds; anything keyed to specific row names does not. In Bitfocus Companion specifically, that
+means a JSON-path feedback on `intended == "on"`.
 
 ### Push is an optimisation, never a delivery guarantee
 
@@ -342,12 +354,12 @@ curl -sS http://127.0.0.1:8484/config/states -H 'Authorization: Bearer <passphra
 | `label` | The phrase you draw. Freely edited by the owner, never a key. |
 | `color`, `bgcolor` | `#rrggbb`, lowercase. |
 | `busy` | Carries the safety model. |
-| `order` | A display sort hint. **Never an address.** Do not index by it, do not compare rungs. |
+| `order` | A display sort hint, and nothing more. **Never an address.** Sort by it if you like; do not index by it, and never read a higher `order` as a more serious state. |
 | `description` | A comment for humans. Never load-bearing. |
 
 **Fetch it on a slow schedule** - it changes a few times a year, while state changes many times
 an hour. The response carries an `ETag` of the version; send `If-None-Match` and the steady
-state costs a header instead of a table. The ESP32 polls this every 300 s.
+state costs a header instead of a table. Every 300 s is a sensible interval.
 
 ```
 GET /config/states  ->  200, ETag: "11"
@@ -392,7 +404,6 @@ Non-empty, max 200 characters. `DELETE` is idempotent. Both return the status bo
 persists across restarts and state writes never touch it.
 
 **A message may never replace or obscure the state word or the state colour on any renderer.**
-It is always subordinate.
 
 ---
 
@@ -402,19 +413,30 @@ Shape is `{"error": "<message>"}`, plus context fields where they help.
 
 | Status | Cause | What your client should do |
 |---|---|---|
-| `400` | Malformed JSON, missing `state`, unknown state id, bad `source` shape | **Fix the call.** Never retry unchanged. An unknown id returns `validStates` - use it. |
+| `400` | Malformed JSON, a body over 16 KB, missing `state`, unknown state id, bad `source` shape | **Fix the call.** Never retry unchanged. An unknown id returns `validStates` - use it. |
 | `401` | Passphrase or session absent or wrong | Surface it to a human. Do not hammer. Check whether a rotation is in its 60-minute grace. |
-| `403` | An `auto:` source tried to set or clear a hold; `/admin/restart` with no token configured | **A bug in your client.** Fix the `source`. The state was left untouched. |
+| `403` | An `auto:` source tried to set or clear a hold | **A bug in your client.** Fix the `source`. The state was left untouched. |
 | `404` | Unknown path | Fix the URL. |
 | `405` | Right path, wrong method | Fix the method. `PUT /state`, `POST /state/{id}`. |
-| `409` | The pin rule refused an automated write; a stale config `version`; a failed rebind | **Not an error.** Read the status body attached to it. Do not retry. |
+| `409` | **The pin rule** refused an automated write | Not an error. The full status body is merged into the response - read it and carry on. Do not retry. |
+| `409` | `/on` or `/off` with no shortcut row configured | The body is `{"error":...}` and nothing else. Only a person can fix it. Surface it; do not retry. |
+| `409` | A config save carrying a stale `version` | Refetch, re-apply your change, submit once more. |
+| `500` | An internal server fault | Retry once with backoff; if it repeats, report it. |
 | `501` | A route whose backing store is not wired up | Configuration problem on the server, not yours. |
 | `507` | A config save could not reach disk | The running config is untouched. Report it. |
-| `500` | Internal, including a request body over 16 KB | Retry once with backoff; if it repeats, report it. |
+
+**Three different things return `409` and only one of them carries a status body.** The pin
+refusal merges the full state in, so you can see what stands without a second request. The
+other two carry `{"error":...}` alone - a client that reads `.state` off any `409` gets
+`undefined`. Branch on the shape, not on the code.
+
+A body over 16 KB is a `400`, not a `413` and not a `500`: the read fails inside the same
+parse that would have rejected bad JSON, so it arrives as
+`malformed JSON body: request body too large`. There is no size at which retrying helps.
 
 An unknown state id is a `400` that **lists the valid ids** and never falls back to a default.
-A typo that resolved to something would eventually resolve to something calm, and that is the
-invariant violation this whole system exists to prevent.
+A typo that resolved to a row would resolve to whatever that row means, and the whole point of
+this system is that nothing gets to guess.
 
 ---
 
@@ -422,42 +444,77 @@ invariant violation this whole system exists to prevent.
 
 ### A minimal automated writer
 
+It writes, it confirms, and it retries only what retrying can fix.
+
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 BASE="${ONAIR_BASE:-http://127.0.0.1:8484}"
 PASS="${ONAIR_PASSPHRASE:?set ONAIR_PASSPHRASE}"
+AUTH=(-H "Authorization: Bearer $PASS")
 
-write() {  # write <state-id>
-  local code body
-  body=$(curl -sS -w '\n%{http_code}' -X PUT "$BASE/state" \
-    -H "Authorization: Bearer $PASS" -H 'content-type: application/json' \
-    -d "{\"state\":\"$1\",\"source\":\"auto:mydetector\"}")
+# 0 accepted | 1 transient, retry | 2 our bug, never retry | 3 the pin decided
+write() {
+  local body code rc=0
+  body=$(curl -sS -m 5 -w '\n%{http_code}' -X PUT "$BASE/state" "${AUTH[@]}" \
+    -H 'content-type: application/json' \
+    -d "{\"state\":\"$1\",\"source\":\"auto:mydetector\"}") || rc=$?
+  [ "$rc" = 0 ] || { echo "curl failed ($rc)" >&2; return 1; }
   code=${body##*$'\n'}
   case "$code" in
-    200) return 0 ;;
-    409) echo "held; the pin refused this write - not retrying" >&2; return 0 ;;
-    400|403) echo "client bug: ${body%$'\n'*}" >&2; return 2 ;;
-    *)   echo "transient: $code" >&2; return 1 ;;
+    200)         return 0 ;;
+    409)         echo "the pin refused this: ${body%$'\n'*}" >&2; return 3 ;;
+    400|401|403) echo "not retryable: ${body%$'\n'*}" >&2; return 2 ;;
+    *)           echo "transient: HTTP $code" >&2; return 1 ;;
   esac
 }
 
-write on-air || true
+confirmed() {
+  curl -sS -m 5 "$BASE/status" "${AUTH[@]}" \
+    | sed -n 's/.*"confirmed":"\([^"]*\)".*/\1/p'
+}
+
+# The write is not finished until the LIGHT agrees. Nothing here runs on a timer
+# afterwards: once confirmed, stop.
+set_state() {
+  local attempt rc i
+  for attempt in 1 2 3; do
+    rc=0; write "$1" || rc=$?
+    case $rc in
+      2) return 2 ;;                              # identical retry fails identically
+      3) return 0 ;;                              # the pin decided, and that IS the answer
+      1) sleep $((attempt * 2)); continue ;;
+    esac
+    for ((i = 0; i < 20; i++)); do
+      if [ "$(confirmed)" = "$1" ]; then return 0; fi
+      sleep 0.5
+    done
+    echo "wrote $1, but the light never confirmed it" >&2
+  done
+  return 1
+}
+
+set_state on-air
 ```
 
-Note what it does **not** do: no heartbeat, no retry on `409`, no retry on `400`.
+`400`, `401` and `403` are never retried: the next identical request fails identically. A
+`409` is not retried either, but it is not a failure - the pin reached a decision, and that
+decision is the answer.
 
 ### A minimal renderer
 
 ```js
-const BASE = 'http://onair.local:8484', PASS = '...';
-const POLL_MS = 1000, LOST_MS = 60_000, NODATA_MS = 30 * 60_000;
+// Configuration, not constants: all three thresholds have to be settable.
+const cfg = {
+  base: 'http://onair.local:8484', pass: '...',
+  pollMs: 1000, lostMs: 60_000, noDataMs: 30 * 60_000,
+};
 
-let table = new Map(), tableVersion = -1, lastOk = Date.now(), last = null;
+let table = new Map(), tableVersion = -1, lastOk = 0, last = null, authError = null;
 
 async function get(path) {
-  const r = await fetch(BASE + path, { headers: { Authorization: `Bearer ${PASS}` } });
-  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
+  const r = await fetch(cfg.base + path, { headers: { Authorization: `Bearer ${cfg.pass}` } });
+  if (!r.ok) throw Object.assign(new Error(`${path} -> ${r.status}`), { status: r.status });
   return r.json();
 }
 
@@ -470,20 +527,28 @@ async function refreshTable() {
 async function tick() {
   try {
     const s = await get('/status');
-    lastOk = Date.now();
-    last = s;
+    // Contact is what resets the clock, and /status alone is contact.
+    lastOk = Date.now(); last = s; authError = null;
     if (s.tableVersion !== tableVersion) await refreshTable();
-  } catch {
-    // Deliberately swallowed: the age of lastOk is the only thing that decides what we draw.
+  } catch (e) {
+    // A wrong passphrase is not a network problem and waiting will never fix it. Without
+    // this branch it reads as "connected" for a minute and "connection lost" for 29 more,
+    // and never once mentions the credential.
+    if (e.status === 401) authError = 'check the passphrase';
   }
   const age = Date.now() - lastOk;
-  if (last === null || age > NODATA_MS) return drawNoData();          // condition 3
-  // A missing row resolves to `unknown`, never to a default that might be calm.
-  drawState(table.get(last.state) ?? table.get('unknown'), age > LOST_MS);  // 1 and 2
+  // No table means no row can be resolved, so this is NO DATA - never a default that
+  // might be calm.
+  if (last === null || table.size === 0 || age > cfg.noDataMs) return drawNoData(authError);
+  drawState(table.get(last.state) ?? table.get('unknown'), age > cfg.lostMs, authError);
 }
 
-await refreshTable();
-setInterval(tick, POLL_MS);
+// Boots even when the server is ALREADY down. A top-level `await refreshTable()` that
+// throws takes the whole script with it - no interval, no first paint, a permanently
+// blank display - which is exactly the condition the display exists to report.
+refreshTable().catch(() => {});
+setInterval(tick, cfg.pollMs);
+tick();
 ```
 
 ---

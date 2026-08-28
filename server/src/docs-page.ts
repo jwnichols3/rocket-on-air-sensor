@@ -51,13 +51,13 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--line);
 <body>
 <main>
 <h1>Client guide: constructing on-air API calls</h1>
-<p>How to call the on-air service from your own code. This is the practical companion to <code>docs/api-contract.md</code>, which is the normative spec. <strong>Where the two disagree, the contract wins</strong> and this file is the bug.</p>
+<p>How to call the on-air service from your own code. A normative contract sits behind this page (<code>docs/api-contract.md</code> in the repository). <strong>Where the two disagree, the contract wins.</strong> If anything here does not match what the server actually does, trust the server and report the page.</p>
 <p>Everything below was checked against a running service on 2026-08-28.</p>
 <hr>
 <h2>1. Work out what kind of client you are</h2>
 <p>Your answer picks your routes, your credential and your <code>source</code> for the rest of the guide.</p>
 <div class="scroll"><table><thead><tr><th>You are</th><th>Example</th><th>You call</th><th>Your <code>source</code></th></tr></thead><tbody><tr><td><strong>An automated writer</strong></td><td>a call detector, a calendar sync</td><td><code>PUT /state</code></td><td><code>auto:&lt;yourname&gt;</code></td></tr><tr><td><strong>A human-triggered writer</strong></td><td>a shell alias, a phone Shortcut, a Stream Deck button</td><td><code>POST /state/{id}</code>, <code>/on</code>, <code>/off</code></td><td>optional</td></tr><tr><td><strong>A renderer</strong></td><td>a panel, a menu bar item, a wall display</td><td><code>GET /status</code> + <code>GET /config/states</code></td><td>none, you never write</td></tr><tr><td><strong>A dumb kiosk</strong></td><td>a browser pointed at a screen</td><td><code>GET /public/status</code>, or just <code>GET /display</code></td><td>none</td></tr></tbody></table></div>
-<p>Two of these choices are load-bearing and are explained in section 4: an automated writer that uses a human route silently acquires the authority to override the owner's holds, and a renderer that reads <code>/public/status</code> gets a view that is free to change shape underneath it.</p>
+<p>Two of these choices are load-bearing. An automated writer that uses a human route silently acquires the authority to override the owner's holds (section 4.1), and a renderer that reads <code>/public/status</code> gets a view that is free to change shape underneath it (section 7).</p>
 <hr>
 <h2>2. Base URL</h2>
 <ul><li>Default port <strong>8484</strong>. Configurable in the admin console and by <code>ONAIR_PORT</code>.</li><li><strong>Loopback is always bound.</strong> <code>http://127.0.0.1:8484</code> works on the host machine no matter how the bind setting is configured.</li><li>Off-host clients use the LAN address. There is no TLS and no internet exposure; LAN plus the passphrase is the whole security model.</li><li>No URL versioning. Every response is JSON except <code>/display</code>, <code>/docs</code> and the admin bundle.</li></ul>
@@ -70,8 +70,8 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--line);
 <pre><code>Authorization: Bearer &lt;passphrase&gt;</code></pre>
 <p><strong>The query fallback works on GET only:</strong> <code>?passphrase=&lt;passphrase&gt;</code>. It exists for the three places a header is impossible - <code>EventSource</code>, the WebSocket upgrade, and a kiosk URL you type into a browser. It is rejected on writes on purpose, so the credential never lands in server logs or browser history for the sake of something that did not need it. <code>?token=</code> is a deprecated alias that still works.</p>
 <h3>The local waiver: why your first curl succeeded without a passphrase</h3>
-<p>Both credentials are waived when <strong>all</strong> of these hold:</p>
-<ul><li>the connection is from loopback, <strong>and</strong></li><li><code>Host</code> names a loopback name on our port, <strong>and</strong></li><li><code>Origin</code> is absent or is exactly ours, <strong>and</strong></li><li><code>Sec-Fetch-Site</code> is absent, <code>same-origin</code>, or <code>none</code>.</li></ul>
+<p>Both credentials are waived when <strong>every one</strong> of these holds:</p>
+<ul><li>the connection is from loopback</li><li><code>Host</code> names a loopback name on our port</li><li><code>Origin</code> is absent or is exactly ours</li><li><code>Sec-Fetch-Site</code> is absent, <code>same-origin</code>, or <code>none</code></li></ul>
 <p>Every clause is there because of a measured attack, not a hypothetical: a page served from another address can perform a CORS-simple <code>POST</code> at a loopback port, and the server sees <code>remote: 127.0.0.1</code>. Checking the remote address alone does not protect you.</p>
 <p><strong>Do not build on the waiver if your client might ever move off the host.</strong> Send the passphrase anyway; it is accepted from loopback too.</p>
 <h3>Rotation</h3>
@@ -85,7 +85,7 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--line);
 <pre><code>source := kind ":" label
 kind   := "auto" | "human"
 label  := free text, 1..32 chars, display only</code></pre>
-<p><code>auto:</code> writers are subject to the pin rule. <code>human:</code> writers are not, and may set and clear pins. <strong>This is an authority boundary, not a label.</strong></p>
+<p>A <strong>hold</strong> is a pin the owner puts on a state so that automated writers cannot move the light off it. Section 4.4 gives the exact rule; what matters here is who may trip it. <code>auto:</code> writers are subject to a hold. <code>human:</code> writers are not, and may set and clear holds. <strong>This is an authority boundary, not a label.</strong></p>
 <p>The rule is split by route so neither audience pays for the other's convenience:</p>
 <div class="scroll"><table><thead><tr><th>Route</th><th><code>source</code></th><th>If missing or unprefixed</th></tr></thead><tbody><tr><td><code>PUT /state</code></td><td><strong>required, prefixed</strong></td><td><code>400</code></td></tr><tr><td><code>POST /state/{id}</code>, <code>/on</code>, <code>/off</code></td><td>optional</td><td>defaults to <code>human:anonymous</code></td></tr></tbody></table></div>
 <p>An automated client that forgets the prefix on <code>PUT /state</code> gets a <code>400</code>, which is loud. The same client pointed at <code>POST /state/on-air</code> gets <strong>human authority</strong> and quietly overrides the owner's holds. <strong>If you are automated, use <code>PUT /state</code>.</strong></p>
@@ -103,7 +103,7 @@ label  := free text, 1..32 chars, display only</code></pre>
 curl -sS -X POST 'http://127.0.0.1:8484/on'
 curl -sS -X POST 'http://127.0.0.1:8484/off?hold=1'</code></pre>
 <p><code>/on</code> and <code>/off</code> resolve through configuration rather than naming a row. Out of the box <code>/on</code> is <code>on-air</code> and <code>/off</code> is <code>available</code>, but the owner can point them anywhere. <strong>If the shortcut is unset you get a <code>409</code>, not a guess</strong> - falling back to the first row would mean an unset <code>/off</code> turning the light red.</p>
-<p>Query parameters: <code>?source=</code>, <code>?hold=1</code>, <code>?hold=0</code>. Anything else in <code>hold</code> is ignored rather than rejected.</p>
+<p>Query parameters: <code>?source=</code>, and <code>?hold=</code> to pin or release. <code>1</code> and <code>true</code> pin; <code>0</code> and <code>false</code> release. <strong>Any other value is silently treated as if you had not sent the parameter</strong>, leaving the hold exactly as it was, with no error - so a typo here fails quietly. Send one of those four words and nothing else.</p>
 <h3>4.4 Holds</h3>
 <p>A hold pins the state. Set and cleared only by a <code>human:</code> source, persisted, <strong>never released on a timer</strong>.</p>
 <blockquote><p>While a hold is set, a write from an <code>auto:</code> source is applied only if it moves the system from a <code>busy: false</code> state to a <code>busy: true</code> state. Every other automated write is refused with <code>409</code> and the held state stands.</p></blockquote>
@@ -112,7 +112,7 @@ curl -sS -X POST 'http://127.0.0.1:8484/off?hold=1'</code></pre>
 <h3>4.5 Confirm your own write</h3>
 <p><strong>The server latches and never decays.</strong> There is no TTL, no heartbeat convention, and no expectation that you re-send state on a timer. The flip side is that <strong>making a write stick is your job</strong>: write, read back, retry until confirmed or until you run out of time. A lost write is caught by the writer, never inferred by the server from silence.</p>
 <p>Two different fields, two different questions:</p>
-<ul><li><code>state</code> - did the server accept my write? Present in the write's own response.</li><li><code>confirmed</code> - did the <strong>light</strong> acknowledge it, read back from the device? <code>unknown</code> when the device is unreachable or not repainting. Never guessed.</li></ul>
+<ul><li><code>state</code> - did the server accept my write? Present in the write's own response.</li><li><code>confirmed</code> - did the <strong>light</strong> acknowledge it, read back from the device? Never guessed. <code>confirmed</code> is always a row id. When the device is unreachable or is not repainting it reads <code>unknown</code> - which is <strong>also a real row a light can legitimately be displaying</strong>, so this one field cannot tell the two apart. Read <code>confirmed: "unknown"</code> as <em>not confirmed</em>, never as <em>the light is showing the unknown row</em>.</li></ul>
 <p>A write with a valid body <strong>always succeeds</strong> even when the light is dead. The light failure surfaces as <code>confirmed: "unknown"</code>, not as a status code. If you care about the glass, check <code>confirmed</code>; if you only care that the system recorded your intent, the response is enough.</p>
 <pre><code># write, then confirm the light agrees, giving up after ~10s
 curl -sS -X PUT "$BASE/state" -H "Authorization: Bearer $PASS" \\
@@ -123,7 +123,7 @@ for _ in $(seq 20); do
   sleep 0.5
 done
 echo "light never confirmed on-air" &gt;&amp;2; exit 1</code></pre>
-<p><strong>Known limitation.</strong> <code>confirmed</code> currently tracks the panel's repaint counter, which keeps advancing while the backlight is off - so <code>confirmed</code> can read healthy while the glass is dark. Tracked as issue #82. Do not treat <code>confirmed</code> as proof that a human can see anything.</p>
+<p><strong>Known limitation.</strong> <code>confirmed</code> currently tracks the panel's repaint counter, which keeps advancing while the backlight is off - so <code>confirmed</code> can read healthy while the glass is dark. Do not treat <code>confirmed</code> as proof that a human can see anything.</p>
 <hr>
 <h2>5. Reading state</h2>
 <h3><code>GET /status</code></h3>
@@ -131,20 +131,20 @@ echo "light never confirmed on-air" &gt;&amp;2; exit 1</code></pre>
 <pre><code>{"state":"available","confirmed":"available","hold":null,"source":"human:admin",
  "updatedAt":"2026-08-28T00:37:22.080Z","message":null,"busy":false,
  "intended":"off","ageSeconds":53529,"tableVersion":11}</code></pre>
-<div class="scroll"><table><thead><tr><th>Field</th><th>Use it for</th></tr></thead><tbody><tr><td><code>state</code></td><td>The row id in force. <strong>A reference to a row, never a copy of one.</strong></td></tr><tr><td><code>busy</code></td><td>Does this state mean the camera may be live. Semantics, not presentation.</td></tr><tr><td><code>intended</code></td><td><code>busy ? "on" : "off"</code>. Derived and read-only. Key your logic here if you want to survive a row invented next year without a code change.</td></tr><tr><td><code>confirmed</code></td><td>The row the light acknowledged. See 4.5.</td></tr><tr><td><code>hold</code></td><td>The pinned row, or <code>null</code>.</td></tr><tr><td><code>source</code></td><td>Who wrote it.</td></tr><tr><td><code>updatedAt</code>, <code>ageSeconds</code></td><td><strong>Provenance. Facts, not judgements.</strong></td></tr><tr><td><code>tableVersion</code></td><td>Bumped on every config save. A change means refetch the table.</td></tr><tr><td><code>stateResolvedFrom</code></td><td>Present only when the live row was deleted and the state fell back to <code>unknown</code>. Names the dead id.</td></tr><tr><td><code>message</code></td><td>Optional display text. Independent of state; a state write never touches it.</td></tr></tbody></table></div>
+<div class="scroll"><table><thead><tr><th>Field</th><th>Use it for</th></tr></thead><tbody><tr><td><code>state</code></td><td>The row id in force. A reference to a row, never a copy of one.</td></tr><tr><td><code>busy</code></td><td>Does this state mean the camera may be live. Semantics, not presentation.</td></tr><tr><td><code>intended</code></td><td><code>busy ? "on" : "off"</code>. Derived and read-only. Key your logic here if you want to survive a row invented next year without a code change.</td></tr><tr><td><code>confirmed</code></td><td>The row the light acknowledged. See 4.5.</td></tr><tr><td><code>hold</code></td><td>The pinned row, or <code>null</code>.</td></tr><tr><td><code>source</code></td><td>Who wrote it.</td></tr><tr><td><code>updatedAt</code>, <code>ageSeconds</code></td><td>When the state was last written, and how long ago. The server never judges whether that is too old. You do.</td></tr><tr><td><code>tableVersion</code></td><td>Bumped on every config save. A change means refetch the table.</td></tr><tr><td><code>stateResolvedFrom</code></td><td>Present only when the live row was deleted and the state fell back to <code>unknown</code>. Names the dead id.</td></tr><tr><td><code>message</code></td><td>Optional display text. Independent of state; a state write never touches it.</td></tr></tbody></table></div>
 <p><strong><code>label</code>, <code>color</code> and <code>bgcolor</code> are deliberately not here.</strong> A state change says which row is current; how that row looks comes from <code>GET /config/states</code> on your own slow schedule. See section 7.</p>
-<p><strong>There is no <code>stale</code> field.</strong> There used to be, and it was removed rather than renamed, because a field still called <code>stale</code> beside the real thing is a decoy the next renderer keys on. The server reports when the state was written and refuses to tell you what that means.</p>
+<p><strong>The server never tells you whether the state is fresh, and it never will.</strong> It reports when the state was written and refuses to draw a conclusion from it. There is no <code>stale</code> flag to key on, and asking for one is asking the server to make your display's judgement for you. Freshness is a judgement about <em>your</em> connection, on <em>your</em> clock, and it is yours to make.</p>
 <h3>The client contract: three conditions, not two</h3>
 <p>Every renderer polls and decides for itself when it has lost the server.</p>
-<ol><li><strong>Reachable</strong> - draw the current state, plainly.</li><li><strong>Unreachable, inside the grace window</strong> - <strong>keep drawing the last known state</strong> with a visible connection-lost mark. Say what you last knew <em>and</em> that you are no longer being refreshed. Do not go blank. Do not go calm.</li><li><strong>Unreachable past the timeout</strong> - <strong>NO DATA</strong>.</li></ol>
+<ol><li><strong>Reachable</strong> - draw the current state, plainly.</li><li><strong>Unreachable, inside the grace window</strong> - <strong>keep drawing the last known state</strong> with a visible connection-lost mark. Say what you last knew <em>and</em> that you are no longer being refreshed. Do not go blank, and do not go <strong>calm</strong> - calm here means any rendering a passer-by reads as "not in a call": green, grey, blank or dark.</li><li><strong>Unreachable past the timeout</strong> - stop asserting a state at all. Show whatever your display's equivalent of "no data" is. Never the last state, and never anything calm.</li></ol>
 <div class="scroll"><table><thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead><tbody><tr><td>poll interval</td><td>1000 ms (250..60000)</td><td>how often you ask</td></tr><tr><td>connection lost after</td><td>1 minute</td><td>mark the display unrefreshed; state unchanged</td></tr><tr><td>no data after</td><td>30 minutes</td><td>give up on the state entirely</td></tr></tbody></table></div>
-<p>Both thresholds run from <strong>the last successful contact</strong>, as two independent numbers on one clock. They are not chained. They are far apart on purpose: a meeting runs about half an hour, so the state has to outlive a server outage or the panel goes dark mid-call, while the honesty about not being refreshed costs nothing and should arrive immediately.</p>
+<p>Both thresholds run from the last successful contact, as <strong>two independent numbers on one clock</strong> - the second does not start when the first expires. They are far apart on purpose: a meeting runs about half an hour, so the state has to outlive a server outage or the panel goes dark mid-call, while the honesty about not being refreshed costs nothing and should arrive immediately.</p>
 <p>Make all three configuration, not constants.</p>
 <h3>Fail closed</h3>
 <blockquote><p><strong>Absence of information never renders calm.</strong></p></blockquote>
-<p>Absent, malformed or unparseable input means <strong>withhold calm</strong>, never <strong>assume calm</strong>. This is a measured incident, not a precaution: trusting a server flag once drew a calm menu bar on 27-hour-old evidence.</p>
+<p>Absent, malformed or unparseable input means <strong>withhold calm</strong>, never <strong>assume calm</strong>. This is not a precaution: a client that trusted a freshness signal instead of its own clock once drew a calm menu bar on 27-hour-old evidence.</p>
 <p>The failure this system exists to prevent is a <strong>false OFF</strong> - the light saying "not in a call" while the camera is live. When you are unsure, err loud.</p>
-<p><strong>What this does not cover.</strong> A dead <em>writer</em>. If your detector dies while the state reads <code>available</code>, the server is healthy, every poll succeeds and every panel paints confident green. That exposure is named rather than hidden. If you are writing a detector, this is your problem to own.</p>
+<p><strong>What this does not cover.</strong> A dead <em>writer</em>. If your detector dies while the state reads <code>available</code>, the server is healthy, every poll succeeds and every panel paints confident green. If you are writing a detector, this is your problem to own.</p>
 <hr>
 <h2>6. Streams</h2>
 <h3><code>GET /events</code> (SSE)</h3>
@@ -154,7 +154,7 @@ const es = new EventSource(\`\${base}/events?passphrase=\${encodeURIComponent(pa
 es.addEventListener('status', (e) =&gt; render(JSON.parse(e.data)));</code></pre>
 <h3><code>GET /events/ws</code> (WebSocket)</h3>
 <p>Same payload, heartbeat and auth as <code>/events</code>, <strong>server-push-only</strong>. Accepts <code>?passphrase=</code> on the upgrade. Inbound frames are ignored except <code>ping</code> and <code>close</code>. It is hand-rolled and minimal, aimed at Companion's <code>generic-websocket</code> module - not a general-purpose WS server.</p>
-<p>A JSON-path feedback on <code>intended == "on"</code> keeps working under any state table. Anything keyed to specific row names does not.</p>
+<p>Key your logic on <code>intended</code> rather than on row ids and it survives any state table the owner builds; anything keyed to specific row names does not. In Bitfocus Companion specifically, that means a JSON-path feedback on <code>intended == "on"</code>.</p>
 <h3>Push is an optimisation, never a delivery guarantee</h3>
 <p>The server emits on change and does not error if you miss it. A client that misses a push gets the change on its <strong>next poll</strong>. <strong>Do not build correctness on the stream.</strong> If your client has no poll loop behind the socket, it is wrong.</p>
 <hr>
@@ -167,8 +167,8 @@ es.addEventListener('status', (e) =&gt; render(JSON.parse(e.data)));</code></pre
   {"id":"on-air","label":"ON AIR","color":"#ffffff","bgcolor":"#c1121f",
    "description":"","busy":true,"order":1}
 ]}</code></pre>
-<div class="scroll"><table><thead><tr><th>Field</th><th>Notes</th></tr></thead><tbody><tr><td><code>id</code></td><td>Immutable. <strong>The only addressable handle.</strong> <code>^[a-z0-9][a-z0-9-]{0,31}$</code>.</td></tr><tr><td><code>label</code></td><td>The phrase you draw. Freely edited by the owner, never a key.</td></tr><tr><td><code>color</code>, <code>bgcolor</code></td><td><code>#rrggbb</code>, lowercase.</td></tr><tr><td><code>busy</code></td><td>Carries the safety model.</td></tr><tr><td><code>order</code></td><td>A display sort hint. <strong>Never an address.</strong> Do not index by it, do not compare rungs.</td></tr><tr><td><code>description</code></td><td>A comment for humans. Never load-bearing.</td></tr></tbody></table></div>
-<p><strong>Fetch it on a slow schedule</strong> - it changes a few times a year, while state changes many times an hour. The response carries an <code>ETag</code> of the version; send <code>If-None-Match</code> and the steady state costs a header instead of a table. The ESP32 polls this every 300 s.</p>
+<div class="scroll"><table><thead><tr><th>Field</th><th>Notes</th></tr></thead><tbody><tr><td><code>id</code></td><td>Immutable. <strong>The only addressable handle.</strong> <code>^[a-z0-9][a-z0-9-]{0,31}$</code>.</td></tr><tr><td><code>label</code></td><td>The phrase you draw. Freely edited by the owner, never a key.</td></tr><tr><td><code>color</code>, <code>bgcolor</code></td><td><code>#rrggbb</code>, lowercase.</td></tr><tr><td><code>busy</code></td><td>Carries the safety model.</td></tr><tr><td><code>order</code></td><td>A display sort hint, and nothing more. <strong>Never an address.</strong> Sort by it if you like; do not index by it, and never read a higher <code>order</code> as a more serious state.</td></tr><tr><td><code>description</code></td><td>A comment for humans. Never load-bearing.</td></tr></tbody></table></div>
+<p><strong>Fetch it on a slow schedule</strong> - it changes a few times a year, while state changes many times an hour. The response carries an <code>ETag</code> of the version; send <code>If-None-Match</code> and the steady state costs a header instead of a table. Every 300 s is a sensible interval.</p>
 <pre><code>GET /config/states  -&gt;  200, ETag: "11"
 GET /config/states  with  If-None-Match: "11"  -&gt;  304</code></pre>
 <p>Refetch when <code>tableVersion</code> in a status payload no longer matches the <code>version</code> you hold.</p>
@@ -185,45 +185,79 @@ GET /config/states  with  If-None-Match: "11"  -&gt;  304</code></pre>
   -H 'content-type: application/json' -d '{"text":"BE QUIET"}'
 curl -sS -X DELETE http://127.0.0.1:8484/message -H 'Authorization: Bearer &lt;passphrase&gt;'</code></pre>
 <p>Non-empty, max 200 characters. <code>DELETE</code> is idempotent. Both return the status body. The message persists across restarts and state writes never touch it.</p>
-<p><strong>A message may never replace or obscure the state word or the state colour on any renderer.</strong> It is always subordinate.</p>
+<p><strong>A message may never replace or obscure the state word or the state colour on any renderer.</strong></p>
 <hr>
 <h2>9. Errors, and what to do about each</h2>
 <p>Shape is <code>{"error": "&lt;message&gt;"}</code>, plus context fields where they help.</p>
-<div class="scroll"><table><thead><tr><th>Status</th><th>Cause</th><th>What your client should do</th></tr></thead><tbody><tr><td><code>400</code></td><td>Malformed JSON, missing <code>state</code>, unknown state id, bad <code>source</code> shape</td><td><strong>Fix the call.</strong> Never retry unchanged. An unknown id returns <code>validStates</code> - use it.</td></tr><tr><td><code>401</code></td><td>Passphrase or session absent or wrong</td><td>Surface it to a human. Do not hammer. Check whether a rotation is in its 60-minute grace.</td></tr><tr><td><code>403</code></td><td>An <code>auto:</code> source tried to set or clear a hold; <code>/admin/restart</code> with no token configured</td><td><strong>A bug in your client.</strong> Fix the <code>source</code>. The state was left untouched.</td></tr><tr><td><code>404</code></td><td>Unknown path</td><td>Fix the URL.</td></tr><tr><td><code>405</code></td><td>Right path, wrong method</td><td>Fix the method. <code>PUT /state</code>, <code>POST /state/{id}</code>.</td></tr><tr><td><code>409</code></td><td>The pin rule refused an automated write; a stale config <code>version</code>; a failed rebind</td><td><strong>Not an error.</strong> Read the status body attached to it. Do not retry.</td></tr><tr><td><code>501</code></td><td>A route whose backing store is not wired up</td><td>Configuration problem on the server, not yours.</td></tr><tr><td><code>507</code></td><td>A config save could not reach disk</td><td>The running config is untouched. Report it.</td></tr><tr><td><code>500</code></td><td>Internal, including a request body over 16 KB</td><td>Retry once with backoff; if it repeats, report it.</td></tr></tbody></table></div>
-<p>An unknown state id is a <code>400</code> that <strong>lists the valid ids</strong> and never falls back to a default. A typo that resolved to something would eventually resolve to something calm, and that is the invariant violation this whole system exists to prevent.</p>
+<div class="scroll"><table><thead><tr><th>Status</th><th>Cause</th><th>What your client should do</th></tr></thead><tbody><tr><td><code>400</code></td><td>Malformed JSON, a body over 16 KB, missing <code>state</code>, unknown state id, bad <code>source</code> shape</td><td><strong>Fix the call.</strong> Never retry unchanged. An unknown id returns <code>validStates</code> - use it.</td></tr><tr><td><code>401</code></td><td>Passphrase or session absent or wrong</td><td>Surface it to a human. Do not hammer. Check whether a rotation is in its 60-minute grace.</td></tr><tr><td><code>403</code></td><td>An <code>auto:</code> source tried to set or clear a hold</td><td><strong>A bug in your client.</strong> Fix the <code>source</code>. The state was left untouched.</td></tr><tr><td><code>404</code></td><td>Unknown path</td><td>Fix the URL.</td></tr><tr><td><code>405</code></td><td>Right path, wrong method</td><td>Fix the method. <code>PUT /state</code>, <code>POST /state/{id}</code>.</td></tr><tr><td><code>409</code></td><td><strong>The pin rule</strong> refused an automated write</td><td>Not an error. The full status body is merged into the response - read it and carry on. Do not retry.</td></tr><tr><td><code>409</code></td><td><code>/on</code> or <code>/off</code> with no shortcut row configured</td><td>The body is <code>{"error":...}</code> and nothing else. Only a person can fix it. Surface it; do not retry.</td></tr><tr><td><code>409</code></td><td>A config save carrying a stale <code>version</code></td><td>Refetch, re-apply your change, submit once more.</td></tr><tr><td><code>500</code></td><td>An internal server fault</td><td>Retry once with backoff; if it repeats, report it.</td></tr><tr><td><code>501</code></td><td>A route whose backing store is not wired up</td><td>Configuration problem on the server, not yours.</td></tr><tr><td><code>507</code></td><td>A config save could not reach disk</td><td>The running config is untouched. Report it.</td></tr></tbody></table></div>
+<p><strong>Three different things return <code>409</code> and only one of them carries a status body.</strong> The pin refusal merges the full state in, so you can see what stands without a second request. The other two carry <code>{"error":...}</code> alone - a client that reads <code>.state</code> off any <code>409</code> gets <code>undefined</code>. Branch on the shape, not on the code.</p>
+<p>A body over 16 KB is a <code>400</code>, not a <code>413</code> and not a <code>500</code>: the read fails inside the same parse that would have rejected bad JSON, so it arrives as <code>malformed JSON body: request body too large</code>. There is no size at which retrying helps.</p>
+<p>An unknown state id is a <code>400</code> that <strong>lists the valid ids</strong> and never falls back to a default. A typo that resolved to a row would resolve to whatever that row means, and the whole point of this system is that nothing gets to guess.</p>
 <hr>
 <h2>10. Two worked examples</h2>
 <h3>A minimal automated writer</h3>
+<p>It writes, it confirms, and it retries only what retrying can fix.</p>
 <pre><code>#!/usr/bin/env bash
 set -euo pipefail
 BASE="\${ONAIR_BASE:-http://127.0.0.1:8484}"
 PASS="\${ONAIR_PASSPHRASE:?set ONAIR_PASSPHRASE}"
+AUTH=(-H "Authorization: Bearer $PASS")
 
-write() {  # write &lt;state-id&gt;
-  local code body
-  body=$(curl -sS -w '\\n%{http_code}' -X PUT "$BASE/state" \\
-    -H "Authorization: Bearer $PASS" -H 'content-type: application/json' \\
-    -d "{\\"state\\":\\"$1\\",\\"source\\":\\"auto:mydetector\\"}")
+# 0 accepted | 1 transient, retry | 2 our bug, never retry | 3 the pin decided
+write() {
+  local body code rc=0
+  body=$(curl -sS -m 5 -w '\\n%{http_code}' -X PUT "$BASE/state" "\${AUTH[@]}" \\
+    -H 'content-type: application/json' \\
+    -d "{\\"state\\":\\"$1\\",\\"source\\":\\"auto:mydetector\\"}") || rc=$?
+  [ "$rc" = 0 ] || { echo "curl failed ($rc)" &gt;&amp;2; return 1; }
   code=\${body##*$'\\n'}
   case "$code" in
-    200) return 0 ;;
-    409) echo "held; the pin refused this write - not retrying" &gt;&amp;2; return 0 ;;
-    400|403) echo "client bug: \${body%$'\\n'*}" &gt;&amp;2; return 2 ;;
-    *)   echo "transient: $code" &gt;&amp;2; return 1 ;;
+    200)         return 0 ;;
+    409)         echo "the pin refused this: \${body%$'\\n'*}" &gt;&amp;2; return 3 ;;
+    400|401|403) echo "not retryable: \${body%$'\\n'*}" &gt;&amp;2; return 2 ;;
+    *)           echo "transient: HTTP $code" &gt;&amp;2; return 1 ;;
   esac
 }
 
-write on-air || true</code></pre>
-<p>Note what it does <strong>not</strong> do: no heartbeat, no retry on <code>409</code>, no retry on <code>400</code>.</p>
-<h3>A minimal renderer</h3>
-<pre><code>const BASE = 'http://onair.local:8484', PASS = '...';
-const POLL_MS = 1000, LOST_MS = 60_000, NODATA_MS = 30 * 60_000;
+confirmed() {
+  curl -sS -m 5 "$BASE/status" "\${AUTH[@]}" \\
+    | sed -n 's/.*"confirmed":"\\([^"]*\\)".*/\\1/p'
+}
 
-let table = new Map(), tableVersion = -1, lastOk = Date.now(), last = null;
+# The write is not finished until the LIGHT agrees. Nothing here runs on a timer
+# afterwards: once confirmed, stop.
+set_state() {
+  local attempt rc i
+  for attempt in 1 2 3; do
+    rc=0; write "$1" || rc=$?
+    case $rc in
+      2) return 2 ;;                              # identical retry fails identically
+      3) return 0 ;;                              # the pin decided, and that IS the answer
+      1) sleep $((attempt * 2)); continue ;;
+    esac
+    for ((i = 0; i &lt; 20; i++)); do
+      if [ "$(confirmed)" = "$1" ]; then return 0; fi
+      sleep 0.5
+    done
+    echo "wrote $1, but the light never confirmed it" &gt;&amp;2
+  done
+  return 1
+}
+
+set_state on-air</code></pre>
+<p><code>400</code>, <code>401</code> and <code>403</code> are never retried: the next identical request fails identically. A <code>409</code> is not retried either, but it is not a failure - the pin reached a decision, and that decision is the answer.</p>
+<h3>A minimal renderer</h3>
+<pre><code>// Configuration, not constants: all three thresholds have to be settable.
+const cfg = {
+  base: 'http://onair.local:8484', pass: '...',
+  pollMs: 1000, lostMs: 60_000, noDataMs: 30 * 60_000,
+};
+
+let table = new Map(), tableVersion = -1, lastOk = 0, last = null, authError = null;
 
 async function get(path) {
-  const r = await fetch(BASE + path, { headers: { Authorization: \`Bearer \${PASS}\` } });
-  if (!r.ok) throw new Error(\`\${path} -&gt; \${r.status}\`);
+  const r = await fetch(cfg.base + path, { headers: { Authorization: \`Bearer \${cfg.pass}\` } });
+  if (!r.ok) throw Object.assign(new Error(\`\${path} -&gt; \${r.status}\`), { status: r.status });
   return r.json();
 }
 
@@ -236,20 +270,28 @@ async function refreshTable() {
 async function tick() {
   try {
     const s = await get('/status');
-    lastOk = Date.now();
-    last = s;
+    // Contact is what resets the clock, and /status alone is contact.
+    lastOk = Date.now(); last = s; authError = null;
     if (s.tableVersion !== tableVersion) await refreshTable();
-  } catch {
-    // Deliberately swallowed: the age of lastOk is the only thing that decides what we draw.
+  } catch (e) {
+    // A wrong passphrase is not a network problem and waiting will never fix it. Without
+    // this branch it reads as "connected" for a minute and "connection lost" for 29 more,
+    // and never once mentions the credential.
+    if (e.status === 401) authError = 'check the passphrase';
   }
   const age = Date.now() - lastOk;
-  if (last === null || age &gt; NODATA_MS) return drawNoData();          // condition 3
-  // A missing row resolves to \`unknown\`, never to a default that might be calm.
-  drawState(table.get(last.state) ?? table.get('unknown'), age &gt; LOST_MS);  // 1 and 2
+  // No table means no row can be resolved, so this is NO DATA - never a default that
+  // might be calm.
+  if (last === null || table.size === 0 || age &gt; cfg.noDataMs) return drawNoData(authError);
+  drawState(table.get(last.state) ?? table.get('unknown'), age &gt; cfg.lostMs, authError);
 }
 
-await refreshTable();
-setInterval(tick, POLL_MS);</code></pre>
+// Boots even when the server is ALREADY down. A top-level \`await refreshTable()\` that
+// throws takes the whole script with it - no interval, no first paint, a permanently
+// blank display - which is exactly the condition the display exists to report.
+refreshTable().catch(() =&gt; {});
+setInterval(tick, cfg.pollMs);
+tick();</code></pre>
 <hr>
 <h2>11. Checklist before you ship a client</h2>
 <ul><li class="task"><input type="checkbox" disabled>Automated writer? You use <code>PUT /state</code> with an <code>auto:</code> prefixed <code>source</code>.</li><li class="task"><input type="checkbox" disabled>You treat <code>409</code> as the system working, not as a retry signal.</li><li class="task"><input type="checkbox" disabled>You never retry a <code>400</code> or a <code>403</code> unchanged.</li><li class="task"><input type="checkbox" disabled>You confirm your own writes rather than assuming they landed, and you stop once confirmed rather than heartbeating.</li><li class="task"><input type="checkbox" disabled>You fetch the table from <code>GET /config/states</code> instead of hardcoding state ids, labels or colours, and you refetch when <code>tableVersion</code> moves.</li><li class="task"><input type="checkbox" disabled>You address rows by <code>id</code> and never by <code>order</code>.</li><li class="task"><input type="checkbox" disabled>Renderer? You implement all three conditions, including the middle one.</li><li class="task"><input type="checkbox" disabled>Every unknown, malformed or missing value in your client renders <strong>not calm</strong>.</li><li class="task"><input type="checkbox" disabled>You poll. Any stream you use is an optimisation on top of that poll.</li><li class="task"><input type="checkbox" disabled>Your passphrase travels in a header on everything except <code>EventSource</code> and the WS upgrade.</li></ul>

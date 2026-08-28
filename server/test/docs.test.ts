@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -104,4 +104,71 @@ test('every endpoint the guide names still exists', async (t) => {
   // And the two that are excluded above are excluded for a reason, not because they are gone.
   assert.equal(paths.has('/state/{id}'), true);
   assert.equal(paths.has('/events/ws'), true);
+});
+
+test('the renderer example in the guide actually implements the client contract', async (t) => {
+  // The examples are the part of a guide people copy, so they are RUN, not read. The bug
+  // this exists for was real: booting with `await refreshTable()` at the top level meant a
+  // server that was already down threw at import, so the interval never started and the
+  // display painted NOTHING - which is precisely the condition a status display exists to
+  // report. Reading the code did not catch it; running it did.
+  const js = [...readFileSync(GUIDE, 'utf8').matchAll(/```js\n([\s\S]*?)```/g)].at(-1)![1]!;
+  const dir = await mkdtemp(join(tmpdir(), 'onair-example-'));
+
+  // The example arms a real setInterval, which would keep this process alive for ever and
+  // race every assertion below with background ticks. Ticks are driven by hand instead.
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (() => 0) as unknown as typeof globalThis.setInterval;
+  t.after(() => {
+    globalThis.setInterval = realSetInterval;
+  });
+
+  const painted: string[] = [];
+  // Prefixed because the reserved row's LABEL is also the words "NO DATA": without this the
+  // harness cannot tell giving-up apart from correctly drawing the unknown row.
+  (globalThis as Record<string, unknown>).drawNoData = () => painted.push('drawNoData');
+  (globalThis as Record<string, unknown>).drawState = (row: { label: string } | undefined) =>
+    painted.push(row === undefined ? 'UNDEFINED-ROW' : `drawState:${row.label}`);
+
+  const load = async (base: string, tag: string) => {
+    const f = join(dir, `${tag}.mjs`);
+    writeFileSync(f, `${js.replace("base: 'http://onair.local:8484', pass: '...',", `base: ${JSON.stringify(base)}, pass: 'onair',`)}\nexport {tick, cfg, table};\n`);
+    return (await import(`file://${f}`)) as { tick: () => Promise<void>; cfg: Record<string, number>; table: Map<string, unknown> };
+  };
+
+  // Port 9 is discard: nothing listens, so this is "the server was already down at boot".
+  const dead = await load('http://127.0.0.1:9', 'dead');
+  await dead.tick();
+  // The module paints once on its own at import and once for the tick above. What matters is
+  // that it painted AT ALL - the bug produced an empty array - and that nothing it painted
+  // was a state.
+  assert.ok(painted.length > 0, 'a server down at boot left the display painting nothing');
+  assert.deepEqual([...new Set(painted)], ['drawNoData'], `expected only NO DATA, got ${painted.join(',')}`);
+
+  const base = await boot(t);
+  await fetch(`${base}/state`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ state: 'on-air', source: 'auto:probe' }),
+  });
+
+  painted.length = 0;
+  const live = await load(base, 'live');
+  await live.tick();
+  assert.equal(painted.at(-1), 'drawState:ON AIR');
+
+  // An empty table can resolve no row at all, so it is NO DATA - never a default that might
+  // be calm, and never an undefined row handed to the renderer.
+  painted.length = 0;
+  live.table.clear();
+  await live.tick();
+  live.table.clear();
+  await live.tick();
+  assert.equal(painted.at(-1), 'drawNoData', 'an empty table must not reach drawState');
+
+  // The three thresholds are configuration, exactly as section 5 demands of the reader.
+  painted.length = 0;
+  live.cfg.noDataMs = -1;
+  await live.tick();
+  assert.equal(painted.at(-1), 'drawNoData');
 });
