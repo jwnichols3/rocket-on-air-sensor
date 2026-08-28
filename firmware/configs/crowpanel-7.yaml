@@ -89,6 +89,12 @@ font:
   - file: "gfonts://Roboto"
     id: band_text
     size: 22
+  # The overlay clock (#71). Large enough to read across a room, and deliberately SMALLER
+  # than label_huge: the state is what this panel exists to say and the time must not
+  # out-shout it. At 72px "12:34 PM" is ~330 of the 800px width.
+  - file: "gfonts://Roboto@700"
+    id: clock_big
+    size: 72
 
 # ---- the repaint request, consumed (#64) -----------------------------------------
 #
@@ -182,33 +188,49 @@ display:
       Color bg = slate, fg = ink;
       bool hatched = false;
 
+      // ---- WHERE THE STATE RENDER LIVES, and the one place the clock costs anything (#71).
+      //
+      // With the clock off this is the whole panel above the diagnostics band, unchanged.
+      // With it on, the top 140px become the clock's and the state render is mapped into
+      // what is left. Every y in the branches below is still written in the ORIGINAL 0..430
+      // coordinates and passed through sy(), so each branch stays readable as a layout and
+      // there is exactly one line to look at when asking how the clock moved something.
+      //
+      // A MAP AND NOT A SHIFT, which was the first thing tried and does not work: the row
+      // branch's "NOT REFRESHING" line already sits at 360, so shifting it down by the strip
+      // height would push it into the band. Scaling keeps every branch inside its own space.
+      const int BAND_TOP = 430;
+      const bool clock_on = id(show_clock).state;
+      const int state_top = clock_on ? 140 : 0;
+      auto sy = [&](int y) { return state_top + y * (BAND_TOP - state_top) / BAND_TOP; };
+
       if (view.shape == onair::Shape::NO_CONFIG) {
         // NO CONFIG - the table has never arrived, so there is no row to render and no
         // claim this panel is entitled to make. Distinct from NO DATA on purpose: NO DATA
         // means the SERVER stopped talking about state, this means WE have never heard the
         // vocabulary. Different fix, different picture.
         it.fill(slate);
-        hatch_over(0, 300, Color(60, 64, 72));
-        it.printf(400, 150, id(label_big), ink, TextAlign::CENTER, "NO CONFIG");
-        it.printf(400, 330, id(note_text), dim, TextAlign::CENTER, "%s",
+        hatch_over(sy(0), sy(300), Color(60, 64, 72));
+        it.printf(400, sy(150), id(label_big), ink, TextAlign::CENTER, "NO CONFIG");
+        it.printf(400, sy(330), id(note_text), dim, TextAlign::CENTER, "%s",
                   id(server_host).state.empty() ? "no server set" : id(server_host).state.c_str());
         id(render_branch) = 6;
       } else if (view.shape == onair::Shape::UNKNOWN_KEY) {
         // UNKNOWN KEY - the server named a state this build cannot draw. The key itself
         // goes on the glass so a firmware/server skew is diagnosable from across the room.
         it.fill(slate);
-        it.filled_rectangle(0, 0, 800, 110, Color(90, 60, 20));
-        it.printf(400, 55, id(label_big), ink, TextAlign::CENTER, "UNKNOWN KEY");
-        it.printf(400, 220, id(note_text), ink, TextAlign::CENTER, "%s",
+        it.filled_rectangle(0, sy(0), 800, sy(110) - sy(0), Color(90, 60, 20));
+        it.printf(400, sy(55), id(label_big), ink, TextAlign::CENTER, "UNKNOWN KEY");
+        it.printf(400, sy(220), id(note_text), ink, TextAlign::CENTER, "%s",
                   view.key.empty() ? "(no state)" : view.key.c_str());
-        hatch_over(300, 400, Color(60, 64, 72));
+        hatch_over(sy(300), sy(400), Color(60, 64, 72));
         id(render_branch) = 4;
       } else if (view.shape == onair::Shape::NO_DATA) {
         // NO DATA - never blank, never calm. Blank reads as "nothing is happening", which
         // is a claim, and it is the one claim this panel has no evidence for.
         it.fill(slate);
-        hatch_over(0, 300, Color(70, 74, 82));
-        it.printf(400, 150, id(label_big), ink, TextAlign::CENTER, "NO DATA");
+        hatch_over(sy(0), sy(300), Color(70, 74, 82));
+        it.printf(400, sy(150), id(label_big), ink, TextAlign::CENTER, "NO DATA");
         id(render_branch) = 3;
       } else {
         // A ROW, drawn in the operator's own colours - INCLUDING a calm one that is no
@@ -238,14 +260,32 @@ display:
         it.fill(bg);
         // A long label will not fit at 110px. Pick the size from the label, not the row.
         auto f = strlen(label) > 9 ? id(label_big) : id(label_huge);
-        it.printf(400, 210, f, fg, TextAlign::CENTER, "%s", label);
+        it.printf(400, sy(210), f, fg, TextAlign::CENTER, "%s", label);
 
         if (hatched) {
-          hatch_over(0, 400, fg);
-          it.printf(400, 360, id(note_text), fg, TextAlign::CENTER,
+          // FROM sy(0), so the hatch never crosses the clock strip. The hatch means "this
+          // STATE is not being refreshed", and that claim is about the state - the clock is
+          // local and keeps ticking regardless, so hatching it would be a false statement.
+          hatch_over(sy(0), sy(400), fg);
+          it.printf(400, sy(360), id(note_text), fg, TextAlign::CENTER,
                     "NOT REFRESHING - SHOWING LAST KNOWN");
         }
         id(render_branch) = (int) view.shape;
+      }
+
+      // ---- THE CLOCK, OVER THE STATE (#71) --------------------------------------------
+      //
+      // LAST of the state area and not first, because every branch begins with it.fill() -
+      // drawn earlier it would be painted over. Drawing it here also means it lands on the
+      // ROW'S OWN background in `fg`, so it is legible on every colour in the table without
+      // this file knowing any of them.
+      //
+      // Centred at y=74 with a 72px font, so its top edge is ~38px - 8% of the 480px panel,
+      // inside the 5-10% margin asked for.
+      if (clock_on) {
+        auto t = id(wall_clock).now();
+        it.print(400, 74, id(clock_big), fg, TextAlign::CENTER,
+                 onair::format_clock(t.is_valid(), t.hour, t.minute).c_str());
       }
 
       // ---- diagnostics band LAST, y>=430 is reserved and never overdrawn ----
@@ -261,15 +301,9 @@ display:
                   id(wifi_signal_db).state);
       }
 
-      // THE CLOCK (#69), centred between the IP and the signal. 800px has room for a third
-      // thing in this band and 128px does not, which is the whole reason the Elegoo answers
-      // the same switch differently. WHETHER to draw it is the core's; this file knows only
-      // where it fits, which is D-85's split.
-      if (id(show_clock).state) {
-        auto t = id(wall_clock).now();
-        it.print(400, 445, id(band_text), dim, TextAlign::TOP_CENTER,
-                 onair::format_clock(t.is_valid(), t.hour, t.minute).c_str());
-      }
+      // NOTE: the clock used to sit here, centred in this band at 22px. It was legible from a
+      // desk and not from across the room, which is the distance this panel is read at (#71).
+      // It is drawn over the state now; the band is diagnostics only again.
 
       // Last statement on every path: proves the panel repainted.
       id(frames)++;

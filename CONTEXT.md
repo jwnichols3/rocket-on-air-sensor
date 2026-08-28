@@ -3783,3 +3783,52 @@ else (state, light control, API) lives on the receiver.
   `action` value the page emits and fails on one the handler does not recognise. It failed on
   `glass` the first time the bar rendered. That test is doing exactly the job it was written
   for. Firmware host checks 156 -> 183.
+
+- **D-112 (2026-08-27)** **The clock is drawn OVER the state, not in the diagnostics band -
+  and the state render is MAPPED into what is left rather than shifted.** Closes #71.
+  Amends D-110's placement on the CrowPanel; the Elegoo's is unchanged.
+
+  D-110 put the clock in the diagnostics band at 22px, next to the IP and the signal. Rocket's
+  verdict was **too small**: legible from a desk, not from across the room, and across the
+  room is the distance this panel is read at. The band was the wrong home because the band is
+  for things you go and look for; the clock is something you want to catch at a glance, which
+  makes it the state's neighbour rather than the diagnostics'.
+
+  **A MAP, NOT A SHIFT, and that is the whole finding.** Shifting every branch down by the
+  strip height is the obvious move and it does not work: the row branch's "NOT REFRESHING"
+  line already sits at y=360, so shifting it by ~140 would push it into the band at 430. So
+  each branch keeps its ORIGINAL 0..430 coordinates and passes every y through one `sy()`
+  that maps 0..430 onto `state_top..430`.
+
+  Two things fall out of that, both worth having. With the clock off `state_top` is 0 and
+  `sy()` is the IDENTITY - the panel draws exactly what it drew before, byte for byte, so the
+  default path is not a new layout at all. And each branch still reads as a layout rather than
+  as arithmetic, with one line to look at when asking how the clock moved something.
+
+  Checked before flashing, because a display lambda cannot be host-tested and the glass cannot
+  be read over HTTP. With the strip on, every branch's text spans **145..409** inside a
+  140..430 area; the clock spans 38..110, a **7.9%** top margin against the 5-10% asked for.
+  Nothing crosses the band and nothing crosses the strip.
+
+  **Drawn after the branches, not before**, since every branch opens with `it.fill()` and
+  would paint over it. That also lands it on the ROW'S OWN background in `fg`, so it is
+  legible on every colour in the table without the board file knowing any of them.
+
+  **The unrefreshed hatch stops at `sy(0)` and never crosses the clock.** The hatch means
+  *this state is not being refreshed*, and that claim is about the state. The clock is local
+  and keeps ticking whatever the server is doing, so hatching it would be a false statement -
+  the same standard D-110 applied when it refused to draw 1970.
+
+  72px against `label_huge`'s 110, deliberately: the state is what this panel exists to say
+  and the time must not out-shout it.
+
+  **Not the Elegoo.** Its state area is 48px tall and its status word is already 30px of it.
+  There is no room for a large clock above it, so there the clock stays in the band taking the
+  IP's slot (D-111). D-85's split again, and the third time these two boards have honestly
+  needed different answers to the same switch.
+
+  Verified live after the flash: `--:--` rendered in the new font for the first seconds after
+  boot, then `6:17 PM` on the glass and `Showing 6:17 PM` on the config page, against the
+  Mac's 6:17 PM. Repaints continuing, heap free 210,668 with a 163,840 largest block.
+  **The pixels themselves are unverified by me** - nobody can read this panel over HTTP, which
+  is exactly why the `Clock` sensor exists, and it is a position check that sensor cannot make.
