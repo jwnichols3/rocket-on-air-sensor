@@ -3678,3 +3678,57 @@ else (state, light control, API) lives on the receiver.
 
   Verified live: daemon cycled onto the new build, `state=available, confirmed=available`, and
   no `[esphome-driver]` line at all against a healthy panel.
+
+- **D-110 (2026-08-27)** **A panel can show the wall clock, it takes its time from SNTP, and
+  it is off by default.** Closes #69.
+
+  **SNTP is the only source this product already has**, and that is a conclusion rather than a
+  default. There is no Home Assistant to take time from, neither board carries an RTC, and
+  pushing the time from the server would have put a clock in `docs/api-contract.md` and still
+  needed local interpolation between polls - real work for a worse answer.
+
+  Which is exactly why the clock is drawn only when it is VALID. The source can simply never
+  arrive: a panel on a network with no route to an NTP server is a case that has to render, so
+  it renders as `--:--`. An ESP32 with no time set reports 1970, and a panel confidently
+  showing 1970 is the same class of lie as one showing a state it cannot vouch for. Blank was
+  rejected for the same reason - an empty slot reads as "the clock is off", which is a
+  different fact from "the clock is on and does not know the time".
+
+  **WHETHER is the core's, WHERE is the board's** (D-85), and the two boards genuinely answer
+  differently. The CrowPanel has 800x480 and drops the clock in the middle of its diagnostics
+  band, keeping the IP and the signal. The Elegoo's band is 128px and already spends ~123 of
+  them on `IP: 192.168.1.123` plus `-52dBm`, so there is no third slot - there the clock TAKES
+  THE IP's slot, because the 48px above the band belongs to the state and is never overdrawn.
+  The IP is still on `/onair`, on the ESPHome dashboard and in the router's lease table; the
+  clock has nowhere else to be.
+
+  **Off by default.** A panel exists to answer one question from across a room and the time is
+  not that question. `RESTORE_DEFAULT_OFF` for `auto_profile`'s reasoning: the stored value
+  wins, so the choice survives a reboot - and it survived an OTA reflash, measured.
+
+  **The minute tick is the part that is not obvious.** The CrowPanel paints on
+  `repaint_pending` alone (#64) with a 30s safety net, so a clock left to that net would show
+  a minute up to 30 seconds late, which is visibly wrong in the one way a clock is not allowed
+  to be. `on_time: seconds: 0` asks for the repaint exactly when the digits change. It is
+  GATED on the switch, or a panel with the clock off would force a full 800x480 repaint every
+  minute forever to redraw a frame nobody asked for - the waste #64 removed.
+
+  Measured on the live CrowPanel over identical 3-minute windows, state static at CALM:
+  **12 repaints with the clock on, 9 with it off.** Exactly one extra per minute, only when
+  the switch is on.
+
+  **The rendered string is shared, not copied** - `onair::format_clock()` in `onair_table.h`,
+  for the same reason `compute_view()` is there. Two renderers drawing a clock from two copies
+  of the 12-hour wrap would drift, and it makes the format testable on the host, which a
+  display lambda is not. 9 host checks cover both ends of the wrap; midnight-as-0 and
+  noon-as-0 are the two ways this arithmetic goes wrong.
+
+  A `Clock` text sensor publishes exactly what the glass draws, or `off`. That is Render and
+  RowLabel's job repeated for the same reason - what reached the glass should be readable, not
+  asserted - and the argument is stronger here, because **this panel is moving to WiFi-only and
+  will have no serial log**, and a clock is the one thing on the glass whose correctness cannot
+  be checked by reading state out of the server. It is what proved this feature: panel `5:30
+  PM` against the Mac's `5:30 PM`, after 31 seconds of `--:--` while SNTP had not yet answered.
+
+  Not investigated here: the 30s safety net predicts 6 repaints in 180s and the idle panel
+  does 9. Pre-existing - with the clock off, nothing added by this ticket sets the flag.

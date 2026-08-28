@@ -383,6 +383,40 @@ inline std::string format_hex_color(uint32_t value) {
   return std::string(buf);
 }
 
+/// What a panel shows when the clock is on but SNTP has not answered yet. Deliberately not
+/// blank: an empty slot reads as "the clock is off", and that is a different fact from "the
+/// clock is on and does not know the time". An ESP32 with no time set reports 1970, and a
+/// panel confidently showing 1970 is the same class of lie as one showing a state it cannot
+/// vouch for - so the unknown is drawn as an unknown.
+inline constexpr const char *CLOCK_UNSET = "--:--";
+
+/**
+ * The wall clock exactly as it reaches the glass (#69).
+ *
+ * SHARED for the same reason compute_view() is: two renderers drawing a clock from two
+ * copies of this arithmetic would drift, and a panel disagreeing with the panel next to it
+ * about the time is the small version of the failure onair_table.h exists to prevent. It
+ * also makes the format testable on the host, which a display lambda is not.
+ *
+ * 12-hour with no leading zero, because the shipped timezone is a US one. One line to
+ * change if that stops being true; the callers do not care which way it goes.
+ *
+ * VALIDITY IS THE CALLER'S JOB, and it is passed in rather than inferred, because ESPTime
+ * does not exist in the host test shim. `hour` is taken as-written for the AM/PM decision,
+ * so an out-of-range value stays visibly wrong rather than being clamped into something
+ * that looks like a real time.
+ */
+inline std::string format_clock(bool valid, uint8_t hour, uint8_t minute) {
+  if (!valid)
+    return std::string(CLOCK_UNSET);
+  int h = hour % 12;
+  if (h == 0)
+    h = 12;
+  char buf[12];
+  snprintf(buf, sizeof(buf), "%d:%02u %s", h, (unsigned) minute, hour < 12 ? "AM" : "PM");
+  return std::string(buf);
+}
+
 /**
  * Parses a `GET /config/states` body.
  *

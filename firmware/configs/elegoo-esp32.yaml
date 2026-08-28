@@ -62,7 +62,17 @@ display:
     lambda: |-
       // ---- diagnostics band FIRST, y>=49 is reserved and never overdrawn ----
       it.line(0, 49, 127, 49);
-      if (id(ip_address).has_state()) {
+      // THE CLOCK TAKES THE IP's SLOT (#69), and that is forced rather than preferred:
+      // "IP: 192.168.1.123" plus "-52dBm" already spends ~123 of this band's 128 pixels, so
+      // there is no third slot to put a clock in. The 48px above the band belongs to the
+      // state and is never overdrawn, so the choice is the IP or nothing - and the IP is
+      // still on /onair, on the ESPHome dashboard and in the router's lease table, while the
+      // clock has nowhere else to be. The CrowPanel has the room and keeps both.
+      if (id(show_clock).state) {
+        auto t = id(wall_clock).now();
+        it.print(0, 52, id(status_text),
+                 onair::format_clock(t.is_valid(), t.hour, t.minute).c_str());
+      } else if (id(ip_address).has_state()) {
         it.printf(0, 52, id(status_text), "IP: %s", id(ip_address).state.c_str());
       } else {
         it.print(0, 52, id(status_text), "IP: connecting...");

@@ -775,6 +775,31 @@ static void test_staging() {
   onair::held().cmd = onair::Command{};
 }
 
+// ---- #69: the wall clock's string --------------------------------------------------
+//
+// Worth a test at all because a display lambda cannot have one. The whole point of putting
+// this in onair_table.h rather than in each board file is that the format becomes something
+// the host can check - the same argument that put compute_view() there.
+static void test_clock() {
+  begin("no time yet is drawn as an unknown, not as a blank and never as 1970");
+  CHECK(onair::format_clock(false, 0, 0) == "--:--");
+  CHECK_MSG(onair::format_clock(false, 17, 30) == "--:--",
+            "an invalid clock must ignore its numbers rather than dress them up");
+
+  begin("12-hour, no leading zero on the hour, always two digits on the minute");
+  CHECK(onair::format_clock(true, 17, 30) == "5:30 PM");
+  CHECK(onair::format_clock(true, 9, 5) == "9:05 AM");
+
+  begin("both ends of the 12-hour wrap, which is where this arithmetic goes wrong");
+  CHECK_MSG(onair::format_clock(true, 0, 0) == "12:00 AM", "midnight is 12 AM, not 0 AM");
+  CHECK_MSG(onair::format_clock(true, 12, 0) == "12:00 PM", "noon is 12 PM, not 0 PM");
+  CHECK(onair::format_clock(true, 11, 59) == "11:59 AM");
+  CHECK(onair::format_clock(true, 23, 59) == "11:59 PM");
+
+  begin("the string fits the buffer it is built in");
+  CHECK(onair::format_clock(true, 23, 59).size() < 12);
+}
+
 int main() {
   printf("onair page tests\n\n");
   g_task_yield_hook = onair::pump;
@@ -790,6 +815,7 @@ int main() {
   test_status_page();
   test_registration();
   test_staging();
+  test_clock();
 
   printf("\n%d checks, %d failed\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;

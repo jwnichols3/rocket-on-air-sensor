@@ -15,6 +15,16 @@
 #
 # Every board file must define: device_name, friendly_name, onair_default_passphrase.
 
+# A DEFAULT, not a fixture. ESPHome merges a package's substitutions with the including
+# file's and the includer wins, so any board file can override this with one line - MEASURED
+# by setting it to UTC in a board file and reading the timezone back out of `esphome config`,
+# not assumed from the docs.
+#
+# It lives in the core rather than in each board because a timezone is a property of where a
+# panel HANGS, not of what glass it uses, and every panel in this system hangs in one house.
+substitutions:
+  onair_timezone: America/Los_Angeles
+
 esphome:
   # The state table, its lookup, its parser, the local presentation overlay and the
   # effective-row computation both renderers share (onair_table.h); and the two pages the
@@ -140,6 +150,36 @@ web_server:
     # MUST be explicit: the default flips to digest in ESPHome 2027.1.0, which would
     # silently break every driver request.
     type: basic
+
+# ---- the wall clock (#69) ----------------------------------------------------------
+#
+# SNTP AND NOTHING ELSE, and that is a conclusion rather than a default. There is no Home
+# Assistant in this system to take time from, neither board carries an RTC, and pushing the
+# time from the server would put a clock in docs/api-contract.md and still need local
+# interpolation between polls - real work for a worse answer. The network is the only source
+# this product already has.
+#
+# Which is also why the clock is drawn only when it is VALID: this source can simply never
+# arrive. A panel on a network with no route to an NTP server is a case that has to render,
+# and it renders as CLOCK_UNSET. See format_clock() in onair_table.h.
+time:
+  - platform: sntp
+    id: wall_clock
+    timezone: ${onair_timezone}
+    # THE MINUTE TICK, and the only reason this component is more than a data source.
+    #
+    # The CrowPanel paints on `repaint_pending` alone (#64) with a 30s safety net, so a
+    # clock left to that net would show a minute up to 30 seconds late - which is visibly
+    # wrong in the one way a clock is not allowed to be wrong. This asks for the repaint
+    # exactly when the digits change.
+    #
+    # GATED on the switch, so a panel with the clock off pays nothing for this: without the
+    # test it would force a full 800x480 repaint every minute, forever, to redraw a frame
+    # nobody asked for. That is the same waste #64 removed.
+    on_time:
+      - seconds: 0
+        then:
+          - lambda: 'if (id(show_clock).state) id(repaint_pending) = true;'
 
 globals:
   - id: frames
@@ -421,6 +461,33 @@ switch:
     id: auto_profile
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+
+  # The wall clock ON THE GLASS (#69), off by default. A panel exists to answer one question
+  # from across a room and the time is not that question, so it is opt-in - and off is also
+  # the honest default for a setting whose data source may never arrive.
+  #
+  # RESTORE_DEFAULT_OFF for auto_profile's reasoning above: the STORED value wins and the
+  # default applies only when there is nothing stored, so the choice survives a reboot.
+  #
+  # WHETHER lives here; WHERE is board knowledge (D-85). The CrowPanel has 800x480 and puts
+  # the clock in the middle of its diagnostics band with room to spare. The Elegoo's 128px
+  # band is already full at IP + signal, so there the clock TAKES THE IP's slot. One switch,
+  # two honest answers, each decided by the file that knows the glass.
+  #
+  # Both triggers request a repaint, because on the CrowPanel nothing else would: toggling
+  # this changes the picture with nothing arriving from the server, so without these the
+  # switch would appear to do nothing for up to 30 seconds.
+  - platform: template
+    name: "ShowClock"
+    id: show_clock
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - lambda: 'id(repaint_pending) = true;'
+    on_turn_off:
+      then:
+        - lambda: 'id(repaint_pending) = true;'
 
   # NOTE: the onboard-LED switch that used to sit here moved to elegoo-esp32.yaml. It names
   # a PIN, which makes it board knowledge by this file's own rule - and GPIO2 is the
@@ -793,6 +860,26 @@ text_sensor:
                (unsigned) onair::held().oks, (unsigned) onair::held().failures,
                (unsigned) onair::held().overlay.size());
       return {std::string(buf)};
+  - platform: template
+    # The clock EXACTLY as the glass draws it (#69), and "off" when it is not drawn at all.
+    #
+    # The same job Render and RowLabel do, for the same reason: these sensors exist so that
+    # what reached the glass is READABLE rather than asserted. That argument gets stronger
+    # here, because this panel is moving to WiFi-only and will have no serial log to fall
+    # back on - a clock is the one thing on the glass whose correctness nobody can check by
+    # reading state out of the server.
+    #
+    # It also makes SNTP's own state legible. `--:--` is a panel that has never been told the
+    # time, and from across a room that is indistinguishable from a clock that is merely
+    # wrong. Here they are different strings.
+    name: "Clock"
+    id: clock_sensor
+    update_interval: 5s
+    lambda: |-
+      if (!id(show_clock).state)
+        return {"off"};
+      auto t = id(wall_clock).now();
+      return {onair::format_clock(t.is_valid(), t.hour, t.minute)};
   - platform: wifi_info
     ip_address:
       name: "${friendly_name} IP Address"

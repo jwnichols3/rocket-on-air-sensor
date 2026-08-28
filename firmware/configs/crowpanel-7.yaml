@@ -261,5 +261,15 @@ display:
                   id(wifi_signal_db).state);
       }
 
+      // THE CLOCK (#69), centred between the IP and the signal. 800px has room for a third
+      // thing in this band and 128px does not, which is the whole reason the Elegoo answers
+      // the same switch differently. WHETHER to draw it is the core's; this file knows only
+      // where it fits, which is D-85's split.
+      if (id(show_clock).state) {
+        auto t = id(wall_clock).now();
+        it.print(400, 445, id(band_text), dim, TextAlign::TOP_CENTER,
+                 onair::format_clock(t.is_valid(), t.hour, t.minute).c_str());
+      }
+
       // Last statement on every path: proves the panel repainted.
       id(frames)++;
