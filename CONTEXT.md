@@ -3995,3 +3995,46 @@ else (state, light control, API) lives on the receiver.
   phantom nav on `/onair`, two miscounts of the table's grid children, and a proposal to delete
   CSS the Elegoo shares. Rocket answered "arrange the form logically" rather than picking a
   layout, so the ordering fix shipped and the navigation did not.
+
+- **D-116 (2026-08-28)** **The client guide is one markdown file, and `/docs` is generated
+  from it rather than written beside it.**
+
+  Rocket asked for instructions clients can follow when constructing API calls, as a markdown
+  file **and** as a page on the server. Two copies of the same document is the whole risk in
+  that request: the moment they can be edited independently they disagree, and a client guide
+  that disagrees with itself is worse than none - a reader has no way to tell which half is
+  stale.
+
+  So `docs/client-api-guide.md` is the single source, and `server/tools/gen-docs.mjs` renders
+  it into `server/src/docs-page.ts`, which `GET /docs` serves. `npm run docs:page:check` is in
+  `npm run verify`, exactly as `gen-assets --check` is - the build fails when the checked-in
+  page no longer matches the markdown. The generator implements only the markdown the guide
+  actually uses and is not a general implementation.
+
+  **The guide is not the contract.** `docs/api-contract.md` stays normative and the guide says
+  so on its first screen: where they disagree, the contract wins and the guide is the bug. The
+  guide is task-shaped - work out what kind of client you are, then send the right call - and
+  it repeats the contract's rules rather than restating them differently.
+
+  **`/docs` is unauthenticated**, alongside `/public/*`, `/display` and the admin shell. It
+  carries no credential, no configuration and no state; it is the repo's own markdown, and a
+  `401` on the page that explains how to authenticate is a door locked with the key inside.
+
+  **The test that earns its place** is not that the page contains particular sentences - that
+  is the copy-coupling that died with the luminance column in D-115. It is that **every
+  endpoint the guide names still exists**: the markdown is scanned for `` `GET /x` `` route
+  mentions and each is requested against a booted server, where a `404` fails and a `405`
+  passes, because a `405` proves the path is real. That catches the drift a generated page
+  cannot catch on its own - the guide describing a route that has been removed.
+
+  Two generator bugs were found by looking at the output rather than at the tests. Splitting a
+  line on backticks to protect code spans put the opening and closing `**` of a bold span that
+  *wrapped* a code span into different pieces, and fourteen of them reached the page as literal
+  asterisks; and `h2 { border-top }` drew a second rule under the `---` the markdown already
+  emits. Both are now regression-covered by the no-markdown-left assertion and by having
+  looked at the rendered page in a browser.
+
+  **Nothing links to `/docs` yet.** The admin console has no reference to it, so it is
+  reachable only by typing the path. Left that way deliberately: the console's navigation is
+  the thing Rocket is mid-way through redesigning (D-115), and adding a link to it is his call,
+  not a side effect of writing documentation.

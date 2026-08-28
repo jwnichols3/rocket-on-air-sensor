@@ -16,6 +16,7 @@ import { envOverrides, effectiveLight } from './config.js';
 import { validateConfig, type OnAirConfig } from './config-store.js';
 import type { LightDriver } from './driver.js';
 import { DISPLAY_HTML } from './display.js';
+import { DOCS_HTML } from './docs-page.js';
 import { escapeHtml, repairHtml } from './repair.js';
 import { createSseHub, type SseHub } from './sse.js';
 import {
@@ -73,6 +74,7 @@ const ROUTES: Record<string, string[]> = {
   '/message': ['PUT', 'DELETE'],
   '/events': ['GET'],
   '/display': ['GET'],
+  '/docs': ['GET'],
   '/admin/health': ['GET'],
   '/admin/restart': ['POST'],
   '/config/states': ['GET'],
@@ -116,6 +118,10 @@ function serveAdminBundle(res: ServerResponse): void {
  */
 function audienceFor(path: string): 'data' | 'admin' | 'public' {
   if (path === '/public/status' || path === '/public/events' || path === '/display') return 'public';
+  // The client guide. Unauthenticated because it carries no credential and no configuration -
+  // it is the repo's own markdown, and a 401 on the page that explains how to authenticate is
+  // a door locked with the key inside.
+  if (path === '/docs') return 'public';
   // The console's SHELL is unauthenticated and byte-identical for everyone; every value it
   // renders comes from a gated route (D-35). `/admin` exactly - not `/admin/` - so it does
   // not fall into the gated prefix below.
@@ -674,6 +680,14 @@ async function handle(
   if (path === '/display') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(DISPLAY_HTML);
+    return;
+  }
+
+  // GENERATED from docs/client-api-guide.md - see server/tools/gen-docs.mjs. Static, so it
+  // costs a string write and discloses nothing a caller could not read in the repo.
+  if (path === '/docs') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(DOCS_HTML);
     return;
   }
 
