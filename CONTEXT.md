@@ -3832,3 +3832,58 @@ else (state, light control, API) lives on the receiver.
   Mac's 6:17 PM. Repaints continuing, heap free 210,668 with a 163,840 largest block.
   **The pixels themselves are unverified by me** - nobody can read this panel over HTTP, which
   is exactly why the `Clock` sensor exists, and it is a position check that sensor cannot make.
+
+- **D-113 (2026-08-27)** **The panel gets a bench: an operator-held override of the glass,
+  behind `?bench=1`, that always lets go.** Closes #77's blocking half.
+
+  #77 asked for a power meter and a pair of eyes. The meter could not be found, and the eyes
+  are the half that actually decides - whether `ledc_stop(chan, 0)` reads as BLACK on
+  DIS08070H is in no source file, and no amount of reading settles it. So the panel grew an
+  instrument instead: six buttons that put the glass in a state, so the question can be
+  answered by looking.
+
+  Backlight 100 / 25 / 5 / Off, "Black" (an `it.fill` over the FINISHED frame, after the
+  diagnostics band, so the whole screen goes dark rather than a rectangle with a strip glowing
+  under it), and "Normal".
+
+  **EVERY OVERRIDE LETS GO, two ways, and this is the part that matters.** There is no touch
+  on this panel - the GT911 sits in reset behind the PCA9557 - so a bench that could leave the
+  glass dark with no way back would be a trap on a board whose only other surface is a web
+  page nobody can read in the dark.
+
+  - a two-minute timeout, the trap-door for a closed laptop;
+  - **and a busy row takes the glass back immediately.** A test is never worth a missed ON
+    AIR. This is D-6 and D-63 applied to our own instrument: if the bench could hold the glass
+    dark through an incoming call, it would be the invariant's own failure with the operator's
+    fingerprints on it.
+
+  Held-state release uses a signed millis() difference, so an override survives the 49-day
+  wrap rather than every override releasing at once.
+
+  **The black is painted, not branched.** Every render branch still runs, so `render_branch`
+  and the `Render` sensor keep reporting the state that WOULD be drawn. A bench that made the
+  panel lie about its own branch would be a poor instrument for settling whether a dark panel
+  lies.
+
+  **Behind `?bench=1`, and that is arithmetic rather than shyness.** The first draft cost
+  4228 B on the five-row config page against the 4000 B Pool A ceiling and the budget test
+  caught it - and that ceiling is real: a failed `reserve()` under `-fno-exceptions` is
+  `abort()`, which reboots the panel driving the light. A beta instrument must not tax every
+  page load of the thing it exists to measure. Trimming got it to 4098, still over; gating it
+  behind a footer link returned the default page to 3611 B.
+
+  **But an ACTIVE override renders with or without the query param.** A hidden control holding
+  the glass dark is the exact trap this feature is built to avoid.
+
+  Verified on the live CrowPanel: 25% -> `brightness 64` and `Bench=backlight25`; Normal ->
+  255 and `normal`; an unrecognised option -> 400 with the override untouched; six buttons
+  served at `?bench=1` and zero on the default page. 220 host checks, 0 failed.
+
+  **An OTA anomaly is NOT explained and is recorded rather than papered over.** Two uploads
+  reported "OTA successful", the device rebooted each time (`Frames` reset to 3), and it came
+  back running the PREVIOUS firmware - confirmed by the absence of the `Bench` text_sensor
+  that the built `main.cpp` demonstrably registers at line 1767. It later came up on the new
+  build with **no source change of any kind**. Cause unknown. `esphome upload` reporting
+  success while the old firmware keeps running is the D-100 failure wearing a new mask, and
+  the lesson stands: after a flash, wait for a MARKER THAT ONLY THE NEW BUILD HAS. Waiting for
+  `/onair` to answer proves nothing - the panel serves HTTP throughout the OTA write.

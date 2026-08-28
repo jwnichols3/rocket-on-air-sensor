@@ -639,8 +639,59 @@ inline void render_glass(std::string &h) {
   h += "</span></form>";
 }
 
+/// The bench (#87). A BETA section, said so on the page, because it does things to the glass
+/// that nothing else here does and the operator should know which bar is which.
+///
+/// One form, several submit buttons. The clicked button's name/value is what gets posted, so
+/// six options cost six buttons and no JavaScript - the same no-JS rule the two bars above it
+/// follow.
+inline void render_bench(std::string &h) {
+  int level;
+  bool black;
+  {
+    esphome::LockGuard guard(held().lock);
+    level = held().bench_level;
+    black = held().bench_black;
+  }
+  h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\">"
+       "<input type=\"hidden\" name=\"action\" value=\"bench\">"
+       "<strong>Bench</strong><span class=\"m\">beta</span>";
+  auto btn = [&h](const char *v, const char *cap, bool on) {
+    h += "<button name=\"bench\" value=\"";
+    h += v;
+    h += on ? "\" class=\"danger\">" : "\">";
+    h += cap;
+    h += "</button>";
+  };
+  btn("100", "100%", level == 100);
+  btn("25", "25%", level == 25);
+  btn("5", "5%", level == 5);
+  btn("0", "Off", level == 0);
+  btn("black", "Black", black);
+  btn("clear", "Normal", false);
+  // TERSE ON PURPOSE. This bar has to earn its bytes against the Pool A budget - a failed
+  // reserve() under -fno-exceptions is abort(), which reboots the panel driving the light.
+  // The first draft of this note cost 4228 B on the five-row page against a 4000 B ceiling
+  // and the test caught it. The reasoning lives in CONTEXT.md; the page states the rule.
+  h += "<span class=\"m\">";
+  if (level == BENCH_NONE && !black) {
+    h += "Backlight, or paint the glass black. Holds 2 min, releases at once if the row "
+         "goes busy.";
+  } else {
+    h += "<strong>Held:</strong> ";
+    if (black)
+      h += "black";
+    if (level != BENCH_NONE) {
+      if (black)
+        h += " + ";
+      h += "backlight " + std::to_string(level) + "%";
+    }
+  }
+  h += "</span></form>";
+}
+
 inline std::string config_page(const std::string &banner, Submitted outcome,
-                               const std::string &open_id) {
+                               const std::string &open_id, bool show_bench = false) {
   Table table;
   Overlay overlay;
   bool have;
@@ -688,6 +739,18 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
 
   render_appearance(h);
   render_glass(h);
+  // ONLY WHEN ASKED FOR, OR WHEN IT IS HOLDING THE GLASS.
+  //
+  // Not shyness - arithmetic. This bar cost 4228 B on the five-row page against a 4000 B
+  // ceiling and the budget test caught it, and that ceiling is real: a failed reserve() under
+  // -fno-exceptions is abort(), which reboots the panel driving the light. A beta instrument
+  // should not tax every page load of the thing it exists to measure.
+  //
+  // The `|| bench_active()` half is the part that matters. An override must ALWAYS be visible
+  // and always one click from released, however the operator reached the page - a hidden
+  // control holding the glass dark is exactly the trap this feature is built to avoid.
+  if (show_bench || bench_active())
+    render_bench(h);
 
   h += "<div class=\"bar\"><span class=\"m\">";
   if (have) {
@@ -764,6 +827,7 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
   h += "<p class=\"m\">The server passphrase is not shown here and cannot be read back from "
        "this device at all (D-55). Set it on the ESPHome dashboard, where the field is "
        "write-only. <a href=\"/onair\">Back to status</a> &middot; "
+       "<a href=\"/onair/config?bench=1\">Bench (beta)</a> &middot; "
        "<a href=\"/?esphome=1\">ESPHome dashboard</a></p>";
   h += "<script src=\"/onair.js\"></script>";
   page_foot(h);
@@ -846,6 +910,29 @@ inline Submitted handle_action(AsyncWebServerRequest *request, std::string &note
     }
     c.show_clock = clock == "on";
     c.kind = Command::GLASS;
+    return submit(c, note);
+  }
+
+  // #87. Before the id checks with the other two - a bench press carries no row id either.
+  if (action == "bench") {
+    std::string want = param(request, "bench");
+    if (want == "clear") {
+      c.bench_level = BENCH_NONE;
+      c.bench_black = false;
+    } else if (want == "black") {
+      // Additive to whatever the backlight is doing, deliberately: "black glass at 5%
+      // backlight" is one of the pictures worth comparing, and forcing a level here would
+      // make that combination unreachable.
+      c.bench_level = held().bench_level;
+      c.bench_black = true;
+    } else if (want == "0" || want == "5" || want == "25" || want == "100") {
+      c.bench_level = atoi(want.c_str());
+      c.bench_black = false;
+    } else {
+      note = "that is not a bench option this panel has";
+      return Submitted::FAILED;
+    }
+    c.kind = Command::BENCH;
     return submit(c, note);
   }
 
@@ -988,7 +1075,7 @@ class Page : public AsyncWebHandler {
     std::string open_id = trim(param(request, "edit"));
     if (open_id.size() > 32)
       open_id.clear();
-    std::string body = config_page(note, outcome, open_id);
+    std::string body = config_page(note, outcome, open_id, param(request, "bench") == "1");
     // PENDING wants 202, and this transport cannot say it: ESPHome's init_response_ maps
     // only 200/204/400/401/404/409/422 and sends 500 for anything else (measured on
     // 2026.8.0). A 500 would be a worse lie than a 200, because it claims the request

@@ -132,6 +132,27 @@ inline bool parse_mode(const std::string &text, Mode &out) {
   return false;
 }
 
+// ---- the bench (#87) ---------------------------------------------------------------
+//
+// A DELIBERATE, OPERATOR-INITIATED OVERRIDE OF THE GLASS, so that questions about this
+// hardware can be answered by looking at it instead of by reasoning about datasheets. It
+// exists because #77 asked for a power meter and a pair of eyes, and the eyes are the half
+// that actually decides: whether `ledc_stop(chan, 0)` reads as BLACK on this panel is not in
+// any source file, and no amount of reading settles it.
+//
+// EVERY override is temporary and self-releasing. There is no touch on this panel (the GT911
+// sits in reset behind the PCA9557), so a bench that could leave the glass dark with no way
+// back would be a trap on a board whose only other surface is a web page nobody can read in
+// the dark.
+
+/// No override in force. -1 and not 0, because 0 is a REAL level here - it is the exact one
+/// this bench exists to test.
+inline constexpr int BENCH_NONE = -1;
+
+/// How long an override lives. Long enough to walk to the panel and look at it properly,
+/// short enough that a browser tab closed mid-test cannot leave the glass wrong for the night.
+inline constexpr uint32_t BENCH_HOLD_MS = 120000;
+
 /// Not a resource limit - the whole record is under a kilobyte. It is the size of a table
 /// somebody edits by hand, and a bound is what lets the NVS record be a fixed-size POD.
 inline constexpr size_t MAX_OVERRIDES = 8;
@@ -145,7 +166,7 @@ inline constexpr size_t MAX_OVERRIDES = 8;
  * correct task to make wait: the loop that drives the display never stops for a browser.
  */
 struct Command {
-  enum Kind : uint8_t { NONE = 0, SAVE, CLEAR, CLEAR_ALL, REFRESH, APPEARANCE, GLASS };
+  enum Kind : uint8_t { NONE = 0, SAVE, CLEAR, CLEAR_ALL, REFRESH, APPEARANCE, GLASS, BENCH };
   Kind kind{NONE};
   std::string id;
   std::string label;
@@ -162,6 +183,9 @@ struct Command {
   Mode mode{Mode::DARK};
   /// Only meaningful for GLASS (#70). Validated on the HTTP side before staging.
   bool show_clock{false};
+  /// Only meaningful for BENCH (#87). Validated on the HTTP side before staging.
+  int bench_level{-1};
+  bool bench_black{false};
   bool armed{false};
   /// TRUE once the main loop has taken a copy and is applying it. The HTTP side uses this
   /// to tell "not started yet" from "in flight": only the first can be safely cancelled.
@@ -263,6 +287,12 @@ struct Held {
   /// the page runs on the httpd task and cannot reach an ESPHome `id()`.
   std::string ip;
   std::string db;
+  /// The bench override (#87), or BENCH_NONE. Held here rather than in a global because the
+  /// PAGE renders it, and the page cannot reach an `id()`. Board files read it directly - a
+  /// main-loop reader does not take the lock, same as the display lambda and the sensors.
+  int bench_level{BENCH_NONE};
+  bool bench_black{false};
+  uint32_t bench_until_ms{0};
   /// The wall clock as the glass is drawing it, mirrored for the page for the same reason
   /// as `key` (#70). `clock` is the STRING - `--:--` when the panel has never been told the
   /// time - and is published whether or not it is on screen, so the page can tell "off" from
@@ -890,6 +920,16 @@ inline void apply_command(const Command &c, bool &ok, std::string &note) {
     // #70. Like REFRESH and unlike APPEARANCE, this only ASKS - the switch it drives is an
     // ESPHome entity that this header cannot name, and that switch's RESTORE_DEFAULT_OFF is
     // already the persistence, so there is nothing here to write to NVS.
+    case Command::BENCH: {
+      esphome::LockGuard guard(held().lock);
+      held().bench_level = c.bench_level;
+      held().bench_black = c.bench_black;
+      held().bench_until_ms = esphome::millis() + BENCH_HOLD_MS;
+      note = (c.bench_level == BENCH_NONE && !c.bench_black)
+                 ? "the glass is back to normal"
+                 : "bench override applied - it releases itself in two minutes";
+      return;
+    }
     case Command::GLASS:
       held().clock_request = c.show_clock ? Held::ClockRequest::ON : Held::ClockRequest::OFF;
       note = c.show_clock ? "the panel will show the time" : "the panel will stop showing the time";
@@ -977,6 +1017,35 @@ inline void pump() {
   held().last.present = true;
   held().last.ok = ok;
   held().last.note = note;
+}
+
+/// True while the operator is holding the glass in a test state.
+inline bool bench_active() {
+  return held().bench_level != BENCH_NONE || held().bench_black;
+}
+
+/**
+ * Releases a bench override that has run out of time or been overruled by a busy row.
+ * Main loop only. Returns true if something was released, so the caller can repaint.
+ *
+ * TWO RELEASES AND NOT ONE. The timeout is the trap-door for a closed laptop. `busy` is the
+ * one that matters: this system's whole invariant is that a false OFF is worse than a false
+ * ON (D-6, D-63), and a bench that could hold the glass dark through an incoming call would
+ * be that failure with the operator's own fingerprints on it. A test is never worth a missed
+ * ON AIR, so the row wins immediately and without asking.
+ */
+inline bool bench_expire(bool busy) {
+  if (!bench_active())
+    return false;
+  // Signed difference, so this stays correct across the millis() wrap rather than releasing
+  // every override at once 49 days after boot.
+  bool timed_out = (int32_t) (esphome::millis() - held().bench_until_ms) >= 0;
+  if (!timed_out && !busy)
+    return false;
+  esphome::LockGuard guard(held().lock);
+  held().bench_level = BENCH_NONE;
+  held().bench_black = false;
+  return true;
 }
 
 /// One-shot: true once per clock toggle on the page, with the value asked for in `on`.

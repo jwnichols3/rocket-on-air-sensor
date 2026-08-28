@@ -31,6 +31,34 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
+    sdkconfig_options:
+      # MUST BE OFF ON THIS BOARD, and this is a boot-or-not switch rather than a tuning
+      # knob. It is on by default whenever PSRAM is initialised at boot.
+      #
+      # With execute_from_psram the linker leaves .text and .rodata ending wherever they
+      # end, and the MMU maps them into PSRAM in 64KB pages. The slack between the real end
+      # of a segment and its page boundary is a gap, and this option is IDF donating those
+      # two gaps to the heap. A gap is whatever the build's size happens to make it: uniform
+      # in 0..64KB, and TLSF needs roughly 1.5KB before it can hold a pool at all.
+      #
+      # When a gap lands under that floor, `tlsf_add_pool` refuses it and reports the refusal
+      # with printf - from `add_psram_to_heap`, an esp_system init function that runs before
+      # newlib's stdio exists. ESPHome routes printf through fwrite, fwrite takes stdout's
+      # lock, the lock is still null, and the assert aborts the boot. Measured on this repo
+      # at 2026-08-27: _rodata_reserved_end 0x3C11FF2C left a 212-byte gap and the panel
+      # panicked with IllegalInstruction before it ever reached app_main.
+      #
+      # The failure is what makes it worth a comment. The image is fine and the OTA reports
+      # success; the board reboots, panics before safe_mode's 60s boot_is_good_after, and the
+      # bootloader ROLLS BACK to the other slot. So the panel comes back up WORKING, on the
+      # OLD firmware, with no sign anything failed except that the new code is not there.
+      # Roughly one build in twenty rolls a fatal gap, which reads as "OTA is flaky" and is
+      # not - it is a size lottery, and turning this off is how you stop playing it.
+      #
+      # The cost is the two gaps: ~13KB of an 8MB PSRAM. On the ESP32-S3 this option guards
+      # nothing else - the cpu_region_protect.c users are C5/C61/P4, and the linker ALIGNs
+      # it adds are to PMP granularity, which this Xtensa part does not have.
+      CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION: "n"
     advanced:
       execute_from_psram: true
 
@@ -107,6 +135,39 @@ font:
 # 100ms, so a state change reaches the glass within a tenth of a second. The cost is one
 # bool test per tick against the ~150ms repaint it replaces.
 interval:
+  # ---- the bench's backlight, which only this file may touch (#87) ------------------
+  #
+  # The core decides WHETHER the glass is overridden and holds the level; the backlight is
+  # named here because it is a PIN on this board, and the Elegoo has no light: block at all.
+  # onair-core.yaml:493 records what happens when that rule is broken - the config fails
+  # outright. Same split as repaint_pending (#64) and panel-vs-page (D-85).
+  #
+  # Edge-triggered on `applied`, so the steady state is one integer compare per tick and a
+  # light call happens only when the answer actually moves.
+  - interval: 200ms
+    then:
+      - lambda: |-
+          static int applied = onair::BENCH_NONE;
+          int want = onair::held().bench_level;
+          if (want == applied)
+            return;
+          applied = want;
+          auto call = id(backlight).make_call();
+          call.set_transition_length(0);
+          if (want == onair::BENCH_NONE || want == 100) {
+            // BENCH_NONE restores full brightness rather than "whatever it was", because
+            // ALWAYS_ON is the only level this panel has ever run at and inventing a
+            // remembered one would be state nobody asked for.
+            call.set_state(true);
+            call.set_brightness(1.0f);
+          } else if (want == 0) {
+            call.set_state(false);
+          } else {
+            call.set_state(true);
+            call.set_brightness(want / 100.0f);
+          }
+          call.perform();
+
   - interval: 100ms
     then:
       - if:
@@ -304,6 +365,17 @@ display:
       // NOTE: the clock used to sit here, centred in this band at 22px. It was legible from a
       // desk and not from across the room, which is the distance this panel is read at (#71).
       // It is drawn over the state now; the band is diagnostics only again.
+
+      // THE BENCH'S BLACK (#87), painted OVER the finished frame and after the band, so what
+      // is on the glass is the whole screen black rather than a black rectangle with a
+      // diagnostics strip glowing under it. That is the picture being evaluated.
+      //
+      // Deliberately NOT an early return: every branch above still runs, so render_branch and
+      // the Render sensor keep reporting the state that WOULD be drawn. A bench that made the
+      // panel lie about its own branch would be a poor instrument for settling whether a dark
+      // panel lies.
+      if (onair::held().bench_black)
+        it.fill(Color(0, 0, 0));
 
       // Last statement on every path: proves the panel repainted.
       id(frames)++;

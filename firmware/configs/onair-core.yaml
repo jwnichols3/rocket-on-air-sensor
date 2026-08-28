@@ -712,6 +712,11 @@ interval:
             id(last_marked_unrefreshed) = mark;
             id(repaint_pending) = true;
           }
+          // THE BENCH'S TRAP-DOOR (#87). Here rather than on a slower tick because the busy
+          // release has to be fast: the whole promise of the bench is that an incoming call
+          // takes the glass back immediately, and `v` is already computed on this line.
+          if (onair::bench_expire(v.eff.known && v.eff.row.busy))
+            id(repaint_pending) = true;
 
   # The device-served page's side of the fence (#33).
   #
@@ -881,6 +886,24 @@ text_sensor:
                (unsigned) onair::held().table.size(),
                (unsigned) onair::held().oks, (unsigned) onair::held().failures,
                (unsigned) onair::held().overlay.size());
+      return {std::string(buf)};
+  - platform: template
+    # The bench override (#87), or "normal". Same argument as Render and Clock: a panel this
+    # one cannot be read over HTTP is a panel nobody can check, and this one deliberately
+    # makes the glass disagree with the state - so it had better SAY so.
+    name: "Bench"
+    id: bench_sensor
+    update_interval: 2s
+    lambda: |-
+      if (!onair::bench_active())
+        return {"normal"};
+      char buf[40];
+      snprintf(buf, sizeof(buf), "%s%s",
+               onair::held().bench_black ? "black" : "",
+               onair::held().bench_level == onair::BENCH_NONE
+                   ? ""
+                   : (std::string(onair::held().bench_black ? "+" : "") +
+                      "backlight" + std::to_string(onair::held().bench_level)).c_str());
       return {std::string(buf)};
   - platform: template
     # The clock EXACTLY as the glass draws it (#69), and "off" when it is not drawn at all.

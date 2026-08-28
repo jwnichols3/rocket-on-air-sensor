@@ -112,7 +112,13 @@ static void seed_table() {
 }
 
 static std::string get_config(const std::string &open = "") {
-  return onair::config_page("", onair::Submitted::APPLIED, open);
+  return onair::config_page("", onair::Submitted::APPLIED, open, false);
+}
+
+/// The page as `?bench=1` serves it. Separate from get_config() on purpose: the Pool A budget
+/// measures the page an operator actually loads, and the bench bar is not on it (#87).
+static std::string get_config_bench() {
+  return onair::config_page("", onair::Submitted::APPLIED, "", true);
 }
 
 /// Drives a real POST through Page::handleRequest and returns the request, so a test can
@@ -280,7 +286,8 @@ static void test_forbidden_markup() {
     size_t vs = at + strlen("name=\"action\" value=\"");
     std::string value = h.substr(vs, h.find('"', vs) - vs);
     CHECK_MSG(value == "save" || value == "clear" || value == "clearall" ||
-                  value == "refresh" || value == "appearance" || value == "glass",
+                  value == "refresh" || value == "appearance" || value == "glass" ||
+                  value == "bench",
               "unrecognised action silently does nothing: " + value);
     at = vs;
   }
@@ -877,6 +884,109 @@ static void test_clock() {
   CHECK(onair::format_clock(true, 23, 59).size() < 12);
 }
 
+// =========================================================================================
+// #87. THE BENCH - an operator-held override of the glass, and how it lets go
+// =========================================================================================
+static void test_bench() {
+  auto clear_bench = []() {
+    onair::held().bench_level = onair::BENCH_NONE;
+    onair::held().bench_black = false;
+  };
+
+  begin("nothing is overridden until someone asks");
+  seed_table();
+  clear_bench();
+  CHECK(!onair::bench_active());
+  CHECK(has(get_config_bench(), "releases at once if the row goes busy"));
+
+  begin("the bar is off the default page, but always one click away");
+  seed_table();
+  clear_bench();
+  CHECK_MSG(!has(get_config(), "value=\"bench\""), "a beta tool must not tax every page load");
+  CHECK_MSG(has(get_config(), "/onair/config?bench=1"), "but it has to be reachable");
+
+  begin("AN ACTIVE OVERRIDE IS VISIBLE WITHOUT THE QUERY PARAM - never a hidden control");
+  seed_table();
+  onair::held().bench_level = 0;
+  CHECK_MSG(has(get_config(), "value=\"bench\""),
+            "a bar holding the glass dark must appear however the page was reached");
+  CHECK(has(get_config(), "<strong>Held:</strong> backlight 0%"));
+  clear_bench();
+
+  begin("a level press takes the glass and says so on the page");
+  seed_table();
+  AsyncWebServerRequest req = post({{"action", "bench"}, {"bench", "5"}});
+  CHECK(req.status == 200);
+  CHECK(onair::held().bench_level == 5);
+  CHECK(onair::bench_active());
+  CHECK(has(get_config_bench(), "<strong>Held:</strong> backlight 5%"));
+
+  begin("black is ADDITIVE to the level, so the two can be seen together");
+  seed_table();
+  req = post({{"action", "bench"}, {"bench", "black"}});
+  CHECK(req.status == 200);
+  CHECK_MSG(onair::held().bench_level == 5, "the level it was already holding must survive");
+  CHECK(onair::held().bench_black);
+
+  begin("clear puts everything back");
+  seed_table();
+  req = post({{"action", "bench"}, {"bench", "clear"}});
+  CHECK(req.status == 200);
+  CHECK(onair::held().bench_level == onair::BENCH_NONE);
+  CHECK(!onair::held().bench_black);
+  CHECK(!onair::bench_active());
+
+  begin("an unrecognised option is refused, never rounded to a level that exists");
+  seed_table();
+  req = post({{"action", "bench"}, {"bench", "42"}});
+  CHECK(req.status == 400);
+  CHECK(has(req.body, "not a bench option"));
+  CHECK(!onair::bench_active());
+
+  begin("A BUSY ROW TAKES THE GLASS BACK AT ONCE - the rule that makes this safe");
+  seed_table();
+  esphome::g_millis = 1000;
+  req = post({{"action", "bench"}, {"bench", "0"}});
+  CHECK(req.status == 200);
+  CHECK(onair::bench_active());
+  CHECK_MSG(!onair::bench_expire(false), "a calm row must not disturb a test in progress");
+  CHECK(onair::bench_active());
+  CHECK_MSG(onair::bench_expire(true), "a busy row must release it immediately");
+  CHECK_MSG(!onair::bench_active(), "and the glass must be back");
+  CHECK_MSG(!onair::bench_expire(true), "releasing twice must not report a second release");
+
+  begin("and it lets go on its own, so a closed laptop cannot leave the glass dark");
+  seed_table();
+  esphome::g_millis = 1000;
+  req = post({{"action", "bench"}, {"bench", "0"}});
+  CHECK(req.status == 200);
+  esphome::g_millis = 1000 + onair::BENCH_HOLD_MS - 1;
+  CHECK_MSG(!onair::bench_expire(false), "not one millisecond early");
+  esphome::g_millis = 1000 + onair::BENCH_HOLD_MS;
+  CHECK_MSG(onair::bench_expire(false), "and not one late");
+  CHECK(!onair::bench_active());
+
+  begin("the hold survives the millis() wrap instead of releasing every override at once");
+  seed_table();
+  esphome::g_millis = 0xFFFFFFFFu - 1000;
+  req = post({{"action", "bench"}, {"bench", "25"}});
+  CHECK(req.status == 200);
+  esphome::g_millis = 0xFFFFFFFFu - 1000 + (onair::BENCH_HOLD_MS / 2);  // wrapped, still early
+  CHECK_MSG(!onair::bench_expire(false), "a wrapped clock must not look like a timeout");
+  esphome::g_millis = 0xFFFFFFFFu - 1000 + onair::BENCH_HOLD_MS;
+  CHECK(onair::bench_expire(false));
+
+  begin("the bench is behind the same CSRF check as every other bar");
+  seed_table();
+  req = post({{"action", "bench"}, {"bench", "0"}}, "http://evil.example");
+  CHECK(req.status == 400);
+  CHECK(has(req.body, "came from another site"));
+  CHECK(!onair::bench_active());
+
+  clear_bench();
+  esphome::g_millis = 1000;
+}
+
 int main() {
   printf("onair page tests\n\n");
   g_task_yield_hook = onair::pump;
@@ -894,6 +1004,7 @@ int main() {
   test_staging();
   test_clock();
   test_glass_bar();
+  test_bench();
 
   printf("\n%d checks, %d failed\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
