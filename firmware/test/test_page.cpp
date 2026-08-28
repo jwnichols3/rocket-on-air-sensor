@@ -280,7 +280,7 @@ static void test_forbidden_markup() {
     size_t vs = at + strlen("name=\"action\" value=\"");
     std::string value = h.substr(vs, h.find('"', vs) - vs);
     CHECK_MSG(value == "save" || value == "clear" || value == "clearall" ||
-                  value == "refresh" || value == "appearance",
+                  value == "refresh" || value == "appearance" || value == "glass",
               "unrecognised action silently does nothing: " + value);
     at = vs;
   }
@@ -775,6 +775,83 @@ static void test_staging() {
   onair::held().cmd = onair::Command{};
 }
 
+// =========================================================================================
+// #70. THE GLASS BAR - the clock toggle on the config page
+// =========================================================================================
+static void test_glass_bar() {
+  begin("the two bars are labelled, so pages-vs-glass is visible and not just written down");
+  seed_table();
+  std::string h = get_config();
+  CHECK(has(h, "<strong>Pages</strong>"));
+  CHECK(has(h, "<strong>Glass</strong>"));
+  CHECK_MSG(h.find("<strong>Pages</strong>") < h.find("<strong>Glass</strong>"),
+            "Pages first, matching the order the page is read in");
+
+  begin("the bar shows the CURRENT state, so it cannot lie about what the panel is doing");
+  seed_table();
+  onair::publish_context("available", 1000, "10.42.14.239", "-52dBm", 60000, 1800000, true,
+                         "5:48 PM");
+  h = get_config();
+  CHECK(has(h, "value=\"on\" checked"));
+  CHECK(!has(h, "value=\"off\" checked"));
+  CHECK_MSG(has(h, "Showing <strong>5:48 PM</strong>"), "and says what is on the glass");
+
+  begin("off is off, and says so rather than showing a stale time");
+  onair::publish_context("available", 1000, "10.42.14.239", "-52dBm", 60000, 1800000, false,
+                         "5:48 PM");
+  h = get_config();
+  CHECK(has(h, "value=\"off\" checked"));
+  CHECK(!has(h, "value=\"on\" checked"));
+  CHECK(!has(h, "5:48 PM"));
+
+  begin("ON WITH NO TIME is its own message - the state that looks like a wrong clock");
+  onair::publish_context("available", 1000, "10.42.14.239", "-52dBm", 60000, 1800000, true,
+                         onair::CLOCK_UNSET);
+  h = get_config();
+  CHECK_MSG(has(h, "has not been told the time"), "it must name the cause, which is the network");
+  CHECK(has(h, "NTP"));
+
+  begin("a toggle reaches the main loop as a REQUEST, and only once");
+  seed_table();
+  AsyncWebServerRequest req = post({{"action", "glass"}, {"clock", "on"}});
+  CHECK(req.status == 200);
+  bool want = false;
+  CHECK_MSG(onair::take_clock_request(want), "the page must have asked for something");
+  CHECK(want == true);
+  CHECK_MSG(!onair::take_clock_request(want), "and it is one-shot - a repeat would fight the switch");
+
+  begin("off round-trips the same way, which a bool-only request could not express");
+  seed_table();
+  req = post({{"action", "glass"}, {"clock", "off"}});
+  CHECK(req.status == 200);
+  want = true;
+  CHECK(onair::take_clock_request(want));
+  CHECK_MSG(want == false, "\"requested off\" must not read as \"nothing requested\"");
+
+  begin("an unrecognised value is REFUSED, never defaulted to off");
+  seed_table();
+  req = post({{"action", "glass"}, {"clock", "maybe"}});
+  CHECK(req.status == 400);
+  CHECK(has(req.body, "must be on or off"));
+  CHECK_MSG(!onair::take_clock_request(want), "a refused POST must stage nothing at all");
+
+  begin("a missing value is refused too - an empty radio set is not consent");
+  seed_table();
+  req = post({{"action", "glass"}});
+  CHECK(req.status == 400);
+  CHECK(!onair::take_clock_request(want));
+
+  begin("the glass bar is behind the same CSRF check as everything else");
+  seed_table();
+  req = post({{"action", "glass"}, {"clock", "on"}}, "http://evil.example");
+  CHECK(req.status == 400);
+  CHECK(has(req.body, "came from another site"));
+  CHECK_MSG(!onair::take_clock_request(want), "and nothing was staged");
+
+  // Leave the mirror as the rest of the suite expects to find it.
+  onair::publish_context("available", 1000, "10.42.14.239", "-52dBm", 60000, 1800000);
+}
+
 // ---- #69: the wall clock's string --------------------------------------------------
 //
 // Worth a test at all because a display lambda cannot have one. The whole point of putting
@@ -816,6 +893,7 @@ int main() {
   test_registration();
   test_staging();
   test_clock();
+  test_glass_bar();
 
   printf("\n%d checks, %d failed\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;

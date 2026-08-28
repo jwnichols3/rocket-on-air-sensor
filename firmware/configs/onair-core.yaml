@@ -729,13 +729,35 @@ interval:
           char dbbuf[12] = "";
           if (id(wifi_signal_db).has_state())
             snprintf(dbbuf, sizeof(dbbuf), "%.0fdBm", id(wifi_signal_db).state);
+          auto t = id(wall_clock).now();
           onair::publish_context(id(presence_key).has_state() ? id(presence_key).state : std::string(),
                                  id(last_contact_ms),
                                  id(ip_address).has_state() ? id(ip_address).state : std::string("connecting..."),
                                  dbbuf,
                                  (uint32_t) id(connection_lost_ms).state,
-                                 (uint32_t) id(no_data_ms).state);
+                                 (uint32_t) id(no_data_ms).state,
+                                 id(show_clock).state,
+                                 onair::format_clock(t.is_valid(), t.hour, t.minute));
           onair::pump();
+
+      # THE CLOCK TOGGLE COMING BACK THE OTHER WAY (#70), and it is a request rather than a
+      # write for exactly the Refresh button's reason: the pages are a header and `show_clock`
+      # is an ESPHome entity, so a page action cannot touch it directly. The page asks here
+      # and the main loop does it.
+      #
+      # Nothing in this system stores the answer twice. The switch's RESTORE_DEFAULT_OFF is
+      # the persistence, so `held().clock_on` stays a MIRROR of it and never a second copy
+      # that could disagree.
+      - lambda: |-
+          bool want;
+          if (onair::take_clock_request(want)) {
+            ESP_LOGI("onair", "clock turned %s from the device page", want ? "on" : "off");
+            if (want) {
+              id(show_clock).turn_on();
+            } else {
+              id(show_clock).turn_off();
+            }
+          }
       - if:
           condition:
             lambda: 'return onair::take_refresh_request();'

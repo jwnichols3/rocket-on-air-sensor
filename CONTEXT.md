@@ -3732,3 +3732,54 @@ else (state, light control, API) lives on the receiver.
 
   Not investigated here: the 30s safety net predicts 6 repaints in 180s and the idle panel
   does 9. Pre-existing - with the clock off, nothing added by this ticket sets the flag.
+
+- **D-111 (2026-08-27)** **The clock toggle belongs on `/onair/config`, in a `Glass` bar
+  beside the `Pages` one - and it ASKS the switch rather than storing the answer twice.**
+  Closes #70. Amends D-110, which put the only control on the ESPHome dashboard.
+
+  D-110 left the toggle where ESPHome puts a switch, which #56 had just moved behind
+  `/?esphome=1`. Rocket went to `/onair/config` looking for it. That is the answer: the
+  panel's own page is the operator surface, and a setting that changes the glass is not an
+  ESPHome implementation detail.
+
+  **Why it was not simply added to `Appearance`.** That struct is documented as *how the
+  served pages look, not how the glass looks* - no path to `compute_view()`, no vote in what
+  is drawn. One more field would have made the comment defining it false. So the boundary
+  held and the clock got its own command kind.
+
+  **Two labelled bars, `Pages` and `Glass`.** Rocket picked this over merging them into one
+  settings bar or hiding both behind a disclosure, having flagged the page as already busy.
+  The pairing earns the extra bar: it makes D-70's distinction VISIBLE on screen rather than
+  a sentence somebody has to read. Merging would have put a glass setting in the row that is
+  documented as page-only, which is the same contradiction by another route.
+
+  **`Command::GLASS` only ASKS.** Applied like `REFRESH`, not like `APPEARANCE`: the switch
+  it drives is an ESPHome entity no header can name, and that switch's `RESTORE_DEFAULT_OFF`
+  is already the persistence. So `held().clock_on` is a MIRROR published by
+  `publish_context()` and never a second copy of the setting - there is one source of truth
+  for whether the clock is on, and it is the switch.
+
+  `take_clock_request(bool &on)` is tri-state for a reason worth stating: "requested off" and
+  "nothing requested" are different, and a bool cannot express both. A one-shot that returned
+  `false` for an off request would fight the switch forever.
+
+  **The bar reports three states, not two.** Off; on and showing a time; and *on but this
+  panel has never been told the time*. The third is the one worth naming - from across a room
+  it is indistinguishable from a clock that is merely wrong, and its cause is the network
+  rather than the panel, so the bar says so and points at NTP.
+
+  Verified on the live CrowPanel, page form to glass and back:
+
+  ```
+  before:                    switch=ON   glass=5:53 PM
+  POST action=glass&clock=off  HTTP 200  switch=OFF  glass=off
+  POST action=glass&clock=on   HTTP 200  switch=ON   glass=5:54 PM
+  ```
+
+  Refusals measured on the device too: `clock=maybe` -> 400 "the clock must be on or off",
+  cross-origin -> 400 "came from another site", switch untouched by both.
+
+  An existing guard caught this change before hardware did: the suite enumerates every
+  `action` value the page emits and fails on one the handler does not recognise. It failed on
+  `glass` the first time the bar rendered. That test is doing exactly the job it was written
+  for. Firmware host checks 156 -> 183.

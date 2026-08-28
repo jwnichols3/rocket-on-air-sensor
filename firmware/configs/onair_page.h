@@ -583,6 +583,7 @@ inline void render_appearance(std::string &h) {
   };
   h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\">"
        "<input type=\"hidden\" name=\"action\" value=\"appearance\">"
+       "<strong>Pages</strong>"
        "<select name=\"skin\" aria-label=\"skin\">";
   opt("table", "Simple table", look.skin == Skin::TABLE);
   opt("colorful", "Colourful", look.skin == Skin::COLORFUL);
@@ -593,6 +594,49 @@ inline void render_appearance(std::string &h) {
   h += "</select><button>Apply</button>"
        "<span class=\"m\">Stored on this panel, and shared. It changes this page only, "
        "never the glass.</span></form>";
+}
+
+/// The glass switcher (#70). The COMPANION to render_appearance, and the pairing is the
+/// point: two bars, labelled Pages and Glass, is what makes D-70's distinction visible
+/// instead of a sentence somebody has to read. A clock cannot ride in `Appearance` - that
+/// struct is documented as how the served pages look and has no path to the display lambda.
+///
+/// No JavaScript, matching the bar above: two radios and a submit.
+inline void render_glass(std::string &h) {
+  bool on;
+  std::string now;
+  {
+    esphome::LockGuard guard(held().lock);
+    on = held().clock_on;
+    now = held().clock;
+  }
+  h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\">"
+       "<input type=\"hidden\" name=\"action\" value=\"glass\">"
+       "<strong>Glass</strong><span class=\"m\">Clock</span>"
+       "<label><input type=\"radio\" name=\"clock\" value=\"off\"";
+  if (!on)
+    h += " checked";
+  h += "> Off</label><label><input type=\"radio\" name=\"clock\" value=\"on\"";
+  if (on)
+    h += " checked";
+  h += "> On</label><button>Apply</button><span class=\"m\">";
+  // THREE outcomes and not two, because "on but the panel has never been told the time"
+  // is its own state and is the one worth naming. From across the room it looks exactly
+  // like a clock that is merely wrong, and the fix is somewhere else entirely - this panel
+  // takes its time from an NTP server over the network and can simply never reach one.
+  if (!on) {
+    h += "Off. The panel draws no clock.";
+  } else if (now.empty() || now == CLOCK_UNSET) {
+    h += "On, but this panel has not been told the time yet - it needs to reach an NTP "
+         "server. It is drawing <code>";
+    h += CLOCK_UNSET;
+    h += "</code> rather than guessing.";
+  } else {
+    h += "Showing <strong>";
+    h += html_escape(now);
+    h += "</strong> in the panel's diagnostics strip.";
+  }
+  h += "</span></form>";
 }
 
 inline std::string config_page(const std::string &banner, Submitted outcome,
@@ -643,6 +687,7 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
        "to follow the server again.</p>";
 
   render_appearance(h);
+  render_glass(h);
 
   h += "<div class=\"bar\"><span class=\"m\">";
   if (have) {
@@ -787,6 +832,20 @@ inline Submitted handle_action(AsyncWebServerRequest *request, std::string &note
       return Submitted::FAILED;
     }
     c.kind = Command::APPEARANCE;
+    return submit(c, note);
+  }
+  // #70. Also before the id checks - a glass setting carries no row id either. REFUSED
+  // rather than defaulted on an unrecognised value, for render_appearance's reason: quietly
+  // storing "off" when the caller asked for something else, and reporting success, is how a
+  // setting silently does nothing.
+  if (action == "glass") {
+    std::string clock = param(request, "clock");
+    if (clock != "on" && clock != "off") {
+      note = "the clock must be on or off";
+      return Submitted::FAILED;
+    }
+    c.show_clock = clock == "on";
+    c.kind = Command::GLASS;
     return submit(c, note);
   }
 

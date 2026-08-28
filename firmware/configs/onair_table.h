@@ -145,7 +145,7 @@ inline constexpr size_t MAX_OVERRIDES = 8;
  * correct task to make wait: the loop that drives the display never stops for a browser.
  */
 struct Command {
-  enum Kind : uint8_t { NONE = 0, SAVE, CLEAR, CLEAR_ALL, REFRESH, APPEARANCE };
+  enum Kind : uint8_t { NONE = 0, SAVE, CLEAR, CLEAR_ALL, REFRESH, APPEARANCE, GLASS };
   Kind kind{NONE};
   std::string id;
   std::string label;
@@ -160,6 +160,8 @@ struct Command {
   /// Only meaningful for APPEARANCE. Validated on the HTTP side before staging.
   Skin skin{Skin::TECHNICAL};
   Mode mode{Mode::DARK};
+  /// Only meaningful for GLASS (#70). Validated on the HTTP side before staging.
+  bool show_clock{false};
   bool armed{false};
   /// TRUE once the main loop has taken a copy and is applying it. The HTTP side uses this
   /// to tell "not started yet" from "in flight": only the first can be safely cancelled.
@@ -261,10 +263,26 @@ struct Held {
   /// the page runs on the httpd task and cannot reach an ESPHome `id()`.
   std::string ip;
   std::string db;
+  /// The wall clock as the glass is drawing it, mirrored for the page for the same reason
+  /// as `key` (#70). `clock` is the STRING - `--:--` when the panel has never been told the
+  /// time - and is published whether or not it is on screen, so the page can tell "off" from
+  /// "on but SNTP has never answered". Those look identical from across the room and are
+  /// completely different problems.
+  bool clock_on{false};
+  std::string clock;
   /// Staged page action, and the one-shot flag that asks the main loop to run the pull.
   Command cmd;
   LastResult last;
   bool refresh_requested{false};
+  /// The clock toggle asked for by the page, if any (#70). NONE / OFF / ON rather than a
+  /// bool, because "no request" and "requested off" are different and a bool cannot say so.
+  ///
+  /// A REQUEST and not the setting itself: the setting lives in the `show_clock` ESPHome
+  /// switch, which is what persists it. This header cannot reach an `id()`, so it does what
+  /// `refresh_requested` does - says what was asked, and lets the YAML do it on the main
+  /// loop. Keeping a second copy of the state here would be a second source of truth.
+  enum class ClockRequest : uint8_t { NONE = 0, OFF, ON };
+  ClockRequest clock_request{ClockRequest::NONE};
   /**
    * Guards `table`, `overlay`, `cmd` and the two mirrors against the HTTP task.
    *
@@ -843,11 +861,12 @@ inline void install_table(Table &next, const std::string &version, const std::st
   held().oks++;
 }
 
-/// Mirrors the two entity values the page needs into `held()`. Main loop only.
+/// Mirrors the entity values the page needs into `held()`. Main loop only.
 inline void publish_context(const std::string &key, uint32_t last_contact_ms,
                             const std::string &ip, const std::string &db,
                             uint32_t lost_ms = CONNECTION_LOST_MS,
-                            uint32_t no_data_ms = NO_DATA_MS) {
+                            uint32_t no_data_ms = NO_DATA_MS, bool clock_on = false,
+                            const std::string &clock = std::string()) {
   esphome::LockGuard guard(held().lock);
   held().key = key;
   held().last_contact_ms = last_contact_ms;
@@ -855,6 +874,8 @@ inline void publish_context(const std::string &key, uint32_t last_contact_ms,
   held().no_data_ms = no_data_ms;
   held().ip = ip;
   held().db = db;
+  held().clock_on = clock_on;
+  held().clock = clock;
 }
 
 /// Applies a staged command. Main loop only; the lock is held only across the mutation,
@@ -865,6 +886,13 @@ inline void apply_command(const Command &c, bool &ok, std::string &note) {
     case Command::REFRESH:
       held().refresh_requested = true;
       note = "asked the server for the current profile";
+      return;
+    // #70. Like REFRESH and unlike APPEARANCE, this only ASKS - the switch it drives is an
+    // ESPHome entity that this header cannot name, and that switch's RESTORE_DEFAULT_OFF is
+    // already the persistence, so there is nothing here to write to NVS.
+    case Command::GLASS:
+      held().clock_request = c.show_clock ? Held::ClockRequest::ON : Held::ClockRequest::OFF;
+      note = c.show_clock ? "the panel will show the time" : "the panel will stop showing the time";
       return;
     case Command::CLEAR_ALL: {
       esphome::LockGuard guard(held().lock);
@@ -949,6 +977,17 @@ inline void pump() {
   held().last.present = true;
   held().last.ok = ok;
   held().last.note = note;
+}
+
+/// One-shot: true once per clock toggle on the page, with the value asked for in `on`.
+/// Main loop only. Same shape as take_refresh_request, for the same reason - the thing that
+/// has to act on this is a `switch:` in the YAML, which no header can reach.
+inline bool take_clock_request(bool &on) {
+  if (held().clock_request == Held::ClockRequest::NONE)
+    return false;
+  on = held().clock_request == Held::ClockRequest::ON;
+  held().clock_request = Held::ClockRequest::NONE;
+  return true;
 }
 
 /// One-shot: true once per Refresh press on the page. Main loop only.
