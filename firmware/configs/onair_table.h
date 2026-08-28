@@ -145,6 +145,58 @@ inline bool parse_mode(const std::string &text, Mode &out) {
 // back would be a trap on a board whose only other surface is a web page nobody can read in
 // the dark.
 
+// ---- the night schedule (#78) ------------------------------------------------------
+//
+// DARK BETWEEN TWO TIMES OF DAY, and refusing to be dark whenever it cannot prove that is
+// safe. The refusals are most of this function and all of the point: a panel that is black
+// when it should say ON AIR is the worst outcome this system has, so every one of them is a
+// way of NOT going dark rather than a way of going dark.
+
+struct NightInput {
+  bool enabled{false};
+  /// There is no RTC on this board. If SNTP never answers, this is false forever.
+  bool clock_valid{false};
+  uint16_t now_min{0}, sleep_min{0}, wake_min{0};
+  bool busy{false};
+  /// compute_view() resolved an actual ROW, not NO_DATA / NO_CONFIG / UNKNOWN_KEY.
+  bool real_row{false};
+  /// The server has answered at least once since boot.
+  bool heard_from_server{false};
+  /// A state change already woke the panel during this window, so it stays awake until the
+  /// window ends.
+  bool woken{false};
+};
+
+/// Inclusive of `sleep_min`, exclusive of `wake_min`. Equal endpoints are NEVER in the
+/// window: the wrapping branch would read `now >= x || now < x`, which is every minute of
+/// the day, and "dark forever" is not a plausible thing for anyone to have meant.
+inline bool in_night_window(uint16_t now_min, uint16_t sleep_min, uint16_t wake_min) {
+  if (sleep_min == wake_min)
+    return false;
+  if (sleep_min < wake_min)
+    return now_min >= sleep_min && now_min < wake_min;
+  return now_min >= sleep_min || now_min < wake_min;  // wraps midnight, the usual case
+}
+
+inline bool night_should_darken(const NightInput &in) {
+  if (!in.enabled)
+    return false;
+  // No clock, no schedule. D-110 drew `--:--` rather than 1970 for this same reason: a panel
+  // that has never been told the time must not act on a guess about what time it is.
+  if (!in.clock_valid)
+    return false;
+  // NEVER mid-call, and this is the one that is not negotiable (D-6, D-63, D-92).
+  if (in.busy)
+    return false;
+  // A panel that cannot say what is happening must not ALSO be dark. Dark plus unknown is
+  // indistinguishable from unplugged, and one of those is a fault worth noticing.
+  if (!in.real_row || !in.heard_from_server)
+    return false;
+  if (in.woken)
+    return false;
+  return in_night_window(in.now_min, in.sleep_min, in.wake_min);
+}
+
 /// No override in force. -1 and not 0, because 0 is a REAL level here - it is the exact one
 /// this bench exists to test.
 inline constexpr int BENCH_NONE = -1;
@@ -185,7 +237,6 @@ struct Command {
   bool show_clock{false};
   /// Only meaningful for BENCH (#87). Validated on the HTTP side before staging.
   int bench_level{-1};
-  bool bench_black{false};
   bool armed{false};
   /// TRUE once the main loop has taken a copy and is applying it. The HTTP side uses this
   /// to tell "not started yet" from "in flight": only the first can be safely cancelled.
@@ -291,8 +342,12 @@ struct Held {
   /// PAGE renders it, and the page cannot reach an `id()`. Board files read it directly - a
   /// main-loop reader does not take the lock, same as the display lambda and the sensors.
   int bench_level{BENCH_NONE};
-  bool bench_black{false};
   uint32_t bench_until_ms{0};
+  /// The night schedule's live answer, and the latch that keeps a woken panel awake until the
+  /// window ends. Main loop writes, page and board read.
+  bool night_dark{false};
+  bool night_woken{false};
+  std::string night_key;
   /// The wall clock as the glass is drawing it, mirrored for the page for the same reason
   /// as `key` (#70). `clock` is the STRING - `--:--` when the panel has never been told the
   /// time - and is published whether or not it is on screen, so the page can tell "off" from
@@ -923,11 +978,9 @@ inline void apply_command(const Command &c, bool &ok, std::string &note) {
     case Command::BENCH: {
       esphome::LockGuard guard(held().lock);
       held().bench_level = c.bench_level;
-      held().bench_black = c.bench_black;
       held().bench_until_ms = esphome::millis() + BENCH_HOLD_MS;
-      note = (c.bench_level == BENCH_NONE && !c.bench_black)
-                 ? "the glass is back to normal"
-                 : "bench override applied - it releases itself in two minutes";
+      note = c.bench_level == BENCH_NONE ? "the screen is back on"
+                                        : "the screen is off - it comes back within two minutes";
       return;
     }
     case Command::GLASS:
@@ -1020,8 +1073,16 @@ inline void pump() {
 }
 
 /// True while the operator is holding the glass in a test state.
-inline bool bench_active() {
-  return held().bench_level != BENCH_NONE || held().bench_black;
+inline bool bench_active() { return held().bench_level != BENCH_NONE; }
+
+/// What the backlight should be, every reason folded into ONE answer, so no board file has to
+/// know the precedence. A person standing at the page beats the clock: the Beta control is
+/// someone deliberately looking at the panel, and the schedule is a guess about whether
+/// anyone is.
+inline int effective_backlight() {
+  if (bench_active())
+    return held().bench_level;
+  return held().night_dark ? 0 : 100;
 }
 
 /**
@@ -1044,7 +1105,6 @@ inline bool bench_expire(bool busy) {
     return false;
   esphome::LockGuard guard(held().lock);
   held().bench_level = BENCH_NONE;
-  held().bench_black = false;
   return true;
 }
 

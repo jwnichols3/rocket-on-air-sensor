@@ -3887,3 +3887,61 @@ else (state, light control, API) lives on the receiver.
   success while the old firmware keeps running is the D-100 failure wearing a new mask, and
   the lesson stands: after a flash, wait for a MARKER THAT ONLY THE NEW BUILD HAS. Waiting for
   `/onair` to answer proves nothing - the panel serves HTTP throughout the OTA write.
+
+- **D-114 (2026-08-27)** **The panel goes dark 23:00-07:00, and the schedule refuses far more
+  often than it agrees.** Closes #78. Answers #77 by observation instead of instrumentation.
+
+  **The mechanism was settled by Rocket looking at the panel**, which is what #77 existed for
+  and what the missing power meter could not have told him: "when I click off, the whole
+  screen turns off. It's great." `light.turn_off` -> `ledc_stop(chan, 0)` parks GPIO2 LOW and
+  the CrowPanel goes genuinely dark, not grey. The PCA9557 comment in `crowpanel-7.yaml:60`
+  raised a real doubt about that and it is now closed. No power number was ever taken, and
+  none is needed: the ask was always "blank the screen at night", not "save power".
+
+  **`night_should_darken()` is mostly refusals, and that is the design.** A panel that is
+  black when it should say ON AIR is the worst outcome this system has, so every clause is a
+  way of NOT going dark:
+
+  - not while `busy` - never mid-call, at any hour (D-6, D-63, D-92);
+  - not without a valid clock - there is no RTC, so if SNTP never answers the panel stays lit
+    forever rather than blank forever. D-110 drew `--:--` rather than 1970 for this reason;
+  - not unless `compute_view()` resolved a real ROW - dark plus NO DATA is indistinguishable
+    from unplugged, and one of those is a fault worth noticing;
+  - not before the server has been heard from once;
+  - not if a state change already woke it during this window.
+
+  **The window wraps midnight and equal endpoints are never dark.** `now >= 23:00 || now <
+  07:00` reads as every minute of the day when the two are equal, so that is guarded in the
+  predicate rather than in the entity - no pair of numbers typed into the page can produce a
+  permanently dark panel. 30 host checks cover the wrap, both boundaries, the non-wrapping
+  case and every refusal.
+
+  **Wake-on-change is derived from a captured key, NOT from `presence_key`'s `on_value`.** The
+  research judges caught that trap: `on_value` fires on every server re-assert rather than on
+  change, because the supervisor re-asserts on a timer, so a panel armed that way would wake
+  every minute all night. Instead the key is captured on ENTERING the window and compared each
+  tick; a difference latches `night_woken` until the window ends.
+
+  **One backlight answer, not two.** `effective_backlight()` folds the Beta override and the
+  schedule into a single number so no board file has to know the precedence. A person standing
+  at the page beats the clock: the Beta control is someone deliberately looking at the panel,
+  the schedule is a guess about whether anyone is.
+
+  Measured on the live CrowPanel, by moving the sleep time to one minute out and back:
+
+  ```
+  9:52PM  Night='lit (daytime)'  screen=ON
+  9:53PM  Night='dark'           screen=OFF      <- went dark on schedule
+  restore 23:00 -> Night='lit (daytime)'  screen=ON, within 8s
+  ```
+
+  A `Night` text_sensor says which of the refusals is in force - `lit (no time yet)`,
+  `lit (holding off - busy or no data)`, `lit (woken by a state change)`. A panel dark on
+  purpose and a panel dark by accident look identical from the doorway, and this board has no
+  serial console to ask.
+
+  **This is interim and deliberately incomplete.** There is no UI for it on `/onair/config`
+  yet (#81), the server still reports `confirmed` while the glass is dark (#82, and that is a
+  lie the contract has not yet been taught to tell correctly), and the times are editable only
+  as minutes-since-midnight on the ESPHome dashboard. Shipped now because Rocket asked for the
+  schedule to be in force tonight, not because the track is finished.

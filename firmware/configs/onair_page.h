@@ -592,8 +592,8 @@ inline void render_appearance(std::string &h) {
   opt("dark", "Dark", look.mode == Mode::DARK);
   opt("light", "Light", look.mode == Mode::LIGHT);
   h += "</select><button>Apply</button>"
-       "<span class=\"m\">Stored on this panel, and shared. It changes this page only, "
-       "never the glass.</span></form>";
+       "<span class=\"m\">Changes how this web page looks. Does not change the panel "
+       "screen.</span></form>";
 }
 
 /// The glass switcher (#70). The COMPANION to render_appearance, and the pairing is the
@@ -612,7 +612,7 @@ inline void render_glass(std::string &h) {
   }
   h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\">"
        "<input type=\"hidden\" name=\"action\" value=\"glass\">"
-       "<strong>Glass</strong><span class=\"m\">Clock</span>"
+       "<strong>Clock</strong>"
        "<label><input type=\"radio\" name=\"clock\" value=\"off\"";
   if (!on)
     h += " checked";
@@ -647,46 +647,29 @@ inline void render_glass(std::string &h) {
 /// follow.
 inline void render_bench(std::string &h) {
   int level;
-  bool black;
   {
     esphome::LockGuard guard(held().lock);
     level = held().bench_level;
-    black = held().bench_black;
   }
   h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\">"
        "<input type=\"hidden\" name=\"action\" value=\"bench\">"
-       "<strong>Bench</strong><span class=\"m\">beta</span>";
-  auto btn = [&h](const char *v, const char *cap, bool on) {
-    h += "<button name=\"bench\" value=\"";
-    h += v;
-    h += on ? "\" class=\"danger\">" : "\">";
-    h += cap;
-    h += "</button>";
-  };
-  btn("100", "100%", level == 100);
-  btn("25", "25%", level == 25);
-  btn("5", "5%", level == 5);
-  btn("0", "Off", level == 0);
-  btn("black", "Black", black);
-  btn("clear", "Normal", false);
-  // TERSE ON PURPOSE. This bar has to earn its bytes against the Pool A budget - a failed
-  // reserve() under -fno-exceptions is abort(), which reboots the panel driving the light.
-  // The first draft of this note cost 4228 B on the five-row page against a 4000 B ceiling
-  // and the test caught it. The reasoning lives in CONTEXT.md; the page states the rule.
+       "<strong>Beta</strong>";
+  // TWO CONTROLS, because the experiment they existed for is finished. 100/25/5% and the
+  // black overpaint were there to answer "what does darkening this panel actually look like",
+  // Rocket answered it by pressing Off - the whole screen goes dark - and an instrument that
+  // has reported its measurement should stop occupying the screen. The LEVELS survive
+  // underneath because night mode will need them; only the buttons are gone.
+  if (level == 0)
+    h += "<button name=\"bench\" value=\"clear\">Turn the screen back on</button>";
+  else
+    h += "<button name=\"bench\" value=\"0\">Turn the screen off</button>";
   h += "<span class=\"m\">";
-  if (level == BENCH_NONE && !black) {
-    h += "Backlight, or paint the glass black. Holds 2 min, releases at once if the row "
-         "goes busy.";
-  } else {
-    h += "<strong>Held:</strong> ";
-    if (black)
-      h += "black";
-    if (level != BENCH_NONE) {
-      if (black)
-        h += " + ";
-      h += "backlight " + std::to_string(level) + "%";
-    }
-  }
+  if (level == 0)
+    h += "The screen is off. It comes back on by itself within two minutes, and straight "
+         "away if a call starts.";
+  else
+    h += "Turns the panel's screen off, to see what it looks like dark. It comes back on by "
+         "itself within two minutes.";
   h += "</span></form>";
 }
 
@@ -824,10 +807,10 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
          "edited here. Edit them in the admin console instead.</p>";
   }
 
-  h += "<p class=\"m\">The server passphrase is not shown here and cannot be read back from "
-       "this device at all (D-55). Set it on the ESPHome dashboard, where the field is "
-       "write-only. <a href=\"/onair\">Back to status</a> &middot; "
-       "<a href=\"/onair/config?bench=1\">Bench (beta)</a> &middot; "
+  h += "<p class=\"m\">This panel cannot show you the server password, and nothing can read "
+       "it back off the panel. To change it, use the ESPHome dashboard. "
+       "<a href=\"/onair\">Back to status</a> &middot; "
+       "<a href=\"/onair/config?bench=1\">Beta features</a> &middot; "
        "<a href=\"/?esphome=1\">ESPHome dashboard</a></p>";
   h += "<script src=\"/onair.js\"></script>";
   page_foot(h);
@@ -918,16 +901,10 @@ inline Submitted handle_action(AsyncWebServerRequest *request, std::string &note
     std::string want = param(request, "bench");
     if (want == "clear") {
       c.bench_level = BENCH_NONE;
-      c.bench_black = false;
-    } else if (want == "black") {
-      // Additive to whatever the backlight is doing, deliberately: "black glass at 5%
-      // backlight" is one of the pictures worth comparing, and forcing a level here would
-      // make that combination unreachable.
-      c.bench_level = held().bench_level;
-      c.bench_black = true;
     } else if (want == "0" || want == "5" || want == "25" || want == "100") {
+      // The levels outlive their buttons because night mode will need one. Only 0 and clear
+      // are reachable from the page today - see render_bench.
       c.bench_level = atoi(want.c_str());
-      c.bench_black = false;
     } else {
       note = "that is not a bench option this panel has";
       return Submitted::FAILED;

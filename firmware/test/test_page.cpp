@@ -790,8 +790,8 @@ static void test_glass_bar() {
   seed_table();
   std::string h = get_config();
   CHECK(has(h, "<strong>Pages</strong>"));
-  CHECK(has(h, "<strong>Glass</strong>"));
-  CHECK_MSG(h.find("<strong>Pages</strong>") < h.find("<strong>Glass</strong>"),
+  CHECK(has(h, "<strong>Clock</strong>"));
+  CHECK_MSG(h.find("<strong>Pages</strong>") < h.find("<strong>Clock</strong>"),
             "Pages first, matching the order the page is read in");
 
   begin("the bar shows the CURRENT state, so it cannot lie about what the panel is doing");
@@ -890,14 +890,13 @@ static void test_clock() {
 static void test_bench() {
   auto clear_bench = []() {
     onair::held().bench_level = onair::BENCH_NONE;
-    onair::held().bench_black = false;
   };
 
   begin("nothing is overridden until someone asks");
   seed_table();
   clear_bench();
   CHECK(!onair::bench_active());
-  CHECK(has(get_config_bench(), "releases at once if the row goes busy"));
+  CHECK(has(get_config_bench(), "Turn the screen off"));
 
   begin("the bar is off the default page, but always one click away");
   seed_table();
@@ -910,30 +909,24 @@ static void test_bench() {
   onair::held().bench_level = 0;
   CHECK_MSG(has(get_config(), "value=\"bench\""),
             "a bar holding the glass dark must appear however the page was reached");
-  CHECK(has(get_config(), "<strong>Held:</strong> backlight 0%"));
+  CHECK(has(get_config(), "Turn the screen back on"));
   clear_bench();
 
-  begin("a level press takes the glass and says so on the page");
+  begin("turning the screen off takes the glass, and the button then offers the way back");
   seed_table();
-  AsyncWebServerRequest req = post({{"action", "bench"}, {"bench", "5"}});
+  AsyncWebServerRequest req = post({{"action", "bench"}, {"bench", "0"}});
   CHECK(req.status == 200);
-  CHECK(onair::held().bench_level == 5);
+  CHECK(onair::held().bench_level == 0);
   CHECK(onair::bench_active());
-  CHECK(has(get_config_bench(), "<strong>Held:</strong> backlight 5%"));
-
-  begin("black is ADDITIVE to the level, so the two can be seen together");
-  seed_table();
-  req = post({{"action", "bench"}, {"bench", "black"}});
-  CHECK(req.status == 200);
-  CHECK_MSG(onair::held().bench_level == 5, "the level it was already holding must survive");
-  CHECK(onair::held().bench_black);
+  CHECK_MSG(has(get_config_bench(), "Turn the screen back on"),
+            "a screen that is off must offer the way back, not the way further in");
+  CHECK(!has(get_config_bench(), "Turn the screen off"));
 
   begin("clear puts everything back");
   seed_table();
   req = post({{"action", "bench"}, {"bench", "clear"}});
   CHECK(req.status == 200);
   CHECK(onair::held().bench_level == onair::BENCH_NONE);
-  CHECK(!onair::held().bench_black);
   CHECK(!onair::bench_active());
 
   begin("an unrecognised option is refused, never rounded to a level that exists");
@@ -987,6 +980,83 @@ static void test_bench() {
   esphome::g_millis = 1000;
 }
 
+// =========================================================================================
+// #78. THE NIGHT SCHEDULE - the wrap, and every refusal
+// =========================================================================================
+static onair::NightInput night_ok(uint16_t now) {
+  onair::NightInput in;
+  in.enabled = true; in.clock_valid = true;
+  in.now_min = now; in.sleep_min = 23 * 60; in.wake_min = 7 * 60;
+  in.busy = false; in.real_row = true; in.heard_from_server = true; in.woken = false;
+  return in;
+}
+
+static void test_night() {
+  begin("the window WRAPS midnight, which is where this arithmetic goes wrong");
+  CHECK(onair::in_night_window(23 * 60, 23 * 60, 7 * 60));       // 23:00 exactly, inclusive
+  CHECK(onair::in_night_window(23 * 60 + 30, 23 * 60, 7 * 60));
+  CHECK(onair::in_night_window(0, 23 * 60, 7 * 60));             // midnight
+  CHECK(onair::in_night_window(3 * 60, 23 * 60, 7 * 60));
+  CHECK(onair::in_night_window(6 * 60 + 59, 23 * 60, 7 * 60));
+  CHECK_MSG(!onair::in_night_window(7 * 60, 23 * 60, 7 * 60), "07:00 is awake, exclusive end");
+  CHECK(!onair::in_night_window(12 * 60, 23 * 60, 7 * 60));
+  CHECK_MSG(!onair::in_night_window(22 * 60 + 59, 23 * 60, 7 * 60), "one minute before is awake");
+
+  begin("a window that does not wrap still works");
+  CHECK(!onair::in_night_window(0 * 60, 1 * 60, 5 * 60));
+  CHECK(onair::in_night_window(1 * 60, 1 * 60, 5 * 60));
+  CHECK(onair::in_night_window(4 * 60 + 59, 1 * 60, 5 * 60));
+  CHECK(!onair::in_night_window(5 * 60, 1 * 60, 5 * 60));
+
+  begin("EQUAL ENDPOINTS ARE NEVER DARK - the wrap branch would read as every minute of the day");
+  for (uint16_t m = 0; m < 1440; m += 97)
+    CHECK(!onair::in_night_window(m, 23 * 60, 23 * 60));
+
+  begin("inside the window with everything healthy, the panel goes dark");
+  CHECK(onair::night_should_darken(night_ok(2 * 60)));
+  CHECK(!onair::night_should_darken(night_ok(12 * 60)));
+
+  begin("IT REFUSES MID-CALL, and that refusal is the one that is not negotiable");
+  onair::NightInput in = night_ok(2 * 60);
+  in.busy = true;
+  CHECK_MSG(!onair::night_should_darken(in), "a busy row must never be dark, at any hour");
+
+  begin("it refuses when it has never been told the time - there is no RTC on this board");
+  in = night_ok(2 * 60);
+  in.clock_valid = false;
+  CHECK(!onair::night_should_darken(in));
+
+  begin("it refuses when the panel cannot say what is happening");
+  in = night_ok(2 * 60);
+  in.real_row = false;
+  CHECK_MSG(!onair::night_should_darken(in), "dark plus unknown is indistinguishable from unplugged");
+  in = night_ok(2 * 60);
+  in.heard_from_server = false;
+  CHECK(!onair::night_should_darken(in));
+
+  begin("a panel already woken by a state change stays awake for the rest of the window");
+  in = night_ok(2 * 60);
+  in.woken = true;
+  CHECK(!onair::night_should_darken(in));
+
+  begin("disabled is disabled, whatever the hour");
+  in = night_ok(2 * 60);
+  in.enabled = false;
+  CHECK(!onair::night_should_darken(in));
+
+  begin("the operator at the page beats the schedule, both ways");
+  onair::held().bench_level = onair::BENCH_NONE;
+  onair::held().night_dark = true;
+  CHECK_MSG(onair::effective_backlight() == 0, "the schedule darkens when nothing overrides it");
+  onair::held().bench_level = 100;
+  CHECK_MSG(onair::effective_backlight() == 100, "someone at the page can light a dark panel");
+  onair::held().bench_level = 0;
+  onair::held().night_dark = false;
+  CHECK_MSG(onair::effective_backlight() == 0, "and can darken a lit one");
+  onair::held().bench_level = onair::BENCH_NONE;
+  CHECK(onair::effective_backlight() == 100);
+}
+
 int main() {
   printf("onair page tests\n\n");
   g_task_yield_hook = onair::pump;
@@ -1005,6 +1075,7 @@ int main() {
   test_clock();
   test_glass_bar();
   test_bench();
+  test_night();
 
   printf("\n%d checks, %d failed\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;

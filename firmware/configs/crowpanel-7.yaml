@@ -147,17 +147,14 @@ interval:
   - interval: 200ms
     then:
       - lambda: |-
-          static int applied = onair::BENCH_NONE;
-          int want = onair::held().bench_level;
+          static int applied = -999;
+          int want = onair::effective_backlight();
           if (want == applied)
             return;
           applied = want;
           auto call = id(backlight).make_call();
           call.set_transition_length(0);
-          if (want == onair::BENCH_NONE || want == 100) {
-            // BENCH_NONE restores full brightness rather than "whatever it was", because
-            // ALWAYS_ON is the only level this panel has ever run at and inventing a
-            // remembered one would be state nobody asked for.
+          if (want >= 100) {
             call.set_state(true);
             call.set_brightness(1.0f);
           } else if (want == 0) {
@@ -365,17 +362,6 @@ display:
       // NOTE: the clock used to sit here, centred in this band at 22px. It was legible from a
       // desk and not from across the room, which is the distance this panel is read at (#71).
       // It is drawn over the state now; the band is diagnostics only again.
-
-      // THE BENCH'S BLACK (#87), painted OVER the finished frame and after the band, so what
-      // is on the glass is the whole screen black rather than a black rectangle with a
-      // diagnostics strip glowing under it. That is the picture being evaluated.
-      //
-      // Deliberately NOT an early return: every branch above still runs, so render_branch and
-      // the Render sensor keep reporting the state that WOULD be drawn. A bench that made the
-      // panel lie about its own branch would be a poor instrument for settling whether a dark
-      // panel lies.
-      if (onair::held().bench_black)
-        it.fill(Color(0, 0, 0));
 
       // Last statement on every path: proves the panel repainted.
       id(frames)++;

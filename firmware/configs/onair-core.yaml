@@ -427,6 +427,30 @@ number:
     max_value: 3600000
     step: 1000
     mode: box
+  # Minutes since midnight, because a number entity is the only NVS-backed editable type this
+  # firmware already has and two integers cannot be got into a state that means nothing. 1380
+  # is 23:00 and 420 is 07:00. Equal values are refused by in_night_window(), not by the
+  # entity, so no combination typed here can produce a permanently dark panel.
+  - platform: template
+    name: "NightSleepMin"
+    id: night_sleep_min
+    optimistic: true
+    restore_value: true
+    initial_value: 1380
+    min_value: 0
+    max_value: 1439
+    step: 1
+    mode: box
+  - platform: template
+    name: "NightWakeMin"
+    id: night_wake_min
+    optimistic: true
+    restore_value: true
+    initial_value: 420
+    min_value: 0
+    max_value: 1439
+    step: 1
+    mode: box
   - platform: template
     name: "NoDataMs"
     id: no_data_ms
@@ -443,6 +467,18 @@ number:
     mode: box
 
 switch:
+  # THE NIGHT SCHEDULE (#78), on by default. Rocket asked for 23:00-07:00 to be in force now.
+  #
+  # RESTORE_DEFAULT_ON is safe here only because night_should_darken() refuses far more often
+  # than it agrees: no clock, a busy row, a shape that is not a real row, or nothing heard from
+  # the server all keep the panel lit. Defaulting this ON without those refusals would be a
+  # panel that blanks itself the first time SNTP is slow.
+  - platform: template
+    name: "NightMode"
+    id: night_mode
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
   # auto (on, the default) pulls and follows the server. custom (off) FREEZES the table
   # last pulled and stops pulling - the honest one bit of D-38's custom mode, which is
   # the answer to "the server changed and I do not want to follow it right now". It is
@@ -712,6 +748,51 @@ interval:
             id(last_marked_unrefreshed) = mark;
             id(repaint_pending) = true;
           }
+          // ---- THE NIGHT SCHEDULE (#78) ----------------------------------------------
+          //
+          // A LEVEL TEST, evaluated every tick, so there is no edge to miss and no trigger to
+          // fire late. `v` is already in hand on the line above.
+          {
+            auto nt = id(wall_clock).now();
+            onair::NightInput ni;
+            ni.enabled = id(night_mode).state;
+            ni.clock_valid = nt.is_valid();
+            ni.now_min = nt.is_valid() ? (uint16_t) (nt.hour * 60 + nt.minute) : 0;
+            ni.sleep_min = (uint16_t) id(night_sleep_min).state;
+            ni.wake_min = (uint16_t) id(night_wake_min).state;
+            ni.busy = v.eff.known && v.eff.row.busy;
+            ni.real_row = v.shape != onair::Shape::NO_DATA &&
+                          v.shape != onair::Shape::NO_CONFIG &&
+                          v.shape != onair::Shape::UNKNOWN_KEY;
+            ni.heard_from_server = id(last_contact_ms) != 0;
+
+            // WAKE ON A STATE CHANGE, THEN STAY AWAKE UNTIL MORNING.
+            //
+            // Derived from the key captured on ENTERING the window, deliberately, and not from
+            // presence_key's on_value. That trigger fires on every server re-assert rather than
+            // on change (the supervisor re-asserts on a timer), so a panel armed that way would
+            // wake every minute all night.
+            bool in_win = ni.clock_valid && onair::in_night_window(ni.now_min, ni.sleep_min,
+                                                                   ni.wake_min);
+            std::string key = id(presence_key).has_state() ? id(presence_key).state
+                                                           : std::string();
+            if (!in_win) {
+              onair::held().night_woken = false;
+              onair::held().night_key.clear();
+            } else if (onair::held().night_key.empty()) {
+              onair::held().night_key = key.empty() ? std::string("\x01") : key;
+            } else if (key != onair::held().night_key) {
+              onair::held().night_woken = true;
+            }
+            ni.woken = onair::held().night_woken;
+
+            bool dark = onair::night_should_darken(ni);
+            if (dark != onair::held().night_dark) {
+              onair::held().night_dark = dark;
+              ESP_LOGI("onair", "night: screen %s", dark ? "off" : "on");
+            }
+          }
+
           // THE BENCH'S TRAP-DOOR (#87). Here rather than on a slower tick because the busy
           // release has to be fast: the whole promise of the bench is that an incoming call
           // takes the glass back immediately, and `v` is already computed on this line.
@@ -888,6 +969,28 @@ text_sensor:
                (unsigned) onair::held().overlay.size());
       return {std::string(buf)};
   - platform: template
+    # Why the screen is off, or why it is not (#78). A panel dark on purpose and a panel dark
+    # by accident look identical from the doorway; this tells them apart without a laptop, on
+    # a board with no serial console.
+    name: "Night"
+    id: night_sensor
+    update_interval: 5s
+    lambda: |-
+      if (onair::held().night_dark)
+        return {"dark"};
+      if (!id(night_mode).state)
+        return {"lit (schedule off)"};
+      auto t = id(wall_clock).now();
+      if (!t.is_valid())
+        return {"lit (no time yet)"};
+      if (!onair::in_night_window((uint16_t) (t.hour * 60 + t.minute),
+                                  (uint16_t) id(night_sleep_min).state,
+                                  (uint16_t) id(night_wake_min).state))
+        return {"lit (daytime)"};
+      if (onair::held().night_woken)
+        return {"lit (woken by a state change)"};
+      return {"lit (holding off - busy or no data)"};
+  - platform: template
     # The bench override (#87), or "normal". Same argument as Render and Clock: a panel this
     # one cannot be read over HTTP is a panel nobody can check, and this one deliberately
     # makes the glass disagree with the state - so it had better SAY so.
@@ -897,14 +1000,7 @@ text_sensor:
     lambda: |-
       if (!onair::bench_active())
         return {"normal"};
-      char buf[40];
-      snprintf(buf, sizeof(buf), "%s%s",
-               onair::held().bench_black ? "black" : "",
-               onair::held().bench_level == onair::BENCH_NONE
-                   ? ""
-                   : (std::string(onair::held().bench_black ? "+" : "") +
-                      "backlight" + std::to_string(onair::held().bench_level)).c_str());
-      return {std::string(buf)};
+      return {std::string("backlight") + std::to_string(onair::held().bench_level)};
   - platform: template
     # The clock EXACTLY as the glass draws it (#69), and "off" when it is not drawn at all.
     #
