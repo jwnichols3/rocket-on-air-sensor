@@ -223,6 +223,41 @@ test('the view survives a reload, and it is NOT config (D-80)');
   await page.click('#view-simple');
 }
 
+test('the help icon is a real link to a page that really exists');
+{
+  // The failure this catches is a help link that 404s - which looks perfectly fine in the
+  // console, because nothing about the header changes when its target is gone. So the test
+  // does not stop at the href: it FETCHES it and reads what comes back.
+  const help = await page.$('#help');
+  check(help !== null, 'no help control in the header');
+
+  const href = await page.$eval('#help', (a) => a.getAttribute('href'));
+  check(href === '/docs', `help points at "${href}"`);
+
+  // An anchor, not a button. Middle-click, cmd-click and "copy link address" are the whole
+  // reason, and a <button> that navigates loses all three without any visible symptom.
+  const tag = await page.$eval('#help', (a) => a.tagName);
+  check(tag === 'A', `help is a <${tag.toLowerCase()}>, so it cannot be opened in a new tab`);
+
+  // Reachable, and reachable WITHOUT the console's session - the guide is public.
+  // Fetches THE HREF, not a path retyped here. Hardcoding '/docs' in the test would let a
+  // renamed link keep passing against a URL nothing in the console points at any more.
+  const res = await page.evaluate(async () => {
+    const r = await fetch(document.getElementById('help').href);
+    const text = await r.text();
+    // The whole document is searched, not a prefix: the inlined stylesheet comes first and
+    // is longer than any slice worth taking, so a prefix check only ever sees the <head>.
+    return { status: r.status, type: r.headers.get('content-type'), h1: /<h1>/.test(text), bytes: text.length };
+  });
+  check(res.status === 200, `following the help link returned ${res.status}`);
+  check(/text\/html/.test(res.type ?? ''), `the help link served "${res.type}"`);
+  check(res.h1, `the guide came back with no heading in ${res.bytes} bytes - it rendered as nothing`);
+
+  // A control with no accessible name is a mystery circle in a row of mystery circles.
+  const label = await page.$eval('#help', (a) => a.getAttribute('aria-label'));
+  check(typeof label === 'string' && label.length > 0, 'the help icon has no accessible name');
+}
+
 test('the theme toggle overrides the system preference in BOTH directions');
 {
   const theme = () => page.evaluate(() => document.documentElement.getAttribute('data-theme'));

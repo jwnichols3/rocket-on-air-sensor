@@ -43,6 +43,21 @@
         <button id="view-simple" class="seg" type="button">Simple</button>
         <button id="view-advanced" class="seg" type="button">Advanced</button>
       </div>
+      <!--
+        The client guide, at /docs. An anchor rather than a button because it IS a
+        navigation: middle-click, cmd-click and "copy link" all have to keep working, and a
+        button that calls location.assign() breaks every one of them silently. New tab, so
+        reading the guide never costs the console's unsaved edits.
+      -->
+      <a id="help" class="iconbtn" href="/docs" target="_blank" rel="noreferrer"
+         aria-label="Client API guide" title="Client API guide">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none"
+             stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+          <circle cx="12" cy="12" r="9.1"></circle>
+          <path d="M9.3 9.2a2.8 2.8 0 015.4 1c0 1.9-2.7 2.3-2.7 4.1"></path>
+          <path d="M12 17.7h.01" stroke-width="2.4"></path>
+        </svg>
+      </a>
       <button id="theme" class="iconbtn" type="button" aria-label="Switch theme">
         <svg id="icon-sun" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
           <circle cx="12" cy="12" r="4.2" fill="currentColor"></circle>

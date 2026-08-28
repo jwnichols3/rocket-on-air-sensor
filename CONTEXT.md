@@ -4038,3 +4038,27 @@ else (state, light control, API) lives on the receiver.
   reachable only by typing the path. Left that way deliberately: the console's navigation is
   the thing Rocket is mid-way through redesigning (D-115), and adding a link to it is his call,
   not a side effect of writing documentation.
+
+- **D-117 (2026-08-28)** **The console gets a help icon, and it is an anchor.**
+
+  `/docs` shipped in D-116 reachable only by typing the path. The console header now carries
+  a `?` beside the theme toggle, pointing at it, opening in a new tab so reading the guide
+  never costs an unsaved edit in the console.
+
+  **An `<a href>`, not a `<button>` that navigates.** Middle-click, cmd-click and "copy link
+  address" are the three things a reader of documentation actually does with a help control,
+  and a button loses all three with no visible symptom. The `.iconbtn` class now neutralises
+  link decoration as well as button chrome, so one class dresses both controls.
+
+  **The test follows the href rather than a path retyped in the test.** Asserting
+  `href === '/docs'` and then fetching `'/docs'` would let a renamed link keep passing against
+  a URL nothing in the console points at. It fetches what the anchor actually holds, and
+  checks the response is HTML with a heading in it - a help link that 404s looks perfectly
+  normal in the header, because nothing about the header changes when its target is gone.
+
+  Both mutations were run: renaming the target and demoting the anchor to a button each fail
+  four checks.
+
+  **Not added to the logged-out landing page.** That page is deliberately not a dashboard
+  (D-39), and the audience for a client guide is someone who has already logged in or who is
+  reading `curl` output, not someone looking at the tally.
