@@ -3945,3 +3945,53 @@ else (state, light control, API) lives on the receiver.
   lie the contract has not yet been taught to tell correctly), and the times are editable only
   as minutes-since-midnight on the ESPHome dashboard. Shipped now because Rocket asked for the
   schedule to be in force tonight, not because the track is finished.
+
+- **D-115 (2026-08-28)** **The config page is reordered, the luminance column is deleted, and
+  the byte fence now measures the pages the device can actually serve.** Rocket: the Elegoo is
+  out of service.
+
+  **The fence was not guarding what its comment claimed, and that is the important half.**
+  `test_byte_budget` measured `seed_table()` alone - and `seed_table()` CLEARS THE OVERLAY, so
+  the single page it checked was the cheapest one that exists. Measured the moment it was made
+  to look at the others: every row changed here plus the screen held was **4246 B** and with a
+  banner **4289 B**, both over the 4000 B fence, with a green suite. A budget test that cannot
+  see the expensive case reports a safety it has never measured, and this one had been doing
+  that since #50. It now loops over seven states: default, one override, all five, screen held,
+  banner, dormant override, editor open.
+
+  **The luminance column is gone because the board it described is.** It printed `ring 73` and
+  `block 71` - the shape a 1-BIT panel would pick and the luminance it picked by. That choice
+  only ever existed because the 128x64 board has no colour and must tell two calm rows apart
+  by lit pixels; the colour panel collapses both to one picture (`crowpanel-7.yaml:312`). With
+  the Elegoo out of service it described a screen nobody looks at, in vocabulary nobody outside
+  this repo shares. Rocket could not tell what it meant, which is the whole test.
+
+  It paid for the plainer English: **47 B a row, 235 B at five rows**, and it is what brought
+  the worst case back under the fence. The RULE it encoded is not gone - `luminance()` and
+  `compute_view()` still decide what the glass draws, and those tests were rewritten to assert
+  the fact directly rather than to grep for it in HTML. A test coupled to a column dies with
+  the column; a test coupled to the rule does not.
+
+  **The table now comes first and the settings sit under one `Panel settings` heading.** The
+  order was the real defect under the layout complaint: the page was opened to change a state
+  and made you scroll past a skin picker set once, months ago. Within the settings the panel's
+  own setting comes before the one that only changes the website.
+
+  **The no-table page stopped short-circuiting its own settings away.** It used to `return`
+  after the NO CONFIG banner, which took the settings block with it - so the one situation
+  where you most want to check the panel's settings was the one where the page refused to show
+  them. Asserted now.
+
+  Copy: `NO CONFIG - no profile has ever arrived` became `This panel has not received the list
+  of states from the server`; `local override` became `changed here`; `Panel draws / Id / Busy
+  / Glass` became `Shows on the panel / State id / Means a call is live`; the `(D-55)`
+  self-reference and the paragraph around it are gone.
+
+  Live: config page **3282 B**, worst measured state 3994 B, 262 host checks, zero occurrences
+  of the luminance column.
+
+  **The layout selector is NOT built.** Three layouts were designed and judged (Fold 22, Rail
+  21, Two doors 21) and all three had fatal flaws found - an unscoped CSS rule that would put a
+  phantom nav on `/onair`, two miscounts of the table's grid children, and a proposal to delete
+  CSS the Elegoo shares. Rocket answered "arrange the form logically" rather than picking a
+  layout, so the ordering fix shipped and the navigation did not.

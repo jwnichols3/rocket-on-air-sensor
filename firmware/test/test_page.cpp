@@ -190,11 +190,12 @@ static void test_shapes() {
   begin("unknown renders NO_DATA, never BUSY - it short-circuits on the key");
   seed_table();
   CHECK(onair::compute_view("unknown", esphome::g_millis).shape == onair::Shape::NO_DATA);
+  // Asserted on compute_view directly now, not on page HTML. The page used to print this
+  // shape in a column; that column described a 1-bit board that is out of service and is
+  // gone. The RULE it was checking is not - the glass still branches on this.
   std::string h = get_config();
-  // The row line prints the shape word next to the luminance.
-  CHECK_MSG(has(h, "hatch"), "the unknown row must say hatch");
-  CHECK_MSG(!has(h, "<span class=\"shape\">block <s>26</s>"),
-            "the unknown row must NOT be described as a solid block");
+  CHECK_MSG(onair::compute_view("unknown", esphome::g_millis).shape != onair::Shape::BUSY,
+            "the unknown row must never be a solid block");
 
   begin("the emitter writes the firmware's own enum integer, so the page cannot disagree");
   seed_table();
@@ -222,11 +223,15 @@ static void test_shapes() {
   onair::held().table[0].bgcolor = 0x7f7f7f;
   CHECK(onair::compute_view("available", esphome::g_millis).shape == onair::Shape::CALM_LIGHT);
   seed_table();
-  h = get_config();
-  CHECK_MSG(has(h, "frame 167"), "interruptible draws the heavy double frame at 167");
-  CHECK_MSG(has(h, "ring 73"), "available draws the open ring at 73");
-  CHECK_MSG(has(h, "block <s>71</s>"),
-            "on-air is busy, so its luminance is struck through - colour gets no vote there");
+  // Asserted through compute_view, which is what the GLASS branches on. The page used to
+  // print these and no longer does; the rule outlived its column.
+  CHECK_MSG(onair::compute_view("interruptible", esphome::g_millis).shape ==
+                onair::Shape::CALM_HEAVY,
+            "interruptible draws the heavy shape at 167");
+  CHECK_MSG(onair::compute_view("available", esphome::g_millis).shape == onair::Shape::CALM_LIGHT,
+            "available draws the light shape at 73");
+  CHECK_MSG(onair::compute_view("on-air", esphome::g_millis).shape == onair::Shape::BUSY,
+            "on-air is busy, so colour gets no vote at all - luminance 71 is not consulted");
 
   begin("an override that crosses 128 changes the shape the page reports");
   seed_table();
@@ -235,9 +240,14 @@ static void test_shapes() {
   o.has_bgcolor = true;
   o.bgcolor = 0x3b5bdb;  // 96, under the line
   onair::held().overlay.push_back(o);
-  h = get_config();
-  CHECK_MSG(has(h, "ring 96"), "the override flips interruptible from frame to ring");
-  CHECK_MSG(!has(h, "frame 167"), "and the server's 167 is no longer what this panel draws");
+  // Through effective(), which is what BOTH the glass and the page resolve a row with. The
+  // page no longer prints the shape, but a local colour override must still change the shape
+  // the panel would draw, and that is the fact worth protecting.
+  onair::Effective eff = onair::effective("interruptible");
+  CHECK_MSG(onair::luminance(eff.row.bgcolor) == 96, "the override's colour is what resolves");
+  CHECK_MSG(onair::luminance(eff.row.bgcolor) < 128,
+            "so this row crosses from heavy to light, and the server's 167 no longer decides");
+  onair::held().overlay.clear();
 }
 
 // =========================================================================================
@@ -428,9 +438,16 @@ static void test_appearance() {
   std::string a2 = a, b2 = b;
   a2.replace(a2.find("data-skin=\"table\""), strlen("data-skin=\"table\""), "X");
   b2.replace(b2.find("data-skin=\"colorful\""), strlen("data-skin=\"colorful\""), "X");
-  // The banner text differs ("appearance saved" is consumed), so compare the list only.
-  CHECK_MSG(a2.substr(a2.find("<div class=\"list\"")) == b2.substr(b2.find("<div class=\"list\"")),
-            "a skin must cost nothing in the scarce pool - the markup below the chrome is identical");
+  // The banner text differs ("appearance saved" is consumed) and the settings block below the
+  // table legitimately differs (it holds the selected="" that IS the setting), so the window
+  // is the table itself - the expensive part, and the part a skin must not touch.
+  auto table_of = [](const std::string &page) {
+    size_t from = page.find("<div class=\"list\"");
+    size_t to = page.find("<h2>Panel settings</h2>");
+    return page.substr(from, to - from);
+  };
+  CHECK_MSG(table_of(a2) == table_of(b2),
+            "a skin must cost nothing in the scarce pool - the table markup is identical");
 }
 
 // =========================================================================================
@@ -458,9 +475,10 @@ static void test_bounds_and_banners() {
   o.label = "DEEP WORK";
   onair::held().overlay.push_back(o);
   h = get_config();
-  CHECK_MSG(has(h, "dormant"), "an override that stopped applying without saying so is silent rot");
+  CHECK_MSG(has(h, "not in the server list"),
+            "an override that stopped applying without saying so is silent rot");
   CHECK(has(h, "focus-mode"));
-  CHECK(has(h, "applies to nothing"));
+  CHECK_MSG(has(h, "Clear"), "and it can still be cleared");
 
   begin("PENDING says the page body is unconfirmed, not merely 'reload'");
   seed_table();
@@ -474,8 +492,12 @@ static void test_bounds_and_banners() {
   onair::held().have = false;
   onair::held().table.clear();
   h = get_config();
-  CHECK(has(h, "NO CONFIG"));
-  CHECK(!has(h, "class=\"list\""));
+  CHECK_MSG(has(h, "has not received the list of states"),
+            "it must say what is wrong in words, not in this repo's shorthand");
+  CHECK_MSG(!has(h, "class=\"list\""), "and offer nothing to edit");
+  CHECK_MSG(has(h, "<h2>Panel settings</h2>"),
+            "but the settings must SURVIVE it - a panel with no table is exactly when you "
+            "want to check its settings, and this page used to return before showing them");
 
   begin("the clear controls carry formnovalidate");
   // A half-typed hex must never block the one control that puts a row back.
@@ -491,10 +513,66 @@ static void test_bounds_and_banners() {
 // -fno-exceptions is abort(), which reboots the panel driving the light.
 // =========================================================================================
 static void test_byte_budget() {
-  begin("the five-row page stays well under what it replaced");
+  // EVERY STATE THE DEVICE CAN ACTUALLY SERVE, not just the clean one.
+  //
+  // This gate used to measure `seed_table()` alone - and seed_table() CLEARS THE OVERLAY, so
+  // the one page it checked was the cheapest page that exists. The states that actually blow
+  // the fence (rows changed here, a banner, the screen held) were never on it, and the suite
+  // stayed green while the real page went over. A budget test that cannot see the expensive
+  // case is worse than none: it reports safety it has not measured.
+  struct Case { const char *name; size_t bytes; };
+  std::vector<Case> cases;
+
+  auto override_row = [](const char *id, const char *label) {
+    onair::Override o;
+    o.id = id;
+    o.has_label = true;
+    o.label = label;
+    onair::held().overlay.push_back(o);
+  };
+
   seed_table();
-  size_t five = get_config().size();
-  CHECK_MSG(five < 4000, "5 rows was 6,840 B before #50; measured " + std::to_string(five));
+  cases.push_back({"default", get_config().size()});
+
+  seed_table();
+  override_row("available", "FREE NOW");
+  cases.push_back({"one row changed here", get_config().size()});
+
+  seed_table();
+  override_row("available", "FREE NOW");
+  override_row("on-air", "ON A CALL");
+  override_row("interruptible", "KNOCK FIRST");
+  override_row("recording", "RECORDING NOW");
+  override_row("unknown", "NOT SURE");
+  cases.push_back({"every row changed here", get_config().size()});
+
+  seed_table();
+  override_row("available", "FREE NOW");
+  override_row("on-air", "ON A CALL");
+  override_row("interruptible", "KNOCK FIRST");
+  override_row("recording", "RECORDING NOW");
+  override_row("unknown", "NOT SURE");
+  onair::held().bench_level = 0;
+  cases.push_back({"every row changed + screen held", get_config().size()});
+  cases.push_back({"...and a banner on top",
+                   onair::config_page("Screen turned off.", onair::Submitted::APPLIED, "", true)
+                       .size()});
+  onair::held().bench_level = onair::BENCH_NONE;
+
+  // A row the server has since deleted is still rendered, deliberately (an override that
+  // stopped applying without saying so is silent rot), and it is the widest row there is.
+  seed_table();
+  override_row("deleted-row-with-a-long-id", "A LABEL THAT IS LONG");
+  cases.push_back({"a dormant override for a deleted row", get_config().size()});
+
+  begin("EVERY five-row page the device can serve stays under the fence");
+  for (const auto &c : cases)
+    CHECK_MSG(c.bytes < 4000,
+              std::string(c.name) + " = " + std::to_string(c.bytes) + " B");
+  printf("        [budget]");
+  for (const auto &c : cases)
+    printf(" %s=%zu", c.name, c.bytes);
+  printf("\n");
 
   begin("per-row cost stays near 420 bytes at the cap");
   seed_table();
@@ -507,8 +585,9 @@ static void test_byte_budget() {
   size_t full = get_config().size();
   CHECK_MSG(full < 16000, "24 rows was ~20,860 B before #50; measured " + std::to_string(full));
   CHECK_MSG(full < 24000, "and must stay under the reserve() the device is proven to survive");
-  printf("        [budget] 5 rows %zu B, %zu rows %zu B, editor open %zu B\n", five,
-         onair::MAX_ROWS_RENDERED, full, get_config("row00").size());
+  printf("        [budget] %zu rows %zu B, editor open %zu B\n", onair::MAX_ROWS_RENDERED,
+         full, get_config("row00").size());
+  seed_table();
 }
 
 // =========================================================================================
@@ -791,8 +870,10 @@ static void test_glass_bar() {
   std::string h = get_config();
   CHECK(has(h, "<strong>Pages</strong>"));
   CHECK(has(h, "<strong>Clock</strong>"));
-  CHECK_MSG(h.find("<strong>Pages</strong>") < h.find("<strong>Clock</strong>"),
-            "Pages first, matching the order the page is read in");
+  CHECK_MSG(h.find("<strong>Clock</strong>") < h.find("<strong>Pages</strong>"),
+            "the panel's own setting comes before the one that only changes this website");
+  CHECK_MSG(h.find("<div class=\"list\"") < h.find("<h2>Panel settings</h2>"),
+            "and the state table comes before both - it is what the page is opened for");
 
   begin("the bar shows the CURRENT state, so it cannot lie about what the panel is doing");
   seed_table();

@@ -336,7 +336,7 @@ inline std::string status_page() {
         h += " <strong>The server is not answering, so this is the last state it reported, "
              "not a current reading.</strong>";
       if (s.view.eff.any_override())
-        h += " <span class=\"badge\">local override</span>";
+        h += " <span class=\"badge\">changed here</span>";
       break;
   }
   h += "</p><dl>";
@@ -437,16 +437,16 @@ inline void render_row_line(std::string &h, const Row &pulled, const Override *o
   Effective e = effective(pulled.id);
   bool overridden = (o != nullptr && !o->empty());
 
-  // The shape this row would draw, computed by the FIRMWARE and written through as an
-  // integer. `unknown` short-circuits to NO_DATA on the key, before the busy test.
-  Shape shape;
-  if (pulled.id == "unknown")
-    shape = Shape::NO_DATA;
-  else if (e.row.busy)
-    shape = Shape::BUSY;
-  else
-    shape = luminance(e.row.bgcolor) >= 128 ? Shape::CALM_HEAVY : Shape::CALM_LIGHT;
-
+  // THE SHAPE/LUMINANCE COLUMN IS GONE, and it is not a cut for space alone.
+  //
+  // It printed things like `ring 73` and `block 71` - the shape a 1-BIT panel would pick and
+  // the luminance it picked it by. That choice only ever existed because the 128x64 board has
+  // no colour and must tell two calm rows apart by lit-pixel count; the colour panel on the
+  // desk draws the operator's own colours and collapses both to one picture. With that board
+  // out of service the column described a screen nobody is looking at, in vocabulary nobody
+  // outside this repo shares. Rocket's word for it was that he could not tell what it meant.
+  //
+  // It paid for the plainer English elsewhere: 47 B a row, 235 B at five rows.
   h += "<div class=\"r";
   if (overridden)
     h += " ov";
@@ -460,25 +460,9 @@ inline void render_row_line(std::string &h, const Row &pulled, const Override *o
   h += html_escape(pulled.id);
   h += "</code>";
   if (overridden)
-    h += "<span class=\"badge loc\">local</span>";
+    h += "<span class=\"badge loc\">changed here</span>";
   h += "</span><span class=\"busy";
   h += pulled.busy ? " y\">busy" : "\">calm";
-  h += "</span><span class=\"shape\">";
-
-  switch (shape) {
-    case Shape::BUSY: h += "block "; break;
-    case Shape::CALM_HEAVY: h += "frame "; break;
-    case Shape::CALM_LIGHT: h += "ring "; break;
-    default: h += "hatch "; break;
-  }
-  // Struck through where luminance gets no vote: colour never reaches a busy branch, and
-  // `unknown` never renders at all. Saying so in the markup beats a paragraph explaining it.
-  bool consulted = (shape == Shape::CALM_HEAVY || shape == Shape::CALM_LIGHT);
-  if (!consulted)
-    h += "<s>";
-  h += std::to_string((unsigned) luminance(e.row.bgcolor));
-  if (!consulted)
-    h += "</s>";
   h += "</span>";
 
   if (open_id != pulled.id) {
@@ -665,12 +649,21 @@ inline void render_bench(std::string &h) {
     h += "<button name=\"bench\" value=\"0\">Turn the screen off</button>";
   h += "<span class=\"m\">";
   if (level == 0)
-    h += "The screen is off. It comes back on by itself within two minutes, and straight "
-         "away if a call starts.";
+    h += "Comes back on by itself within two minutes, or at once if a call starts.";
   else
-    h += "Turns the panel's screen off, to see what it looks like dark. It comes back on by "
-         "itself within two minutes.";
+    h += "Turns the panel screen off so you can see it dark. It comes back by itself.";
   h += "</span></form>";
+}
+
+/// Everything you set once and then leave alone, in one place and below the table.
+inline void render_settings(std::string &h, bool show_bench) {
+  h += "<h2>Panel settings</h2>";
+  render_glass(h);
+  render_appearance(h);
+  // The Beta bar is off the default page for the byte budget, but an ACTIVE override always
+  // renders: a hidden control holding the screen dark is the trap this whole thing avoids.
+  if (show_bench || bench_active())
+    render_bench(h);
 }
 
 inline std::string config_page(const std::string &banner, Submitted outcome,
@@ -716,12 +709,14 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
     h += "</p>";
   }
 
-  h += "<p class=\"m\">Presentation only, and only on this panel. Whether a row is "
-       "<strong>busy</strong>, and which rows exist at all, are the server's. Blank a field "
-       "to follow the server again.</p>";
+  h += "<p class=\"m\">The server decides which states exist. Here you set the word and "
+       "colours this panel shows for each one. Clear a field to go back to the "
+       "server's.</p>";
 
-  render_appearance(h);
-  render_glass(h);
+  // SETTINGS MOVED BELOW THE TABLE (#88). The state table is what this page is opened FOR;
+  // the settings under it are set once and then never touched. Putting them first meant
+  // scrolling past a skin picker to reach the reason you came. Rocket's words: "arrange the
+  // form logically".
   // ONLY WHEN ASKED FOR, OR WHEN IT IS HOLDING THE GLASS.
   //
   // Not shyness - arithmetic. This bar cost 4228 B on the five-row page against a 4000 B
@@ -732,8 +727,6 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
   // The `|| bench_active()` half is the part that matters. An override must ALWAYS be visible
   // and always one click from released, however the operator reached the page - a hidden
   // control holding the glass dark is exactly the trap this feature is built to avoid.
-  if (show_bench || bench_active())
-    render_bench(h);
 
   h += "<div class=\"bar\"><span class=\"m\">";
   if (have) {
@@ -754,16 +747,20 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
   }
   h += "</div>";
 
+  // NO EARLY RETURN. It used to bail out here, which took the settings below with it - so
+  // the one situation where you most want to check the panel's settings was the one where
+  // the page refused to show them.
   if (!have) {
-    h += "<p class=\"banner err\">NO CONFIG - no profile has ever arrived, so there is "
-         "nothing to override yet. Check the server host, port and passphrase on the "
-         "ESPHome dashboard, then press Refresh.</p>";
+    h += "<p class=\"banner err\">This panel has not received the list of states from the "
+         "server, so there is nothing to change yet. Check the server address and password "
+         "on the ESPHome dashboard, then press Refresh.</p>";
+    render_settings(h, show_bench);
     page_foot(h);
     return h;
   }
 
-  h += "<div class=\"list\"><div class=\"hd\"><span>Panel draws</span><span>Id</span>"
-       "<span>Busy</span><span>Glass</span></div>";
+  h += "<div class=\"list\"><div class=\"hd\"><span>Shows on the panel</span>"
+       "<span>State id</span><span>Means a call is live</span></div>";
 
   size_t drawn = 0;
   for (const auto &r : table) {
@@ -790,8 +787,7 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
     h += html_escape(o.has_label ? o.label : o.id);
     h += "</span><span class=\"id\"><code>";
     h += html_escape(o.id);
-    h += "</code><span class=\"badge\">dormant</span></span><span class=\"busy\">-</span>"
-         "<span class=\"shape\">applies to nothing</span>"
+    h += "</code></span><span class=\"busy\">not in the server list</span>"
          "<form method=\"post\" action=\"/onair/config\" style=\"display:inline\">"
          "<input type=\"hidden\" name=\"id\" value=\"";
     h += html_escape(o.id);
@@ -807,11 +803,12 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
          "edited here. Edit them in the admin console instead.</p>";
   }
 
-  h += "<p class=\"m\">This panel cannot show you the server password, and nothing can read "
-       "it back off the panel. To change it, use the ESPHome dashboard. "
-       "<a href=\"/onair\">Back to status</a> &middot; "
-       "<a href=\"/onair/config?bench=1\">Beta features</a> &middot; "
-       "<a href=\"/?esphome=1\">ESPHome dashboard</a></p>";
+  render_settings(h, show_bench);
+
+  h += "<p class=\"m\"><a href=\"/onair\">Status</a> &middot; "
+       "<a href=\"/onair/config?bench=1\">Beta</a> &middot; "
+       "<a href=\"/?esphome=1\">ESPHome dashboard, for the server address and "
+       "password</a></p>";
   h += "<script src=\"/onair.js\"></script>";
   page_foot(h);
   return h;

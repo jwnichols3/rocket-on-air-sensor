@@ -92,7 +92,7 @@ button.danger { background: none; color: var(--bad); border-color: var(--bad-lin
 .list { border: 1px solid var(--line); border-radius: 8px; overflow: hidden }
 .hd, .r {
   display: grid; gap: .7rem; align-items: center;
-  grid-template-columns: 11.5rem minmax(6rem, 1fr) 4.5rem 8rem auto;
+  grid-template-columns: 11.5rem minmax(6rem, 1fr) 10rem auto;
   padding: .45rem .7rem;
 }
 .hd {
