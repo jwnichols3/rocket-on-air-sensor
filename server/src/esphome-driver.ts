@@ -362,6 +362,10 @@ export class EsphomeTextDriver implements LightDriver {
       });
       if (res.status === 404) {
         await res.arrayBuffer();
+        // A 404 IS an answer, so the host is reachable and any outage edge closes here. Left
+        // out, the one call that latches this entity could swallow the BACK line for an
+        // outage that had just ended, and the log would say the host was still gone.
+        this.reachable();
         this.nightEntityMissing = true;
         this.log(`[esphome-driver] no "${this.nightEntity}" text_sensor - firmware predates the night schedule`);
         return null;

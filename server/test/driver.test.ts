@@ -498,6 +498,25 @@ test('firmware with no Night sensor is written off after one 404, and is NOT an 
   assert.equal(await driver.set('available'), 'available');
 });
 
+test('the Night 404 CLOSES an open outage edge - a 404 is still an answer', async (t) => {
+  const d = await fakeDevice();
+  t.after(() => d.close());
+  const lines: string[] = [];
+  const driver = driverFor(d, { retries: 0, reprobeMs: 0, log: (l: string) => lines.push(l) });
+
+  d.status = 503;
+  await driver.set('on-air');
+  assert.equal(lines.filter((l) => l.includes('UNREACHABLE')).length, 1, lines.join('\n'));
+
+  // The host comes back, and the very first call to reach it is the one that discovers the
+  // Night entity is missing. If that path did not report the host reachable, the BACK line
+  // would be swallowed and the log would say the host was still gone.
+  d.status = null;
+  d.night = null;
+  assert.equal(await driver.glassDark(), null);
+  assert.equal(lines.filter((l) => l.includes('BACK after')).length, 1, lines.join('\n'));
+});
+
 test('glassDark reports null rather than "lit" when it cannot tell', async (t) => {
   const d = await fakeDevice();
   const driver = driverFor(d, { retries: 0, timeoutMs: 300 });
