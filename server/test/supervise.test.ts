@@ -279,6 +279,11 @@ test('supervisor: the recovery line carries the elapsed time and the tick count 
   assert.match(back(lines)[0]!, /10\.42\.14\.239/);
   // esphome-driver.ts's "BACK after 3s and 45 failed calls" shape: how long, and how much.
   assert.match(back(lines)[0]!, /REPAINTING after \d+s and \d+ frozen ticks?/, back(lines)[0]);
+  // And the count is a real accumulation, not the constant 1. A recovery line that always
+  // says "1 frozen tick" cannot tell a momentary blip from an hour of dead glass, which is
+  // the entire reason the count is on the line.
+  const ticks = Number(/and (\d+) frozen/.exec(back(lines)[0]!)?.[1]);
+  assert.ok(ticks >= 2, `the tick count is not accumulating: ${back(lines)[0]}`);
 });
 
 test('supervisor: a FLAPPING panel logs per transition, not once (#84)', async () => {

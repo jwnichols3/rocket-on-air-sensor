@@ -169,32 +169,42 @@ test('#68: the supervisor\'s polling is what the window drains', async (t) => {
   assert.equal(hole.connections(), armed, '10 polls inside the window, none on the wire');
 });
 
-test('#68: the queue does not grow while the panel is away', async (t) => {
+test('#68: a write drains faster than the detector produces them', async (t) => {
+  // THE REAL INVARIANT, and the one the original queue-depth test stopped measuring.
+  //
+  // That test only had supervisor ticks in it, and the supervisor CANNOT pile up: schedule()
+  // re-arms in a `.finally` on the previous tick, so it never has more than one outstanding.
+  // So `deepest <= 2` was true no matter what the driver did - it survived a mutation that
+  // removed the skip window entirely. A test that cannot go red is not a test.
+  //
+  // What actually grew the queue is arrivals outpacing drains: the detector writes every ~5s
+  // (D-90) into a shared queue where each write's device work was 6.4s. Taking the version
+  // nudge off the write path is what inverted that, and this asserts the inversion at the
+  // SHIPPED constants, because a scaled-down version of a ratio test proves nothing about
+  // the ratio that ships.
+  //
+  // THIS MEASURES THE DRIVER, NOT THE ROUTE, and the pair is what makes it sound: the other
+  // half - that `doWrite` adds no device work beyond `set()` - is guarded structurally by
+  // "a state write does NOT nudge (#68)" in config-routes.test.ts, with no timing in it at
+  // all. Measured here, that half would cost this suite the app's 6.4s boot to prove
+  // something an assertion on a call list already proves for free. Checked deliberately:
+  // putting the nudge back in `doWrite` does NOT turn this test red, and it should not.
+  const DETECTOR_INTERVAL_MS = 5000; // D-90
   const hole = await blackHole(t);
-  const driver = new EsphomeTextDriver({
-    host: hole.host,
-    timeoutMs: 100,
-    retries: 0,
-    reprobeMs: 60_000,
-    log: () => {},
-  });
-  // A supervisor ticking far faster than its ladder - the shape of the real defect, where a
-  // 5s tick sat behind a 4.4s ladder and the backlog grew for as long as the panel was away.
-  const h = await boot(t, driver, 20);
+  const driver = new EsphomeTextDriver({ host: hole.host, ...SHIPPED, log: () => {} });
 
-  let deepest = 0;
-  const sampler = setInterval(() => {
-    deepest = Math.max(deepest, h.app.writeQueueDepth());
-  }, 2);
-  t.after(() => clearInterval(sampler));
+  const t0 = Date.now();
+  assert.equal(await driver.set('on-air'), 'unknown');
+  const cost = Date.now() - t0;
 
-  await sleep(600); // ~30 ticks at 20ms; ungated they cost 100ms each and pile up
-  clearInterval(sampler);
-
-  // Depth counts supervisor ticks as well as writes, so 2 is "one write plus at most one
-  // tick". Asserting the depth and not the wall time is deliberate: wall time is what a
-  // loaded machine ruins, and the queue is the actual defect.
-  assert.ok(deepest <= 2, `the shared queue reached depth ${deepest}; it should never pass 2`);
+  assert.ok(
+    cost < DETECTOR_INTERVAL_MS,
+    `one write costs ${cost}ms against a dead host and the detector produces one every ` +
+      `${DETECTOR_INTERVAL_MS}ms - the queue grows without bound, which is the whole of #68`,
+  );
+  // And it really did go to the wire. A write that drains fast because it was skipped is the
+  // regression D-132 removed, not the fix D-130 intended.
+  assert.ok(hole.connections() >= 2, 'the write never reached the host');
 });
 
 test('#68: a dead host is polled once per window, not once per call', async (t) => {

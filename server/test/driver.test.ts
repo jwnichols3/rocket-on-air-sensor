@@ -352,10 +352,12 @@ test('a nudge that did not get through is retried on the next one', async (t) =>
   const d = await fakeDevice();
   t.after(() => d.close());
   d.status = 503; // the device is up but not answering this
-  // reprobeMs: 0 turns #68's skip window off. This test is about the nudge not caching a
-  // version it failed to send, which is a different property; with the window on, the
-  // second call would be skipped and the test would be measuring the breaker instead.
-  const driver = driverFor(d, { reprobeMs: 0 });
+  // AT PRODUCTION SETTINGS. This needed `reprobeMs: 0` for one afternoon, between #68 and
+  // D-132, and that opt-out was the bug reporting itself: the window was armed by a
+  // single-shot failure, so it swallowed the retry this test exists to prove. Only an
+  // exhausted ladder arms it now, and `setTableVersion` has no ladder, so the second call
+  // goes to the wire exactly as it does in service.
+  const driver = driverFor(d);
   await driver.setTableVersion(6);
   assert.deepEqual(d.versionPosts, [], 'nothing was recorded');
   d.status = null;
@@ -405,10 +407,10 @@ test('coming back is the other edge, and it carries how long and how much was lo
   const d = await fakeDevice();
   t.after(() => d.close());
   const lines: string[] = [];
-  // reprobeMs: 0: this test is about the failure log's EDGES, and it walks a host down and
-  // back on consecutive calls. #68's skip window would swallow the recovering call. The
-  // window's own recovery behaviour is tested in write-latency.test.ts.
-  const driver = driverFor(d, { retries: 0, reprobeMs: 0, log: (l: string) => lines.push(l) });
+  // AT PRODUCTION SETTINGS, restored by D-132. It walks a host down and back on consecutive
+  // calls, and the recovering call is a `set()` - which is never gated, because skipping a
+  // write costs the light rather than costing the server knowledge.
+  const driver = driverFor(d, { retries: 0, log: (l: string) => lines.push(l) });
 
   d.status = 503; // up, but answering nothing useful
   await driver.set('on-air');
@@ -502,6 +504,10 @@ test('the Night 404 CLOSES an open outage edge - a 404 is still an answer', asyn
   const d = await fakeDevice();
   t.after(() => d.close());
   const lines: string[] = [];
+  // reprobeMs: 0 HERE IS DELIBERATE and is not the opt-out D-132 removed elsewhere. This
+  // test is about the 404 branch inside glassDark(), and glassDark IS gated - correctly, it
+  // is a poll. Without this the call under test would be skipped rather than reaching the
+  // branch, and the test would pass while proving nothing.
   const driver = driverFor(d, { retries: 0, reprobeMs: 0, log: (l: string) => lines.push(l) });
 
   d.status = 503;
