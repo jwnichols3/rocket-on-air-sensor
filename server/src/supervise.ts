@@ -1,4 +1,5 @@
 import type { LightDriver } from './driver.js';
+import { humanMs, stamp } from './log-format.js';
 import { UNKNOWN_ID, type OnAirState, type StateStore } from './state.js';
 
 export interface SuperviseOptions {
@@ -21,10 +22,54 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
   const decayMs = o.decayMs ?? 30000;
   const log = o.log ?? console.log;
 
+  const host = o.driver.host ?? '(no host)';
+
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
   let lastAssertAt = Date.now();
   let lastGoodAt = Date.now();
+
+  /**
+   * WHETHER THE PANEL IS REPAINTING, and since when (#84).
+   *
+   * This line used to fire on every tick - `pollMs` defaults to 5000, so a panel frozen for
+   * an hour wrote it 720 times, with no timestamp and no host on any of them. That is the
+   * census D-109 took of the driver: 1133 lines, 1127 of them two repeated strings, one
+   * event recorded a thousand times. D-109 fixed the driver and left this line alone.
+   *
+   * So the supervisor holds the state and logs only the EDGES, exactly as the driver does.
+   * Steady-state repeats are DROPPED rather than rate-limited: the second identical line
+   * says nothing the first did not, and the recovery line's tick count says it better. A
+   * panel that FLAPS still logs per transition - alternating results are a different fault
+   * from a dead one and must not read like one.
+   */
+  let frozenSince: number | null = null;
+  let frozenTicks = 0;
+
+  /** The panel is not repainting. Silent unless that is news. */
+  function notRepainting(): void {
+    frozenTicks++;
+    if (frozenSince !== null) return;
+    frozenSince = Date.now();
+    log(`[supervisor] ${stamp()} ${host} NOT REPAINTING: device state agrees but the glass is not moving`);
+  }
+
+  /**
+   * The panel repainted. Silent unless that is news - which it is exactly once, on the way
+   * back, and then the line carries how long the glass was still and how many ticks reported
+   * it, which is what tells a flapping panel from a dead one.
+   *
+   * Called ONLY on a `true` reading. `null` is "cannot tell yet", and treating no evidence
+   * as recovery would log a panel back to health it never reached.
+   */
+  function repainting(): void {
+    if (frozenSince === null) return;
+    const stillFor = humanMs(Date.now() - frozenSince);
+    const n = frozenTicks;
+    frozenSince = null;
+    frozenTicks = 0;
+    log(`[supervisor] ${stamp()} ${host} REPAINTING after ${stillFor} and ${n} frozen ${n === 1 ? 'tick' : 'ticks'}`);
+  }
 
   /**
    * THE BUSY RULE'S SERVER HALF IS GONE (D-91, superseding the server half of D-32). The
@@ -84,12 +129,14 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
       painting = await bestEffort('repainted()', () => o.driver.repainted!(), null);
     }
 
+    if (painting === true) repainting();
+    else if (painting === false) notRepainting();
+
     let next: string;
     if (got === settled && painting !== false) {
       lastGoodAt = Date.now();
       next = settled;
     } else if (painting === false) {
-      log('[supervisor] device state agrees but the panel is not repainting');
       next = UNKNOWN_ID;
     } else if (Date.now() - lastGoodAt > decayMs) {
       next = UNKNOWN_ID; // an admission of ignorance, never a claim

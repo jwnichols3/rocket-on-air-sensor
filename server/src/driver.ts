@@ -1,6 +1,12 @@
 import { UNKNOWN_ID } from './state.js';
 
 export interface LightDriver {
+  /**
+   * The device this driver talks to, for logs. Optional because a driver that models no
+   * device (NoopDriver) has no host to name - but a log line about a panel that does not
+   * say WHICH panel is half a line, which is D-109's finding and #84's.
+   */
+  readonly host?: string;
   /** Command the device, then read back. Returns what the device confirmed. Never throws. */
   set(stateId: string): Promise<string>;
   /** Read the device's own current state id. `unknown` if unreachable. Never throws. */

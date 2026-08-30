@@ -7,6 +7,7 @@ import { defaultState, StateStore, StateTable, UNKNOWN_ID, type OnAirState } fro
 import { waitFor } from './wait-for.js';
 
 class FakeLight implements LightDriver {
+  readonly host = '10.42.14.239';
   sets: string[] = [];
   reads = 0;
   /** What the device reports. `unknown` models an unreachable device. */
@@ -228,4 +229,70 @@ test('no TTL: the supervisor never rewrites state on a timer', async () => {
   await sleep(80);
   r.stop();
   assert.equal(r.store.get().updatedAt, before, 'only an explicit write moves updatedAt');
+});
+
+// ---------------------------------------------- the not-repainting line logs edges (#84)
+
+const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/;
+const frozen = (lines: string[]): string[] => lines.filter((l) => l.includes('NOT REPAINTING'));
+const back = (lines: string[]): string[] => lines.filter((l) => l.includes('REPAINTING after'));
+
+test('supervisor: ten frozen ticks produce ONE stamped, host-named line (#84)', async () => {
+  const lines: string[] = [];
+  const r = rig({ log: (l: string) => lines.push(l) });
+  r.light.frames = false;
+  await waitFor(() => r.enqueued >= 10, () => `wanted 10 ticks, got ${r.enqueued}`);
+  r.stop();
+  // The whole point. This used to fire on every tick, so a panel frozen for an hour wrote
+  // it 720 times at the default 5s poll - D-109's census, on a second component.
+  assert.equal(frozen(lines).length, 1, lines.join('\n'));
+  assert.match(frozen(lines)[0]!, ISO);
+  assert.match(frozen(lines)[0]!, /10\.42\.14\.239/);
+  assert.equal(back(lines).length, 0);
+});
+
+test('supervisor: the recovery line carries the elapsed time and the tick count (#84)', async () => {
+  const lines: string[] = [];
+  const r = rig({ log: (l: string) => lines.push(l) });
+  r.light.frames = false;
+  await waitFor(() => frozen(lines).length === 1, () => lines.join('\n'));
+  await waitFor(() => r.enqueued >= 5, () => `wanted 5 ticks, got ${r.enqueued}`);
+  r.light.frames = true;
+  await waitFor(() => back(lines).length === 1, () => lines.join('\n'));
+  r.stop();
+  assert.equal(frozen(lines).length, 1, lines.join('\n'));
+  assert.match(back(lines)[0]!, ISO);
+  assert.match(back(lines)[0]!, /10\.42\.14\.239/);
+  // esphome-driver.ts's "BACK after 3s and 45 failed calls" shape: how long, and how much.
+  assert.match(back(lines)[0]!, /REPAINTING after \d+s and \d+ frozen ticks?/, back(lines)[0]);
+});
+
+test('supervisor: a FLAPPING panel logs per transition, not once (#84)', async () => {
+  // A panel alternating between painting and frozen is a different fault from a dead one
+  // and must not read like one. This is the case a "log it once ever" fix would hide.
+  const lines: string[] = [];
+  const r = rig({ log: (l: string) => lines.push(l) });
+  for (let i = 0; i < 3; i++) {
+    r.light.frames = false;
+    await waitFor(() => frozen(lines).length === i + 1, () => lines.join('\n'));
+    r.light.frames = true;
+    await waitFor(() => back(lines).length === i + 1, () => lines.join('\n'));
+  }
+  r.stop();
+  assert.equal(frozen(lines).length, 3, lines.join('\n'));
+  assert.equal(back(lines).length, 3, lines.join('\n'));
+});
+
+test('supervisor: "cannot tell" is not recovery - a null reading logs nothing (#84)', async () => {
+  const lines: string[] = [];
+  const r = rig({ log: (l: string) => lines.push(l) });
+  r.light.frames = false;
+  await waitFor(() => frozen(lines).length === 1, () => lines.join('\n'));
+  r.light.frames = null; // the driver cannot tell yet
+  await waitFor(() => r.enqueued >= 8, () => `wanted 8 ticks, got ${r.enqueued}`);
+  r.stop();
+  // No evidence is not evidence of recovery. Logging a panel back to health it never
+  // reached would put a lie in the one place a person goes to find out what happened.
+  assert.equal(back(lines).length, 0, lines.join('\n'));
+  assert.equal(frozen(lines).length, 1, lines.join('\n'));
 });

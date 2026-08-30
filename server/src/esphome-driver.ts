@@ -1,4 +1,5 @@
 import type { LightDriver } from './driver.js';
+import { humanMs, stamp } from './log-format.js';
 import { UNKNOWN_ID } from './state.js';
 
 export interface EsphomeDriverOptions {
@@ -60,7 +61,8 @@ export class DriverConfigError extends Error {}
  * (web_server.cpp:167). Renaming there breaks every URL here. verifyEntity() catches it.
  */
 export class EsphomeTextDriver implements LightDriver {
-  private readonly host: string;
+  /** Public: the supervisor names it in its own edge lines (#84). */
+  readonly host: string;
   private readonly base: string;
   private readonly entity: string;
   private readonly versionEntity: string;
@@ -333,28 +335,6 @@ export class EsphomeTextDriver implements LightDriver {
     this.failingSince = Date.now();
     this.log(`[esphome-driver] ${stamp()} ${this.host} UNREACHABLE: ${errText(err)}`);
   }
-}
-
-/**
- * A timestamp on the line, because nothing else in this log has one and "when did the panel
- * go away" is the first question anyone asks of a device whose whole job is to be current.
- *
- * Deliberately only on these lines rather than on every line the service emits. Stamping the
- * sink would be the better log and it is a different change - it rewrites the output of every
- * component and the deploy tests that read it. An edge line that is stamped also anchors the
- * unstamped lines around it, which is most of the value for a tenth of the blast radius.
- */
-function stamp(): string {
-  return new Date().toISOString();
-}
-
-/** Coarse on purpose: "3h 2m" answers the question, "10932847ms" makes the reader do sums. */
-function humanMs(ms: number): string {
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 function errText(err: unknown): string {
