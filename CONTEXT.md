@@ -4661,3 +4661,80 @@ else (state, light control, API) lives on the receiver.
   down and back on consecutive calls and are about the failure log's edges rather than about
   this; with the window on they would be measuring the breaker instead. The window's own
   recovery behaviour is covered in `server/test/write-latency.test.ts`.
+
+- **D-131 (2026-08-30)** **`confirmed` stops describing pixels nobody can see, and the reason
+  goes on the wire.** #82 and #83, landed together with the two surfaces they would otherwise
+  have broken.
+
+  **The bug was live, nightly, and had been since D-114.** The panel goes black 23:00-07:00,
+  and through all of it the server reported `confirmed: on-air`. Turning the backlight off
+  changes nothing the server can see: the display lambda keeps running, `id(frames)++` still
+  executes on every path, and `repainted()` reads a healthy advancing counter. So the old
+  definition - `unknown` when the light is unreachable **or the panel is not repainting** -
+  was insufficient in the most literal way, because **a dark panel is still repainting**.
+  `supervise.ts` has carried the line `// confirmed must describe PIXELS, not a variable.`
+  through all of it.
+
+  **Not blocked by #79, which is why it could be done today.** #82's dependency was *"the panel
+  publishes a `Night` text_sensor (from #79)"*, and #78 already shipped that sensor. It is live
+  on the panel now: `GET /text_sensor/Night` answers `lit (daytime)`, and `glassDark()` was run
+  against the real device before this landed rather than only against a fixture.
+
+  **The dark test runs FIRST in the tick, and that is not a style preference.** A dark panel
+  passes the repainting test, so the branch placed anywhere later is dead code and the server
+  goes on claiming a confirmation. Proven by mutation: disabling the branch turns three tests
+  red.
+
+  **`confirmedReason` is an optional additive field, not a new `confirmed` value.** Values
+  `asleep` | `not-repainting` | `unreachable`, absent when the server cannot name one. The
+  precedent is `stateResolvedFrom` in the same object. `confirmed` keeps its type and its
+  domain, so every deployed client keeps working unchanged - which is load-bearing rather than
+  polite, because Companion buttons are already placed on a physical Stream Deck and D-126 has
+  just finished orphaning a set of them.
+
+  **Three, not two.** A surface that cannot tell *dark on purpose* from *broken* alarms every
+  night; a surface that cannot tell *gone* from *frozen* is not worth reading. The alternative
+  - keep it all server-side and off the wire - fails on the Companion module, which is a
+  separate process that only ever sees the wire and is the surface with a physical lamp on it.
+
+  **ALL FOUR SURFACES OR NONE, and this is the part that decided the scope.** Landing the
+  server half alone would have appended *"light says unknown"* to the admin console's tally,
+  painted its Confirmed row yellow, and lit `light_not_confirming` on the deck from 23:00 to
+  07:00 - every night, about a panel that is working perfectly. #82's own text says a feature
+  that does that is worse than not having it. So the console, the module (0.3.0 -> 0.4.0, a new
+  `panel_asleep` feedback and a `$(confirmed_reason)` variable), the contract and the client
+  guide all moved in the same commit.
+
+  **ABSENCE IS NOT REASSURANCE**, written into the contract and tested in all three consumers.
+  The field is omitted whenever the server cannot name a reason - including in the gap between
+  a write and the supervisor's next tick - and reading that as "fine" would be a **false OK**,
+  which fails the same way a false OFF does. Each consumer has a test that an unexplained
+  `unknown` still alarms.
+
+  **The setting is device-local; the consequence is contract.** The schedule itself - times,
+  enable, brightness - stays on the panel's own page, following D-111. But `confirmed` is
+  already on the wire, so what sleeping DOES to `confirmed` is on the wire too. A client never
+  learns when the panel sleeps, only that it currently is. That distinction is #83's answer and
+  it is now written down rather than inferable.
+
+  **Two cross-component guards, because this is a server constant matched against a string in a
+  YAML lambda.** `NIGHT_DARK` is read out of `onair-core.yaml` by a test and asserted to be
+  emittable, and exactly one Night verdict may mean dark. Renaming it in the firmware alone
+  would not fail a build - it would silently report every dark panel as lit, restoring this
+  bug. Same shape as the freeze-threshold guard, same reason: D-106.
+
+  **The 404 is caught before the retry.** Firmware older than #78 has no `Night` sensor.
+  `getJson()` routes any non-`ok` response into `attempt()`, which retries and then calls
+  `unreachable()` - so the obvious implementation would have logged a permanent UNREACHABLE
+  edge about a perfectly healthy panel, and #68's skip window would then have stopped talking
+  to it. It is latched instead, one line and then silence, copying `setTableVersion`'s
+  `versionEntityMissing`.
+
+  **`/display` needed nothing**, and that is worth recording rather than re-deriving: it feeds
+  off `/public/events`, which carries no `confirmed` at all (D-42). It is structurally immune.
+
+  **The `Frames` coupling is now documented in the contract**, having been load-bearing and
+  undocumented outside D-106. The server infers "is the panel repainting" from a counter the
+  firmware increments; firmware that stops incrementing it makes every healthy panel read as
+  frozen, and firmware that increments it while showing nothing makes a blank panel read as
+  confirmed - which is precisely this bug.
