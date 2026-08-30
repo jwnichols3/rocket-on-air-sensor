@@ -35,9 +35,14 @@ daemon running the old build while the restart appears to have worked. Never for
 flash` - they tail with no timeout and hang the turn.
 
 **A flash is not done when the upload says it is.** `esphome upload` has reported success,
-the device has rebooted, and it has come back on the OLD firmware (#87). The cause is not yet
-known and may never reproduce, but the rule holds regardless: **after flashing, wait for a
-marker that only the new build can produce** - a new entity, a changed version string, a log
+the device has rebooted, and it has come back on the OLD firmware (#87). **The mechanism is
+now known and it is by design**: `enable_ota_rollback` defaults on, so a fresh image boots
+`PENDING_VERIFY` and is confirmed only after safe_mode's 60s `boot_is_good_after`. Anything
+that resets the board inside that window makes the bootloader revert to the other slot, and
+the panel comes back WORKING on the old firmware with no error anywhere. One cause of such a
+reset is fixed (`CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION`, see `crowpanel-7.yaml`); the
+mechanism is not, and any crash in that 60s window does the same thing. So: **after flashing,
+wait for a marker that only the new build can produce** - a new entity, a changed version string, a log
 line that did not exist before. `/onair` answering proves nothing: the panel serves HTTP
 throughout the OTA write, so the page you are talking to may be the build you were trying to
 replace. This has cost a measurement twice (D-100, then #87); both times the flash looked
