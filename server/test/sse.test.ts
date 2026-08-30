@@ -48,13 +48,31 @@ test('broadcast reaches attached clients; closed clients are detached', () => {
   const hub = createSseHub();
   const a = new FakeRes();
   const b = new FakeRes();
-  hub.attach(asRes(a), () => ({}));
-  hub.attach(asRes(b), () => ({}));
+  let intended = 'off';
+  hub.attach(asRes(a), () => ({ intended }));
+  hub.attach(asRes(b), () => ({ intended }));
   a.emitClose();
-  hub.broadcast({ intended: 'on' });
+  intended = 'on';
+  hub.broadcast();
   assert.equal(hub.count(), 1);
   assert.equal(a.chunks.length, 1); // snapshot only
   assert.equal(b.chunks.at(-1), 'event: status\ndata: {"intended":"on"}\n\n');
+  hub.closeAll();
+});
+
+test('broadcast renders each client with ITS OWN snapshot, not one shared body (#88)', () => {
+  // The bug: one hub serves the gated /events and the unauthenticated /public/events, and a
+  // single payload written to both leaked source/confirmed/updatedAt to the public stream
+  // while dropping the label/color/bgcolor the wall panel renders from.
+  const hub = createSseHub();
+  const gated = new FakeRes();
+  const publik = new FakeRes();
+  hub.attach(asRes(gated), () => ({ state: 'on-air', source: 'human:rocket', confirmed: 'on-air' }));
+  hub.attach(asRes(publik), () => ({ state: 'on-air', label: 'ON AIR', color: '#fff' }));
+  hub.broadcast();
+  assert.match(gated.chunks.at(-1)!, /"source":"human:rocket"/);
+  assert.doesNotMatch(publik.chunks.at(-1)!, /source|confirmed/);
+  assert.match(publik.chunks.at(-1)!, /"label":"ON AIR"/);
   hub.closeAll();
 });
 
@@ -91,12 +109,12 @@ test('a throwing client is detached and does not break broadcast', () => {
   const hub = createSseHub();
   const bad = new FakeRes();
   const good = new FakeRes();
-  hub.attach(asRes(bad), () => ({}));
-  hub.attach(asRes(good), () => ({}));
+  hub.attach(asRes(bad), () => ({ x: 1 }));
+  hub.attach(asRes(good), () => ({ x: 1 }));
   bad.write = () => {
     throw new Error('EPIPE');
   };
-  hub.broadcast({ x: 1 });
+  hub.broadcast();
   assert.equal(hub.count(), 1);
   assert.ok(good.chunks.at(-1)!.includes('"x":1'));
   hub.closeAll();

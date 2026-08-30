@@ -329,7 +329,9 @@ function persistCurrent(deps: ServerDeps): Promise<void> {
 
 function broadcastAndSend(res: ServerResponse, deps: ServerDeps, hub: SseHub, ws: WsBridge): void {
   const body = statusBody(deps);
-  hub.broadcast(body);
+  // The hub renders per connection now (#88) - it must not be handed the gated body, or
+  // the unauthenticated stream gets it. The WS bridge is gated end to end, so it still is.
+  hub.broadcast();
   ws.broadcast(body);
   sendJson(res, 200, body);
 }

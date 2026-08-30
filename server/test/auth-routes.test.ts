@@ -325,6 +325,70 @@ test('GET /public/events streams the same thin view, unauthenticated', async (t)
   await reader.cancel();
 });
 
+/**
+ * Read SSE `status` events off a live stream until `want` of them have arrived.
+ *
+ * The existing coverage read only the FIRST event, which is the per-connection snapshot and
+ * was always correct. The bug (#88) was in the CHANGE event, which is why nothing caught it.
+ */
+async function statusEvents(res: Response, want: number, trigger: () => Promise<void>): Promise<unknown[]> {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = decoder.decode((await reader.read()).value!); // the snapshot, before any change
+  await trigger();
+  const out = (): unknown[] =>
+    buf
+      .split('\n\n')
+      .filter((b) => b.startsWith('event: status'))
+      .map((b) => JSON.parse(b.slice(b.indexOf('data: ') + 6)) as unknown);
+  const deadline = Date.now() + 5000;
+  while (out().length < want && Date.now() < deadline) {
+    buf += decoder.decode((await reader.read()).value!);
+  }
+  await reader.cancel();
+  const events = out();
+  assert.ok(events.length >= want, `wanted ${want} status events, got ${events.length}: ${buf}`);
+  return events;
+}
+
+const PUBLIC_KEYS = ['ageSeconds', 'bgcolor', 'busy', 'color', 'label', 'message', 'state', 'tableVersion'];
+
+test('the CHANGE event on /public/events is the thin view too, not the gated body (#88)', async (t) => {
+  const h = await boot(t);
+  const res = await fetch(`${h.base}/public/events`, { headers: REMOTE });
+  const [, change] = await statusEvents(res, 2, async () => {
+    await fetch(`${h.base}/state/on-air`, { method: 'POST' });
+  });
+  const body = change as Record<string, unknown>;
+  // Exactly the eight public keys. `deepEqual` on the sorted key list and not a forbidden
+  // list: a forbidden list only catches the leaks somebody thought of, and this leak was
+  // four fields nobody had thought of.
+  assert.deepEqual(Object.keys(body).sort(), PUBLIC_KEYS, JSON.stringify(body));
+  assert.equal(body.state, 'on-air');
+  // The half that broke the wall panel rather than the half that leaked: without these the
+  // renderer falls back to the raw state id in the reserved row's colours, and shows
+  // "ON-AIR" in magenta on near-black until the next 15s heartbeat repaints it.
+  assert.equal(body.label, 'ON AIR');
+  assert.equal(body.bgcolor, '#c1121f');
+});
+
+test('the CHANGE event on /events keeps the gated shape (#88)', async (t) => {
+  const h = await boot(t);
+  const res = await fetch(`${h.base}/events?passphrase=${DEFAULT_PASSPHRASE}`, { headers: REMOTE });
+  assert.equal(res.status, 200);
+  const [, change] = await statusEvents(res, 2, async () => {
+    await fetch(`${h.base}/state/on-air`, { method: 'POST' });
+  });
+  const body = change as Record<string, unknown>;
+  assert.equal(body.state, 'on-air');
+  // The gated audience is the one entitled to provenance. Narrowing the public stream must
+  // not have narrowed this one with it.
+  for (const required of ['source', 'confirmed', 'updatedAt', 'busy', 'intended']) {
+    assert.ok(required in body, `${required} missing: ${JSON.stringify(body)}`);
+  }
+  assert.equal(body.source, 'human:anonymous');
+});
+
 // ------------------------------------------------ the 401 a person sees (#48)
 
 test('a browser gets a readable 401; everything else gets the JSON byte for byte', async (t) => {

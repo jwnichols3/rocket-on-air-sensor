@@ -339,7 +339,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     log,
     onChange: () => {
       const body = store.status();
-      hub.broadcast(body);
+      hub.broadcast(); // per connection: /public/events must not see the gated body (#88)
       wsBridge.broadcast(body);
     },
     ...opts.supervise,
