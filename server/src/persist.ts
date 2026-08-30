@@ -68,15 +68,16 @@ export async function loadState(file: string, log: (line: string) => void = () =
     log(`[onair] migrated v1 state file: ${migratedFrom} -> ${state}`);
   }
 
-  const holdRaw = p.hold;
-  const hold = typeof holdRaw === 'string' && holdRaw !== '' ? (V1_LEVELS[holdRaw] ?? holdRaw) : null;
-
+  // A HAND-BUILT literal, never a spread of `p`. That is what makes a key the current
+  // vocabulary no longer has - `hold`, retired by D-126, still on disk in every file
+  // written before the cutover - drop silently at this boundary instead of round-tripping
+  // back out through `persisted()`. Nothing above validates the key set, so an unrecognised
+  // key reaches none of the quarantine paths and cannot take the daemon down on restart.
   return {
     state,
     // A file records intent, never evidence about the device. Confirmation is re-earned
     // by a real read at boot.
     confirmed: UNKNOWN_ID,
-    hold,
     source: typeof p.source === 'string' ? p.source : 'human:boot',
     updatedAt: p.updatedAt,
     message: typeof p.message === 'string' ? p.message : null,

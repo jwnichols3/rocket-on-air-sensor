@@ -168,10 +168,9 @@ test('the reserved row cannot be deleted from the UI either', () => {
   assert.match(html(), /row\.id !== 'unknown'/);
 });
 
-test('deleting a live or pinned row says what will actually happen', () => {
+test('deleting a live row says what will actually happen', () => {
   const page = html();
   assert.match(page, /The live state becomes "unknown"/);
-  assert.match(page, /The pin is released/);
   assert.match(page, /starts getting 400/);
   // ...and it still only stages.
   assert.match(page, /Stage the delete/);

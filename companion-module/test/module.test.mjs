@@ -82,7 +82,7 @@ const SEED = [
 	{ id: 'unknown', label: 'NO DATA', color: '#ff00ff', bgcolor: '#1a1a1a', busy: true, order: 99 },
 ]
 
-const UTILITY_PRESETS = ['light', 'pin', 'refresh', 'unpin']
+const UTILITY_PRESETS = ['light', 'refresh']
 
 test('generates one preset per row, from the server table', async () => {
 	const OnAir = await loadInstanceClass()
@@ -187,7 +187,7 @@ test('the action sets state by row id, and tags itself as companion', async () =
 	await seen.actions.set_state.callback({ options: { state: 'on-air' } })
 	await settle(200)
 
-	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion', hold: null })
+	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion' })
 	assert.equal(seen.variables.state, 'on-air', 'and the change comes straight back')
 	assert.equal(seen.variables.busy, 'yes')
 
@@ -526,9 +526,14 @@ test('#72 the instance status tracks the module\'s own three conditions', async 
 })
 
 // ---------------------------------------------------------------------------------------
-// #73 - `hold` is first-class, and a press that drops a pin says so.
+// D-126 - the pin is retired. Nothing holds a state; the last write wins.
 
-test('#73 set_state maps leave / pin / release onto the contract\'s hold parameter', async () => {
+test('BREAKING: the pin is gone from the actions, feedbacks, variables and the fixture', async () => {
+	// Modelled on the `stale` test above, and for the same reason. D-120 gave this module a
+	// Hold option, two pin actions, two `held` feedbacks, two variables and two utility presets;
+	// every one of them is gone, not disabled and not renamed. A control that is still there and
+	// does nothing is the decoy that removal was written against - and on a Stream Deck it is a
+	// physical key that lies.
 	const OnAir = await loadInstanceClass()
 	const fake = startFakeServer()
 	const port = await fake.listen()
@@ -537,139 +542,37 @@ test('#73 set_state maps leave / pin / release onto the contract\'s hold paramet
 	await inst.init(config)
 	await settle()
 
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
-	await settle(150)
-	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion', hold: null })
-
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'pin' } })
-	await settle(150)
-	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion', hold: '1' })
-
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'release' } })
-	await settle(150)
-	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion', hold: '0' })
-
-	await inst.destroy()
-	await fake.close()
-})
-
-test('#73 release_hold clears the pin without moving the light, read back from the server', async () => {
-	const OnAir = await loadInstanceClass()
-	const fake = startFakeServer()
-	const port = await fake.listen()
-	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
-
-	await inst.init(config)
-	await settle()
-
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'pin' } })
-	await settle(150)
-	assert.equal(fake.hold, 'on-air')
-	assert.equal(seen.variables.hold, 'on-air')
-	assert.equal(seen.variables.hold_label, 'ON AIR')
-
-	await seen.actions.release_hold.callback({})
-	await settle(150)
-
-	// Read the SERVER back, not the request: the criterion is that the pin is actually gone.
-	assert.equal(fake.hold, null, 'the pin must be released on the server')
-	assert.equal(fake.status().state, 'on-air', 'and releasing must not move the state')
-	assert.equal(seen.variables.hold, '')
-	assert.equal(seen.variables.hold_label, '')
-
-	await inst.destroy()
-	await fake.close()
-})
-
-test('#73 pin_current_state pins whatever is showing', async () => {
-	const OnAir = await loadInstanceClass()
-	const fake = startFakeServer()
-	const port = await fake.listen()
-	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
-
-	await inst.init(config)
-	await settle()
-
-	await seen.actions.pin_current_state.callback({})
-	await settle(150)
-
-	assert.deepEqual(fake.writes.at(-1), { id: 'available', source: 'companion', hold: '1' })
-	assert.equal(fake.hold, 'available')
-	assert.equal(seen.feedbacks.held.callback({}), true)
-
-	await inst.destroy()
-	await fake.close()
-})
-
-test('#73 held_to_this_state is true only for the pinned row', async () => {
-	const OnAir = await loadInstanceClass()
-	const fake = startFakeServer()
-	const port = await fake.listen()
-	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
-
-	await inst.init(config)
-	await settle()
-
-	assert.equal(seen.feedbacks.held.callback({}), false, 'nothing is pinned to start with')
-
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'pin' } })
-	await settle(150)
-
-	assert.equal(seen.feedbacks.held_to_this_state.callback({ options: { state: 'on-air' } }), true)
-	for (const row of SEED.filter((r) => r.id !== 'on-air')) {
-		assert.equal(
-			seen.feedbacks.held_to_this_state.callback({ options: { state: row.id } }),
-			false,
-			`${row.id} is not the pinned row`,
-		)
+	for (const id of ['pin_current_state', 'release_hold']) {
+		assert.equal(id in seen.actions, false, `${id} must be gone from the actions`)
 	}
+	assert.equal(
+		seen.actions.set_state.options.some((o) => o.id === 'hold'),
+		false,
+		'and set_state must not offer a Hold option',
+	)
+	for (const id of ['held', 'held_to_this_state']) {
+		assert.equal(id in seen.feedbacks, false, `${id} must be gone from the feedbacks`)
+	}
+	// checkAll() is the site a half-finished removal hides in: it names its feedback ids as
+	// strings, so a retired one there asks Companion to redraw something that was never
+	// registered, on every single payload, and nothing else in this suite looks at the list.
+	assert.ok(seen.repaints.length > 0, 'something must have asked for a repaint')
+	for (const ids of seen.repaints) {
+		for (const id of ids) {
+			assert.ok(id in seen.feedbacks, `a repaint names a feedback that is not registered: ${id}`)
+		}
+	}
+	for (const id of ['hold', 'hold_label']) {
+		assert.equal(id in seen.variables, false, `${id} must be gone from the variables`)
+		assert.equal(inst.buildVariables().some((v) => v.variableId === id), false)
+	}
+	assert.equal('hold' in fake.status(), false, 'the fixture must not carry it either')
 
-	await inst.destroy()
-	await fake.close()
-})
-
-test('#73 THE REGRESSION: a press that releases someone else\'s pin must not be silent', async () => {
-	const OnAir = await loadInstanceClass()
-	const fake = startFakeServer()
-	const port = await fake.listen()
-	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
-
-	await inst.init(config)
-	await settle()
-
-	// A human pinned `available` from somewhere else - the menu bar, the admin console.
-	await seen.actions.set_state.callback({ options: { state: 'available', hold: 'pin' } })
+	// And a press is an ordinary write. A button placed before the upgrade still carries
+	// `hold: 'pin'` in its saved options; the callback ignores it and sends no `?hold=`.
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'pin' } })
 	await settle(150)
-	assert.equal(fake.hold, 'available')
-
-	// Now an ordinary state button is pressed. The server WILL drop the pin: a human write
-	// naming another state releases it, and `?source=companion` is a human. That rule is
-	// correct; the module going quiet about it was the defect.
-	const before = seen.logs.length
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
-	await settle(150)
-
-	const warned = seen.logs.slice(before).find((l) => /releases the hold on "available"/.test(l))
-	assert.ok(warned, `expected a warning naming the released hold, got ${JSON.stringify(seen.logs.slice(before))}`)
-	assert.equal(fake.hold, null, 'and the release really did happen')
-	assert.equal(seen.variables.hold, '', 'which the variable reports at once')
-	assert.equal(seen.feedbacks.held.callback({}), false)
-
-	await inst.destroy()
-	await fake.close()
-})
-
-test('#73 hold and hold_label are empty when nothing is pinned', async () => {
-	const OnAir = await loadInstanceClass()
-	const fake = startFakeServer()
-	const port = await fake.listen()
-	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
-
-	await inst.init(config)
-	await settle()
-
-	assert.equal(seen.variables.hold, '')
-	assert.equal(seen.variables.hold_label, '')
+	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion' })
 
 	await inst.destroy()
 	await fake.close()
@@ -750,12 +653,11 @@ test('#74 a write publishes from the RESPONSE, with no stream event delivered', 
 	assert.equal(seen.variables.state, 'available')
 
 	fake.setConfirmed('unknown')
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'pin' } })
+	await seen.actions.set_state.callback({ options: { state: 'on-air' } })
 	await settle(150)
 
 	assert.equal(seen.variables.state, 'on-air')
 	assert.equal(seen.variables.confirmed, 'unknown', 'confirmed came from the write response')
-	assert.equal(seen.variables.hold, 'on-air', 'and so did hold')
 	assert.equal(seen.variables.source, 'human:companion', 'and so did source')
 	assert.equal(seen.feedbacks.light_not_confirming.callback({}), true)
 
@@ -886,7 +788,7 @@ test('#76 a write slower than the old 5 s ceiling completes and is NOT a failure
 	const statusesBefore = seen.status.length
 
 	fake.setWriteDelay(1500)
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
+	await seen.actions.set_state.callback({ options: { state: 'on-air' } })
 
 	assert.equal(seen.variables.state, 'on-air', 'the action must wait for the answer and publish it')
 	assert.equal(
@@ -911,7 +813,7 @@ test('#76 a write that runs out of time is an UNKNOWN outcome, and the module re
 	const statusesBefore = seen.status.length
 
 	fake.setWriteDelay(2500)
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
+	await seen.actions.set_state.callback({ options: { state: 'on-air' } })
 
 	const note = seen.logs.find((l) => /no answer within 1000 ms/.test(l))
 	assert.ok(note, `expected an unknown-outcome note, got ${JSON.stringify(seen.logs.slice(-3))}`)
@@ -935,75 +837,6 @@ test('#76 a write that runs out of time is an UNKNOWN outcome, and the module re
 
 // ---------------------------------------------------------------------------------------
 // What the adversarial review found. Each of these fails against the code as it was.
-
-test('REGRESSION: releasing a pin must not move the light off a busy state', async () => {
-	// THE FALSE OFF, and the contract's own worked example (section 3, PIN RULE, bullet 1).
-	// Rocket pins `interruptible` (calm). A call starts and the detector escalates to `on-air`
-	// - the carve-out allows it and the pin SURVIVES, so now state !== hold. Mid-call he
-	// presses UNPIN.
-	//
-	// Writing the HELD row there drives the lamp from ON AIR to INTERRUPTIBLE while the camera
-	// is live. That is the exact failure this whole system exists to prevent, reachable with
-	// one press of a shipped preset.
-	const OnAir = await loadInstanceClass()
-	const fake = startFakeServer()
-	const port = await fake.listen()
-	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
-
-	await inst.init(config)
-	await settle()
-
-	// Pin the calm row, then let something else escalate to the busy one.
-	await seen.actions.set_state.callback({ options: { state: 'available', hold: 'pin' } })
-	await settle(150)
-	fake.setState('on-air')
-	await settle(150)
-
-	assert.equal(fake.status().state, 'on-air', 'mid-call: the busy row is live')
-	assert.equal(fake.hold, 'available', 'and the calm row is still pinned')
-	assert.equal(seen.variables.busy, 'yes')
-
-	await seen.actions.release_hold.callback({})
-	await settle(200)
-
-	assert.equal(fake.hold, null, 'the pin is released')
-	assert.equal(fake.status().state, 'on-air', 'AND THE LIGHT DOES NOT MOVE')
-	assert.equal(fake.status().busy, true, 'it is still busy - no false OFF')
-	assert.equal(seen.variables.busy, 'yes')
-	assert.equal(fake.writes.at(-1).id, 'on-air', 'it writes the CURRENT row, not the held one')
-	assert.equal(fake.writes.at(-1).hold, '0')
-
-	await inst.destroy()
-	await fake.close()
-})
-
-test('release_hold and pin refuse to write when the module has given the state up', async () => {
-	const OnAir = await loadInstanceClass()
-	const fake = startFakeServer()
-	const port = await fake.listen()
-	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
-
-	await inst.init({ ...config, poll_ms: '30000' })
-	await settle()
-	await seen.actions.set_state.callback({ options: { state: 'available', hold: 'pin' } })
-	await settle(150)
-
-	const before = fake.writes.length
-	inst.lastContactAt = Date.now() - 1_801_000
-
-	await seen.actions.release_hold.callback({})
-	await seen.actions.pin_current_state.callback({})
-	await settle(150)
-
-	// Pinning here would freeze every renderer on the reserved row; releasing would write a
-	// state nobody has confirmed in half an hour.
-	assert.equal(fake.writes.length, before, 'no state may be written on half-hour-old evidence')
-	assert.ok(seen.logs.some((l) => /refusing to pin/.test(l)))
-	assert.ok(seen.logs.some((l) => /refusing to write/.test(l)))
-
-	await inst.destroy()
-	await fake.close()
-})
 
 test('a row the module has no entry for draws the RESERVED appearance, never nothing', async () => {
 	// Contract section 6: "It must never silently drop it - a state that degrades to nothing
@@ -1158,7 +991,7 @@ test('#76 a write slower than the OLD 5 s ceiling still completes and is not a f
 	const statusesBefore = seen.status.length
 
 	fake.setWriteDelay(6500)
-	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
+	await seen.actions.set_state.callback({ options: { state: 'on-air' } })
 
 	assert.equal(seen.variables.state, 'on-air', 'a 6.5 s write is a write')
 	assert.equal(
@@ -1187,7 +1020,6 @@ test('button captions carry real line breaks, not a literal backslash-n', async 
 		seen.presets.refresh.style.text,
 		seen.presets.light.style.text,
 		...seen.presets.light.feedbacks.map((f) => f.style.text),
-		seen.presets['state_on-air'].feedbacks.find((f) => f.feedbackId === 'held_to_this_state').style.text,
 	]
 	for (const c of captions) {
 		assert.equal(/\\n/.test(c), false, `literal backslash-n in ${JSON.stringify(c)}`)

@@ -8,14 +8,22 @@ source.** VCREC - the external detector (D-30) - is exactly that reader: this re
 imports it, never names it in code, and never depends on its shape. Anything a client
 needs to know has to be here.
 
-Decisions: D-31..D-44 in `CONTEXT.md`. Design: `docs/superpowers/specs/2026-08-23-onair-v2-design.md`.
+Decisions: D-31..D-44 and D-126 in `CONTEXT.md`. Design: `docs/superpowers/specs/2026-08-23-onair-v2-design.md`.
 
 > **What changed from v1.** `level` and the three-rung ladder are gone, replaced by a
-> user-editable **state table**. `hold` is a pin, not a floor. `onAir`, `POST /on`,
-> `POST /off` and the five hardcoded rung routes are gone or redefined. `ONAIR_TOKEN` is
-> now the **passphrase**. `source` has a required shape. **Presentation left the state
-> payload** - `label`, `color` and `bgcolor` come from `GET /config/states`, not from a state
-> change. Nothing in v1 is production (map #19), so this is a replacement, not a migration.
+> user-editable **state table**. `onAir`, `POST /on`, `POST /off` and the five hardcoded
+> rung routes are gone or redefined. `ONAIR_TOKEN` is now the **passphrase**. `source` has a
+> required shape. **Presentation left the state payload** - `label`, `color` and `bgcolor`
+> come from `GET /config/states`, not from a state change. Nothing in v1 is production
+> (map #19), so this is a replacement, not a migration.
+
+> **Removed 2026-08-29 (D-126).** The **pin** is gone, and four published things go with it:
+> the `hold` field in the state object, the `hold` body field and the `?hold=` query
+> parameters on the write routes, the `403` that a write route could return, and the `409`
+> that carried a status body. There is no URL versioning here and no deprecation mechanism
+> (§5), so a removal is written down rather than staged - this line is the whole of the
+> notice. What replaces the rule is in §3; what happens to a client that still sends `hold`
+> is in §5 under `PUT /state`.
 
 ---
 
@@ -69,7 +77,6 @@ One object, persisted atomically, restored on restart.
 | `busy` | boolean | `table[state].busy`. Carried because it is **semantics, not presentation** - see the rule below. |
 | `intended` | `"on"` \| `"off"` | **Derived, read-only.** `busy ? "on" : "off"`. Writing it has no effect. Exists so a client that has never heard of a row invented tomorrow still does something correct. |
 | `confirmed` | string \| `"unknown"` | The row `id` the light acknowledged, read back from the device itself. `unknown` when the light is unreachable or the panel is not repainting. **Never guessed.** |
-| `hold` | string \| `null` | The pinned row `id`, or `null` for the **auto** regime. See §3. |
 | `source` | string | Who wrote it. `kind:label` - see §4. |
 | `updatedAt` | ISO 8601 | **Provenance.** Time of the last state write, refreshed by idempotent repeats. |
 | `ageSeconds` | integer | **Provenance.** How long ago that write happened, computed at read time. |
@@ -122,8 +129,8 @@ panel's own watchdog trip. That half is **gone**; what replaced it is below.
 
 **The server latches. It does not decay.**
 
-- While the service runs, **the state is the state**. `state`, `hold`, `source`, `updatedAt`
-  and `message` change only on an **explicit write**. No TTL, no decay, no auto-anything.
+- While the service runs, **the state is the state**. `state`, `source`, `updatedAt` and
+  `message` change only on an **explicit write**. No TTL, no decay, no auto-anything.
 - **The server never asserts anything about time.** It reports `updatedAt` and `ageSeconds`
   as provenance and branches on neither. There is no server code path that reads a clock to
   decide what the state IS.
@@ -177,34 +184,36 @@ decides what to do with it.
 to connected clients and does not error if one misses it; a client that misses a push gets
 the change on its **next poll**. Do not build correctness on the stream.
 
-### THE PIN RULE
+### LAST WRITE WINS
 
-A **hold** pins the state. It is set only by a `human:` source, persisted, and released
-only by a `human:` source - **never on a timer**.
+There was a **pin** here until 2026-08-29: a hold a `human:` source set on a state, which
+refused automated writes until a human released it. It is gone (D-126). What stands in its
+place is a positive rule rather than an absence, because an absence is not a contract - a
+document that merely stops mentioning precedence is a document the next implementer puts
+precedence back into.
 
-> **While a hold is set, a write from an `auto:` source is applied only if it moves the
-> system from a `busy: false` state to a `busy: true` state. Every other automated write is
-> refused (`409`) and the held state stands. A `human:` write always applies; a `human:`
-> write naming a state other than the held one releases the hold.**
+> **Every write with a valid body is applied. No `source` outranks another, and no earlier
+> write can block a later one.** A manual override is an ordinary state write; the detector's
+> next write replaces it. There is no pin, no hold, no precedence, and no server-side memory
+> of who wrote last beyond the `source` string itself.
 
-The one carve-out exists because a pin without it would let a human's "I'm available today"
-keep the light calm while the camera is live - which is the invariant violation in a new
-costume. It also means:
+That is the owner's working pattern turned into a guarantee: the detector drives the light, a
+human overrides it mid-meeting, and when the meeting ends the detector's write wins and puts
+the light back on its own.
 
-- Pinning to a `busy: false` row (say `interruptible`) still lets a detector escalate to
-  `on-air`, and the pin **survives** that escalation - so when the call ends and the
-  detector writes `available`, that write is refused and the light settles back to
-  `interruptible`. *"I am interruptible today"* survives a meeting.
-- **"Settles back" is literal, and it is the half of the rule that is easy to miss.** A
-  refusal does not merely decline the write and leave the escalation standing - that would
-  be a false ON that never clears, since the meeting is over and nothing will move the light
-  again until a human notices. The `409` response body therefore reports the **held** row,
-  the light is driven there, and `source` reads `human:hold`: the pin decided this, and says
-  so. A `403` does none of that - an authority fault in the caller is not the pin reaching a
-  decision, and it leaves the world exactly as it found it.
-- Pinning to a `busy: true` row freezes it against everything automated.
-- Pinning to `available` is legal. It cannot force calm against a live camera, so there is
-  nothing to prohibit.
+**Do not read the removal as dropping a false-ON guard.** The escalation carve-out and the
+"settles back" behaviour that used to be documented here were mitigations *of* the pin, not
+protections the pin provided. A refusal drove the light back to the held row, so a detector
+re-sending an escalation - which the client contract above requires it to do - was pushed off
+it again, mid-call, with the camera live. Deleting the refusal path deletes that failure mode
+rather than inheriting it.
+
+**What is genuinely lost, named rather than hidden.** Pinned at a `busy: true` row, an
+`auto:` write naming a calm row was refused and the light stayed ON. That was a real
+false-OFF protection. It is narrow - it applied only while a human had explicitly pinned, and
+only against a detector that was already wrong - and it is removed deliberately, not by
+oversight. Since the detector is now the sole authority by design, a wrong detector is a
+detector problem.
 
 ---
 
@@ -219,25 +228,36 @@ kind   := "auto" | "human"
 label  := free text, 1..32 chars, for display only
 ```
 
-- `auto:vcrec`, `auto:calendar-sync` - an automated writer. Subject to the pin rule.
-- `human:menubar`, `human:ui`, `human:shortcut` - a person. May set, move and clear holds.
+- `auto:vcrec`, `auto:calendar-sync` - an automated writer.
+- `human:menubar`, `human:ui`, `human:shortcut` - a person.
 
-**The rule is split by route, so neither audience pays for the other's convenience:**
+**`auto:` and `human:` no longer differ in authority. Nothing a `human:` source may do is
+denied to an `auto:` source. The prefix is provenance** - it says who put the light where it
+is, and no code path in the service branches on it.
+
+**The rule is still split by route, so neither audience pays for the other's convenience:**
 
 | Route | `source` | Missing or unprefixed |
 |---|---|---|
 | `PUT /state` - the canonical write, what an automated client uses | **required, prefixed** | `400` |
 | `POST /state/{id}`, `/on`, `/off` - the curl and Shortcuts surface | optional | defaults to `human:anonymous` |
 
-An earlier draft made `source` forgiving everywhere, so an automated writer that forgot the
-prefix would silently get human authority and break the owner's holds. That is the wrong
-direction to fail in a system whose whole invariant is "false OFF is worse than false ON".
-Splitting by route costs nothing: the route a robot reaches for demands the prefix, the
-route a human reaches for does not. **If you are writing an automated client, use
-`PUT /state` and send `auto:<yourname>`.**
+The split used to be justified as an authority boundary: an automated writer that forgot the
+prefix would silently get human authority and break the owner's holds. That justification
+died with the pin (§3), and the shape is kept for a plainer reason. `source` is the only
+trace the external detector leaves here (D-30), it is what every renderer displays, and
+relaxing the shape of a required field would be a breaking change to a client this repo
+cannot edit, for nothing in return. Splitting by route still costs nothing: the route a robot
+reaches for demands the prefix, the route a human reaches for does not. **If you are writing
+an automated client, use `PUT /state` and send `auto:<yourname>`.**
 
 The one legacy value mapped for continuity is the bare string `detector`, read as
-`auto:detector`.
+`auto:detector` - **and that mapping lives only on the lenient routes.** It is part of
+`coerceSource`, which is what `POST /state/{id}`, `/on` and `/off` call; `PUT /state` parses
+strictly and never sees it. So `PUT /state` with `"source":"detector"` is a `400`, exactly
+like any other unprefixed value. That is not an oversight: the mapping exists so a v1 client
+still *heartbeating* `?source=detector` at the convenience surface keeps reading as a machine,
+and an automated client writing the canonical route should be sending `auto:detector` itself.
 
 ---
 
@@ -255,7 +275,6 @@ The full state object from §2.
   "busy": true,
   "intended": "on",
   "confirmed": "on-air",
-  "hold": null,
   "source": "auto:vcrec",
   "updatedAt": "2026-08-23T21:04:00Z",
   "ageSeconds": 12,
@@ -276,7 +295,16 @@ The canonical write. Idempotent - repeating the same body just refreshes `update
 |---|---|---|
 | `state` | yes | A row `id` that exists in the current table. |
 | `source` | **yes** | Must carry a valid `auto:` or `human:` prefix. `400` otherwise - see §4. |
-| `hold` | no | `true` pins at this request's state; `false` releases. Omitting leaves the hold untouched. **`human:` sources only.** |
+
+**A `hold` key in the body is accepted and ignored**, whatever its value, and so are the
+`?hold=1` / `?hold=0` query parameters on the convenience routes. They were the pin's
+controls and the pin is gone (§3, D-126). They are ignored rather than rejected on purpose: a
+rejected body means the state write is **discarded**, so refusing a request because it
+mentions a retired field would leave the light asserting the old state - a false OFF
+manufactured by a field name, on a client we cannot edit in lockstep. **A retired rider must
+never veto a state assertion.** Any other unrecognised top-level key is ignored the same way;
+this route reads `state` and `source` and nothing else. That is not accept-and-fall-back: the
+`state` value itself is still validated loudly, below.
 
 Errors:
 
@@ -284,17 +312,26 @@ Errors:
   **Never accept-and-fall-back** - a typo must not render calm.
 - missing `state` -> `400`.
 - missing or unprefixed `source` -> `400 {"error":"source must be prefixed auto: or human:"}`.
-- `hold` sent by an `auto:` source -> `403`.
-- an `auto:` write refused by the pin rule -> `409` with the current status body, so the
-  client can see what stands. This is **not** an error to retry; it is the system working.
+- a body that is not JSON, or over 16 KB -> `400 {"error":"malformed JSON body: ..."}`. The
+  size limit fails the read inside the same `try`, so it is a `400` and not a `413`.
+
+**Those four, plus the `401` every gated route can answer, are the 4xx errors this route can
+produce.** It cannot answer `403` and it cannot answer `409`: no write is refused any more.
+
+It can still answer `500`. The write persists the new state to the state file before the
+light is touched, and a persist that throws - a read-only directory, a full disk, a
+`state.json` whose parent has gone away - propagates to the catch-all and becomes
+`500 {"error":"internal error: ..."}`. That is not a refused write and it is not the light
+failing (§7); it is the server failing to record a write it has *already applied in memory*.
+Retry once with backoff, and read `GET /status` before assuming the state did not move.
 
 Response: `200` with the same body as `GET /status`, after the write and the light attempt.
 
 ### `POST /state/{id}`
 
 No-body convenience for `curl`, phone Shortcuts and Companion. Sets that row.
-`?source=<kind:label>`, `?hold=1`, `?hold=0` as query parameters. Response identical to
-`PUT /state`.
+`?source=<kind:label>` as a query parameter. `?hold=1` and `?hold=0` are still accepted and
+ignored, for the reason given under `PUT /state`. Response identical to `PUT /state`.
 
 **On this route `source` is optional and defaults to `human:anonymous`**, unlike `PUT /state`.
 That asymmetry is deliberate - see §4.
@@ -376,8 +413,13 @@ already resolved for rendering.**
 
 ```json
 { "state":"on-air", "label":"ON AIR", "color":"#ffffff", "bgcolor":"#c1121f",
-  "busy":true, "ageSeconds":12, "tableVersion":7 }
+  "busy":true, "message":null, "ageSeconds":12, "tableVersion":7 }
 ```
+
+`message` is here for the reason D-9 forces it to be: a message may never replace or obscure
+the state word, but `/display` is served unauthenticated and so cannot read the gated stream,
+which leaves this as the only way the text reaches the page. It discloses nothing the panel on
+the wall is not already showing. Those eight keys are the whole payload.
 
 `GET /public/events` is the same payload as an unauthenticated SSE stream, with the same
 connect/change/15s-keep-alive behaviour as `GET /events`. It exists because `/display` and the
@@ -387,12 +429,12 @@ landing page are served unauthenticated and therefore cannot read the gated stre
 no state table and should not fetch one - the whole point of `/display` is that it is a dumb
 page you can point a kiosk at. So the server resolves the row for them. That is a **rendering
 view of the state**, not the state contract, and no machine client should read it: it has no
-`hold`, no `source`, no `confirmed`, and it is free to change shape to suit the two pages.
+`source`, no `confirmed`, and it is free to change shape to suit the two pages.
 
 **A renderer that holds a table must not use these.** The ESP32, Companion and any other
 client take the state key from the gated endpoints and the look from `GET /config/states`.
 
-No passphrase, no config, no `hold`, no `source`, no device information. This does disclose
+No passphrase, no config, no `source`, no device information. This does disclose
 presence to anyone on the LAN; that is accepted (D-27, D-35).
 
 ### `PUT /message` / `DELETE /message`
@@ -473,11 +515,10 @@ that is caught:
 
 | Event | What a client sees |
 |---|---|
-| A row is renamed (`label` changed) | Nothing breaks. The `id` you hold is still valid. `label` in `GET /status` changes. |
+| A row is renamed (`label` changed) | Nothing breaks. The `id` you hold is still valid. The new label reaches you on your next `GET /config/states`, **never on a state change** - `label` is not in the status payload at all (§2). |
 | Rows are reordered | Nothing. `order` is cosmetic and is not an address. |
 | A row you are not using is deleted | Nothing. |
 | **The live row is deleted** | State resolves to `unknown` - **conspicuous, never calm** - and `GET /status` gains `stateResolvedFrom: "<dead-id>"`. |
-| **The pinned row is deleted** | The pin is released in the same operation. |
 | **You write an `id` that no longer exists** | `400`, listing the valid ids. Loud, never silent. |
 | **A renderer is handed an `id` it does not know** | It must draw the `unknown` appearance. **It must never silently drop it** - a state that degrades to nothing looks exactly like a calm one. |
 
@@ -488,9 +529,14 @@ retained; there is no history store in this system yet.
 
 ## 7. Light failures are not write failures
 
-A write always succeeds if the body is valid. The state is updated and persisted even when
-the light is unreachable; the failure surfaces as `confirmed: "unknown"`. Clients that care
-check `confirmed`, not the status code.
+A write always succeeds if the body is valid **and the state file can be written**. The state
+is updated and persisted even when the light is unreachable; the failure surfaces as
+`confirmed: "unknown"`. Clients that care check `confirmed`, not the status code.
+
+The one exception is worth stating plainly, because it is the only way a valid body does not
+get a `200`: the in-memory write happens *before* the persist, so a persist that throws
+answers `500` with the new state already live and un-persisted (§5, `PUT /state`). The light
+is not the failure mode there - the disk is.
 
 ---
 
@@ -542,11 +588,25 @@ Shape: `{"error": "<human-readable message>"}`, plus context fields where they h
 |---|---|
 | `400` | Malformed JSON; missing `state`; unknown `state` id; invalid `source` shape |
 | `401` | Passphrase or admin session absent/wrong |
-| `403` | An `auto:` source attempted to set or clear a hold; `POST /admin/restart` with no passphrase configured |
+| `403` | `POST /admin/restart`, which in the shipped service is **unconditional** (the route requires `ServerDeps.token`, which `app.ts` never supplies; configuring the passphrase does not satisfy it); `POST /admin/factory-reset` without the admin password |
 | `404` | Unknown path |
 | `405` | Known path, wrong method |
-| `409` | An `auto:` write refused by the pin rule; a config save whose `version` is stale; a rebind that failed and rolled back |
+| `409` | A config save whose `version` is stale; a config save that failed to write for a reason other than disk-full; a rebind that failed and was rolled back; `POST /on` or `/off` with no shortcut row configured |
+| `500` | Anything that throws out of a route and reaches the catch-all - in practice a state or message write whose persist to the state file failed. The in-memory state has already moved (§7). |
 | `507` | A config save that could not be written to disk. The running config is untouched. |
+
+**`403` is admin-only.** No state-write route can produce one; both causes are on the admin
+surface. It is never retryable - the next identical request fails identically.
+
+**No error response carries a status object.** The extra fields an error body can carry are
+exactly three, and none is state: `validStates` on an unknown state id, `problems` on a config
+document that failed validation (`400 {"error":"invalid config","problems":[...]}`), and the
+live `config` document on a config save that was refused or failed. Until 2026-08-29 the pin's
+refusal merged the whole state object into a `409` and into a `403`, and a `409` from a write
+route meant *the system working, read it and carry on*. That response is gone with the pin
+(D-126). A `409` now always means a person has to change something - an unset shortcut row,
+or a config document someone else moved underneath you - so **surface it and do not retry
+it**. A client that reads `.state` off a `409` gets `undefined`, always.
 
 ---
 

@@ -146,7 +146,7 @@ FAKE_PID=$!
 echo
 echo "== busy =="
 write_state <<'JSON'
-{"/status":  {"state":"on-air","busy":true,"stale":false,"hold":null,"ageSeconds":2,
+{"/status":  {"state":"on-air","busy":true,"ageSeconds":2,
               "source":"auto:vcrec","confirmed":"on-air","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"on-air","label":"On air","color":"#ffffff","bgcolor":"#c1121f","busy":false,"order":0}]}}
@@ -159,7 +159,7 @@ check "and the words are one click away"      "$(run_plugin | grep -c '^ON AIR |
 echo
 echo "== calm and fresh =="
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":3,
+{"/status":  {"state":"available","busy":false,"ageSeconds":3,
               "source":"auto:vcrec","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
@@ -173,7 +173,7 @@ echo "== THE BUSY RULE: calm but UNREFRESHED must not read as calm =="
 # (D-91). So the setup is a good reading followed by a link that stops answering, rather
 # than a fresh reading carrying a big ageSeconds.
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"hold":null,"ageSeconds":4,
+{"/status":  {"state":"available","busy":false,"ageSeconds":4,
               "source":"auto:vcrec","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
@@ -190,7 +190,7 @@ forget_contact
 
 echo "-- and an unrefreshed BUSY row is still busy: it never gets calmer --"
 write_state <<'JSON'
-{"/status":  {"state":"on-air","busy":true,"hold":null,"ageSeconds":4,
+{"/status":  {"state":"on-air","busy":true,"ageSeconds":4,
               "source":"auto:vcrec","confirmed":"unknown","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"on-air","label":"On air","color":"#ffffff","bgcolor":"#c1121f","busy":false,"order":0}]}}
@@ -206,7 +206,7 @@ forget_contact
 echo
 echo "== the reserved unknown row is never calm (D-34) =="
 write_state <<'JSON'
-{"/status":  {"state":"unknown","busy":true,"stale":false,"hold":null,"ageSeconds":1,
+{"/status":  {"state":"unknown","busy":true,"ageSeconds":1,
               "source":"auto:vcrec","confirmed":"unknown","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"unknown","label":"Unknown","color":"#ffffff","bgcolor":"#555555","busy":false,"order":0}]}}
@@ -215,21 +215,9 @@ check "the sign goes unlit"                   "$(icon)" "#8e8e93"
 check "even though the row has a colour"      "$(icon | grep -c '#555555')" "0"
 
 echo
-echo "== a pin is reported as a pinned ROW, not a person =="
-write_state <<'JSON'
-{"/status":  {"state":"on-air","busy":true,"stale":false,"hold":"on-air","ageSeconds":1,
-              "source":"human:rocket","confirmed":"on-air","message":null},
- "/config/states": {"version":1,"states":[
-   {"id":"on-air","label":"On air","color":"#ffffff","bgcolor":"#c1121f","busy":false,"order":0}]}}
-JSON
-check "names the pinned row"                  "$(run_plugin | grep -c 'Pinned to: on-air')" "1"
-# reset-state also clears the message and restarts the service - far more than "release".
-check "does not offer reset-state as release" "$(run_plugin | grep -c 'param1=reset-state')" "0"
-
-echo
 echo "== output injection: message is 200 chars of operator text =="
 write_state <<'JSON'
-{"/status":  {"state":"on-air","busy":true,"stale":false,"hold":null,"ageSeconds":1,
+{"/status":  {"state":"on-air","busy":true,"ageSeconds":1,
               "source":"human:a|b","confirmed":"on-air",
               "message":"HI | color=#ff0000 bash=/bin/rm param1=-rf\nsecond line"},
  "/config/states": {"version":1,"states":[
@@ -250,7 +238,7 @@ check "a pipe in the label cannot split a line" "$(printf '%s' "$out" | grep -c 
 echo
 echo "== a malformed colour never reaches a parameter =="
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
+{"/status":  {"state":"available","busy":false,"ageSeconds":1,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"red; rm -rf /","busy":false,"order":0}]}}
@@ -272,7 +260,7 @@ echo "== the host is a parameter value, so it is a command-injection surface =="
 # that assertion was correct - it just never saw a hostile host, because run_plugin
 # hardcoded a safe one. An assertion is only as good as the worst input it is given.
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
+{"/status":  {"state":"available","busy":false,"ageSeconds":1,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
@@ -291,7 +279,7 @@ echo "== a dead renderer says so; it never goes blank =="
 
 # First establish contact on a good reading, so there is something to hold.
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"hold":null,"ageSeconds":3,
+{"/status":  {"state":"available","busy":false,"ageSeconds":3,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
@@ -345,7 +333,7 @@ echo "== liveness is OUR CLOCK, never anything the server says (D-91) =="
 # state nobody had rewritten in an hour drew NO DATA while the service was healthy and
 # answering every five seconds. It is the state. Draw it.
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"hold":null,"ageSeconds":99999,
+{"/status":  {"state":"available","busy":false,"ageSeconds":99999,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
@@ -356,7 +344,7 @@ check "and nothing claims it is not refreshing"     "$(run_plugin | grep -c '^NO
 # ageSeconds is display text now and carries no decision, so its absence costs a dropdown
 # line and cannot change the picture.
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"hold":null,
+{"/status":  {"state":"available","busy":false,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
@@ -364,22 +352,27 @@ JSON
 check "a MISSING ageSeconds changes nothing"        "$(icon)" "#0b6e2e #ffffff"
 check "it just says the write time is unknown"      "$(run_plugin | grep -c '^Last write: unknown')" "1"
 
-# There is no `stale` field on the wire any more. One arriving - from version skew, or from
-# something else answering the port - must not be able to influence anything.
+# Neither `stale` (D-91) nor `hold` (D-126) is on the wire any more. One arriving - from
+# version skew, from a /status body cached under ~/.onair before the retirement and replayed
+# for up to thirty minutes, or from something else answering the port - must not be able to
+# influence anything. `hold` is the sharper of the two: the plugin used to draw a dropdown
+# line straight off it, so a leftover reader would name a pinned row hours after pins stopped
+# existing.
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"stale":true,"hold":null,"ageSeconds":4,
+{"/status":  {"state":"available","busy":false,"stale":true,"hold":"on-air","ageSeconds":4,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
 JSON
 check "a resurrected stale flag is ignored"         "$(icon)" "#0b6e2e #ffffff"
+check "a resurrected hold draws nothing"            "$(run_plugin | grep -ciE 'pin|hold')" "0"
 check "no bare 90 threshold survives in the plugin" "$(grep -c 'STALE_SECONDS' "$PLUGIN")" "0"
 
 # THE ASYMMETRY SURVIVES (D-82), with the trigger moved to the connection: an unrefreshed
 # CALM row loses its colours, an unrefreshed BUSY row keeps them. Draining a busy signal
 # weakens it, and false OFF is worse than false ON.
 write_state <<'JSON'
-{"/status":  {"state":"on-air","busy":true,"hold":null,"ageSeconds":4,
+{"/status":  {"state":"on-air","busy":true,"ageSeconds":4,
               "source":"auto:x","confirmed":"on-air","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"on-air","label":"On Air","color":"#ffffff","bgcolor":"#c1121f","busy":true,"order":0}]}}
@@ -403,7 +396,7 @@ echo "== the look is looked up by row id, never borrowed =="
 #
 # Here /status names a row the table does not contain at all.
 write_state <<'JSON'
-{"/status":  {"state":"on-air","busy":true,"stale":false,"hold":null,"ageSeconds":1,
+{"/status":  {"state":"on-air","busy":true,"ageSeconds":1,
               "source":"auto:x","confirmed":"on-air","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"Available","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
@@ -415,7 +408,7 @@ check "and the dropdown falls back to the id"  "$(run_plugin | grep -c 'State: o
 # ...and the row is matched on id, not on position, so reordering the table cannot repaint
 # the sign. `on-air` is last here and its colours must still be the ones that are drawn.
 write_state <<'JSON'
-{"/status":  {"state":"on-air","busy":true,"stale":false,"hold":null,"ageSeconds":1,
+{"/status":  {"state":"on-air","busy":true,"ageSeconds":1,
               "source":"auto:x","confirmed":"on-air","message":null},
  "/config/states": {"version":9,"states":[
    {"id":"recording","label":"Recording","color":"#ffffff","bgcolor":"#6a0dad","busy":true,"order":0},
@@ -427,7 +420,7 @@ check "the row's own colours, from anywhere in the table" "$(icon)" "#1a1a1a #c1
 echo
 echo "== labels are operator text, and land at column 0 =="
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
+{"/status":  {"state":"available","busy":false,"ageSeconds":1,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"   ","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}
@@ -438,7 +431,7 @@ check "a whitespace label falls back to the id" "$(run_plugin | grep -c '^AVAILA
 check "and the sign is unaffected either way"   "$(icon)" "#0b6e2e #ffffff"
 
 write_state <<'JSON'
-{"/status":  {"state":"available","busy":false,"stale":false,"hold":null,"ageSeconds":1,
+{"/status":  {"state":"available","busy":false,"ageSeconds":1,
               "source":"auto:x","confirmed":"available","message":null},
  "/config/states": {"version":1,"states":[
    {"id":"available","label":"--Sub","color":"#ffffff","bgcolor":"#0b6e2e","busy":false,"order":0}]}}

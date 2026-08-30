@@ -201,8 +201,10 @@ function validateShortcuts(v: unknown, states: StateRow[] | null, fail: (m: stri
       fail(`shortcuts.${key} must be a row id or null`);
       return null;
     }
-    // A shortcut naming a row that does not exist is a `409` on the route, but here it is
-    // a save-time error: the owner is looking at the UI and can fix it now.
+    // On the route, an UNSET shortcut is a `409` and one naming a row that does not exist is
+    // a `400` from `checkState` - two different codes, and this comment used to claim both
+    // were the `409`. Here it is neither: it is a save-time error, because the owner is
+    // looking at the UI and can fix it now.
     if (states !== null && !ids.has(raw)) fail(`shortcuts.${key} names "${raw}", which is not a row`);
     return raw;
   };

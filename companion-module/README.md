@@ -14,7 +14,7 @@ Setup and packaging: `docs/companion-setup.md`. This file is the developer view.
 ```sh
 npm run build   --workspace companion-module   # bundle to dist/
 npm run package --workspace companion-module   # build, then pkg/rocket-onair-<v>.tgz
-npm run test    --workspace companion-module   # 35 tests, no Companion needed
+npm run test    --workspace companion-module   # 38 tests, no Companion needed
 ```
 
 ## Layout
@@ -73,7 +73,7 @@ failure mode of getting them wrong is an error message that points somewhere els
 not use these. The ESP32, Companion and any other client take the state key from the gated
 endpoints and the look from `GET /config/states`." `/public/status` and `/public/events` are
 a *rendering* view for two unauthenticated browser pages - free to change shape, and carrying
-no `confirmed`, no `hold` and no `source`.
+no `confirmed` and no `source`.
 
 #44's own text steered the other way, toward `/public/events`, for the zero-configuration
 story. The contract wins: it is source of truth, and a module that generates presets from the
@@ -81,23 +81,30 @@ table is a table-holder by definition. The cost is a mandatory passphrase, which
 deployment is not a cost at all - Companion runs on another host, where D-24's loopback waiver
 does not apply.
 
-## Why a Companion press is `human:`, and why that is the interesting part
+## Why a press is simply a write
 
-`?source=companion` is unprefixed, so the server reads it as `human:companion`. Under the PIN
-RULE a human write naming a state other than the held one **releases the hold** - so an
-ordinary state button drops somebody's pin.
+`?source=companion` is unprefixed, so the server reads it as `human:companion`. That is
+**provenance and nothing else** now: D-126 retired the pin, so `auto:` and `human:` differ in
+no authority, every write with a valid body is applied, and the last write wins. A press
+cannot be refused by an earlier write and cannot stop the detector's next one - which is the
+whole workflow: override by hand mid-meeting, and the detector puts the light back when the
+meeting ends.
 
-Prefixing it `auto:companion` would stop that, and was rejected: a thumb on a physical key is
-a human, and relabelling it automation to dodge a rule would make `source` lie in the one
-place the system has no other way to know who wrote (D-30). The rule is correct. The defect
-was that the module did it in silence, and #73's regression test is the one that must not
-come back.
+The prefix is still not faked. `auto:companion` would misreport who pressed the key, in the
+one place the system has no other way to know (D-30).
+
+D-120 gave this module a Hold option on `Set state`, `Pin the current state` and `Release the
+hold` actions, `held` / `held_to_this_state` feedbacks, `hold` / `hold_label` variables, PIN
+and UNPIN presets, and a warning that an ordinary press was about to clear somebody else's
+pin. All of it went with the rule that produced it, at 0.3.0. **A button already placed on a
+deck that used any of them is orphaned and has to be re-bound by hand** - regenerating presets
+does not touch placed buttons.
 
 ## Tests
 
 `test/fake-server.mjs` implements just enough of the server: `GET /status`,
-`GET /config/states`, `GET /events` as SSE, `POST /state/{id}` with the contract's `?hold=`
-parameter, the human half of the PIN RULE, and Bearer auth that is actually enforced.
+`GET /config/states`, `GET /events` as SSE, `POST /state/{id}`, and Bearer auth that is
+actually enforced.
 
 It exists so that things which are only observable on a broken system can be tested on a
 working one. On the real server, proving any of these means editing Rocket's live state table,

@@ -116,10 +116,12 @@ const SOURCE_PATTERN = /^(auto|human):(.{1,32})$/;
 /**
  * Strict parse, for `PUT /state`: the prefix is REQUIRED and a missing one is a `400`.
  *
- * An earlier draft was forgiving everywhere, so an automated writer that forgot the prefix
- * silently got human authority and could break the owner's holds. In a system whose whole
- * invariant is "false OFF is worse than false ON" that is the wrong direction to fail, so
- * the route a robot reaches for demands the prefix (D-41).
+ * The original reason was authority - an unprefixed writer silently got human authority and
+ * could break the owner's holds - and that reason is gone with the pin (D-126). The `400`
+ * stays for a different and still-live one: `source` is the ONLY trace an external detector
+ * leaves in this system (D-30), it is what four renderers draw, and a writer that cannot be
+ * told apart from a human is a writer nobody can debug. The route a robot reaches for
+ * demands the prefix so the provenance is honest (D-41).
  */
 export function parseSource(raw: unknown): Source | null {
   if (typeof raw !== 'string') return null;
@@ -134,8 +136,8 @@ export function parseSource(raw: unknown): Source | null {
  * `human:anonymous`; an unprefixed label becomes `human:<label>`.
  *
  * `detector` is the one legacy bare value carried across, as `auto:detector` (§4). It is
- * mapped rather than dropped because a v1 client heartbeating `?source=detector` must not
- * silently acquire the authority to break a hold.
+ * mapped rather than dropped so a v1 client heartbeating `?source=detector` still reads as
+ * a machine on every renderer; it no longer buys or loses any authority (D-126).
  */
 export function coerceSource(raw: unknown): Source {
   if (typeof raw !== 'string' || raw.trim() === '') return { kind: 'human', label: 'anonymous', raw: 'human:anonymous' };
@@ -148,51 +150,19 @@ export function coerceSource(raw: unknown): Source {
 }
 
 /**
- * The answer to "may this write land?". `ok: false` carries the status the route sends and
- * the sentence the client reads.
+ * LAST WRITE WINS (contract §3, D-126).
+ *
+ * THE PIN RULE stood here, as `judgeWrite()` and `WriteVerdict`. It is retired: every write
+ * with a valid body is applied, no `source` outranks another, and no earlier write can block
+ * a later one. There is nothing left for this module to judge, so there is no function here.
+ *
+ * `auto:` and `human:` survive as PROVENANCE, not authority - nothing a `human:` source may
+ * do is denied to an `auto:` one. Nothing in this server branches on `Source.kind` any more.
+ *
+ * What was deliberately given up, so nobody has to rediscover it: pinned at a busy row, an
+ * `auto:` write to a calm row used to be refused and the light stayed ON. That was a real,
+ * narrow false-OFF protection, and it only ever applied while a human had explicitly pinned.
  */
-export type WriteVerdict = { ok: true } | { ok: false; status: 403 | 409; error: string };
-
-/**
- * THE PIN RULE, in code (contract §3, D-32).
- *
- * > While a hold is set, a write from an `auto:` source is applied only if it moves the
- * > system from a `busy: false` state to a `busy: true` state. Every other automated write
- * > is refused (409) and the held state stands. A `human:` write always applies.
- *
- * The single carve-out is the whole design. A naive pin is a documented production failure,
- * not a hypothetical: Teams ships `user-preferred state > session-level states`, so someone
- * who prefers Available and then joins a call shows **Available**. Teams can afford a
- * wrong-but-chosen chat status; a light whose only job is to say whether a camera is live
- * cannot. The carve-out means a pin can hold you calm against a detector that thinks the
- * meeting ended, but never against one that thinks it started.
- *
- * A pin at a `busy: false` row is therefore a floor in the only sense that ever mattered,
- * without any ordering: escalation in, no de-escalation out.
- */
-export function judgeWrite(
-  current: OnAirState,
-  table: StateTable,
-  next: string,
-  source: Source,
-  hold?: boolean,
-): WriteVerdict {
-  // Authority first. An `auto:` source touching the pin at all is a 403 even when the pin
-  // would also have refused the state change - reporting THAT as a 409 would tell the
-  // client to back off and wait, when what it needs to do is fix its `source`.
-  if (hold !== undefined && source.kind !== 'human') {
-    return { ok: false, status: 403, error: 'only a human: source may set or clear a hold' };
-  }
-  if (current.hold === null || source.kind === 'human') return { ok: true };
-
-  const movingToBusy = !table.busy(current.state) && table.busy(next);
-  if (movingToBusy) return { ok: true };
-  return {
-    ok: false,
-    status: 409,
-    error: `state is held at '${current.hold}'; an automated write may only escalate to a busy state`,
-  };
-}
 
 /** The persisted, in-memory state object. Everything else in §2 is derived at read time. */
 export interface OnAirState {
@@ -200,8 +170,6 @@ export interface OnAirState {
   state: string;
   /** The row id the light acknowledged, read back from the device. Never guessed. */
   confirmed: string;
-  /** The pinned row id, or null for the auto regime. */
-  hold: string | null;
   source: string;
   updatedAt: string;
   message: string | null;
@@ -233,7 +201,6 @@ export function defaultState(now: Date = new Date()): OnAirState {
     // state, never a calm one (D-34).
     state: UNKNOWN_ID,
     confirmed: UNKNOWN_ID,
-    hold: null,
     source: 'human:boot',
     updatedAt: now.toISOString(),
     message: null,
@@ -259,8 +226,7 @@ export class StateStore {
 
   /**
    * Swap the table in and re-resolve. A live row that no longer exists falls back to
-   * `unknown` and records where it came from; a pinned row that no longer exists releases
-   * the pin in the same operation (D-34). Used by the config store (#39).
+   * `unknown` and records where it came from (D-34). Used by the config store (#39).
    */
   setTable(table: StateTable): OnAirState {
     this.table = table;
@@ -273,38 +239,20 @@ export class StateStore {
   }
 
   /**
-   * Apply a state.
-   *
-   * THE PIN RULE IS NOT HERE. This applies what it is given and manages the pin's value;
-   * deciding whether an `auto:` write is allowed to land while a pin is set is the
-   * supervisor-and-route policy that #38 adds. Until then a pin is recorded and reported
-   * but does not refuse anything.
+   * Apply a state. It applies exactly what it is given - there is no precedence left to
+   * consult and nothing here can refuse (D-126).
    */
-  write(state: string, source: Source, now: Date = new Date(), hold?: boolean): OnAirState {
-    let nextHold = this.state.hold;
-    if (hold === true) nextHold = state;
-    else if (hold === false) nextHold = null;
-    // A human write naming a state other than the held one releases the pin (§3). Applied
-    // here so the store can never report a `hold` that contradicts `state`.
-    else if (source.kind === 'human' && nextHold !== null && nextHold !== state) nextHold = null;
-
+  write(state: string, source: Source, now: Date = new Date()): OnAirState {
     const next: OnAirState = {
       ...this.state,
       state,
       // A new assertion is not yet evidence about the device. Re-earned by a real read.
       confirmed: UNKNOWN_ID,
-      hold: nextHold,
       source: source.raw,
       updatedAt: now.toISOString(),
     };
     delete next.stateResolvedFrom;
     this.state = next;
-    return this.get();
-  }
-
-  /** Clear or set the pin outright. Used by factory reset; routes go through `write`. */
-  setHold(hold: string | null): OnAirState {
-    this.state = { ...this.state, hold };
     return this.get();
   }
 
@@ -355,8 +303,8 @@ export class StateStore {
 
 /**
  * Resolve a state object against a table: a live row that is gone becomes `unknown` and
- * records the dead id; a pin on a row that is gone is released. Deleting the live row is
- * allowed - it just must never be silent, and must never resolve to something calm.
+ * records the dead id. Deleting the live row is allowed - it just must never be silent, and
+ * must never resolve to something calm.
  */
 function resolveAgainst(s: OnAirState, table: StateTable): OnAirState {
   const out: OnAirState = { ...s };
@@ -366,7 +314,6 @@ function resolveAgainst(s: OnAirState, table: StateTable): OnAirState {
   } else {
     delete out.stateResolvedFrom;
   }
-  if (out.hold !== null && !table.has(out.hold)) out.hold = null;
   if (out.confirmed !== UNKNOWN_ID && !table.has(out.confirmed)) out.confirmed = UNKNOWN_ID;
   return out;
 }

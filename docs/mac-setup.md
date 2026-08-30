@@ -210,19 +210,24 @@ response has flushed, the process calls `process.exit(0)` - no
 it back: launchd's `KeepAlive` here, systemd's `Restart=always` on the Pi
 (`docs/pi-setup.md`). Same admin route, same mechanism, same behavior on
 either machine - "restart" is universally "exit and let the supervisor
-notice."
+notice." That is the mechanism the route *would* use; as shipped it never
+gets there, because the route 403s unconditionally (next section).
 
 ## The Admin card (retired with `/ui`)
 
 `/ui` is **retired** (D-35) and its Admin card moves into the admin UI (#42). It showed health fields (pid, uptime,
 node version, state file writable) polled from `/admin/health` every 10s and
 on SSE reconnect, plus a Restart button. The button is always enabled once
-the first health poll succeeds, regardless of whether `ONAIR_TOKEN` is
-configured - `POST /admin/restart` returns 403 without one (the one endpoint
-that refuses to exist unauthenticated, since it's a remote process-kill).
-Only after a click gets that 403 does the card show a "set `ONAIR_TOKEN` to
-enable remote restart" hint in its error strip; the button itself is
-unaffected and stays clickable.
+the first health poll succeeds - and in the shipped service that click
+**always** gets a 403. `POST /admin/restart` gates on a token passed into
+`createApiServer`, and `app.ts` never passes one, so there is no
+configuration that opens the route: `ONAIR_TOKEN` only overrides the
+passphrase, and the passphrase is not what this route reads. The route is
+effectively closed on this machine; `onair restart` is the one that actually
+works. Only after a click gets that 403 does the card show a "set
+`ONAIR_TOKEN` to enable remote restart" hint in its error strip - which is
+itself misleading, for the same reason; the button is unaffected and stays
+clickable.
 
 ## Troubleshooting
 

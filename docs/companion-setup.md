@@ -75,7 +75,7 @@ Add a connection of type **rocket-onair** and set:
 **The passphrase is required, not optional.** This module holds a state table, and
 `docs/api-contract.md` is explicit that a table-holder reads the gated endpoints rather than
 `/public/*` - the public pair is a *rendering* view for two dumb browser pages, free to
-change shape, with no `confirmed`, no `hold` and no `source`. Companion normally runs on a
+change shape, with no `confirmed` and no `source`. Companion normally runs on a
 different host from the server anyway, where D-24's loopback waiver does not apply and the
 passphrase was already mandatory.
 
@@ -87,15 +87,13 @@ The easiest place to read the passphrase is the admin console at `http://<host>:
 with its `color` on `bgcolor`, verbatim. Each one ships with the connection marks already
 attached, so a deck straight out of the box meets the client contract without hand-wiring.
 
-Under **Utility**: **Pin**, **Unpin**, **Light health** and **Refresh table**.
+Under **Utility**: **Light health** and **Refresh table**.
 
 **Actions**
 
 | Action | What it does |
 |---|---|
-| Set state | `POST /state/{id}?source=companion`. The dropdown is the live table; a custom value is allowed. The **Hold** option is `leave` (default), `pin` (`&hold=1`) or `release` (`&hold=0`) |
-| Pin the current state (hold) | pins whatever is showing |
-| Release the hold | writes the **current** row with `&hold=0`, so the pin goes and the light does not move |
+| Set state | `POST /state/{id}?source=companion`. The dropdown is the live table; a custom value is allowed |
 | Refresh the state table now | re-reads `GET /config/states` |
 
 **Feedbacks**
@@ -108,41 +106,14 @@ Under **Utility**: **Pin**, **Unpin**, **Light health** and **Refresh table**.
 | No data | the server has been silent long enough that the module has given the state up | **the reserved row's own colours**, as you set them |
 | Light not confirming | `confirmed` reads `unknown`: the panel is unreachable or frozen. The server admitting ignorance, not a claim the light is wrong | **white on navy** |
 | Light disagrees | the light acknowledges a row the server did not ask for | **black on white** |
-| A hold is in force | any row is pinned | black on pale blue |
-| Held to this state | the hold pins the row this button sets | black on pale blue |
 
-The middle four are the "something is off" family and they have **four deliberately distinct
+The last four are the "something is off" family and they have **four deliberately distinct
 looks**. An operator who cannot tell them apart at a glance has four feedbacks that mean one
 thing - and they have four different fixes: wait, restart the server, check the panel's power,
 check who else is writing to the panel.
 
-**Variables**: `state`, `label`, `busy`, `confirmed`, `hold`, `hold_label`, `source`,
-`connection`, `seconds_since_contact`, `age_seconds`, `table_version`.
-
-## Holds, and the press that used to drop one in silence
-
-A **hold** pins the state (contract section 3). Only a `human:` source may set or clear one,
-and this module writes `?source=companion`, which the server normalises to `human:companion`.
-
-That has a consequence worth stating plainly: **a plain state press releases a pin.** Section
-3's PIN RULE says a human write naming a state other than the held one clears the hold, and a
-thumb on a Stream Deck key IS a human. The rule is right. What was wrong, until #73, was that
-the module did it without a word.
-
-Now it logs the release by name before it happens:
-
-```
-set state "on-air" releases the hold on "available" - a human write naming another state
-clears the pin (contract section 3). Use the Hold option if that was not intended.
-```
-
-Calling Companion presses `auto:` to dodge the rule was considered and rejected: it would make
-`source` lie about who wrote, and `source` is wire contract precisely because the detector is
-external (D-30).
-
-**Reading the pin on the surface:** put **Held to this state** on your state buttons (the
-generated presets already carry it - a pinned row's caption gains a `PIN` line) or **A hold
-is in force** on the Pin/Unpin pair.
+**Variables**: `state`, `label`, `busy`, `confirmed`, `source`, `connection`,
+`seconds_since_contact`, `age_seconds`, `table_version`.
 
 ## Slow writes are not failed writes
 
@@ -163,6 +134,25 @@ next poll will say. Not retrying: the server latches.
 It does not retry. The write may well have landed - both of #68's did - and a second write
 against a latching server buys nothing. Section 7 of the contract: clients that care check
 `confirmed`, not the status code.
+
+## ⚠️ BREAKING CHANGE (0.3.0): the pin is gone
+
+**If any of your buttons use the `Pin the current state` or `Release the hold` actions, the
+`A hold is in force` or `Held to this state` feedbacks, or the `$(hold)` / `$(hold_label)`
+variables, they will stop working and you have to re-bind them by hand.** Regenerating the
+presets does not touch buttons already on a deck: PIN and UNPIN are gone from the Utility
+category, but the copies you placed are still there, and a button whose action no longer
+exists does nothing when pressed.
+
+A **hold** pinned the state and refused writes that disagreed with it. It is retired
+everywhere - module, server and contract (D-126) - and the rule that replaces it is **last
+write wins**: every write is applied, no `source` outranks another, and no earlier write can
+block a later one. That is the workflow the pin was in the way of - override the light by hand
+mid-meeting, and the detector's next write puts it back when the meeting ends.
+
+The **Hold** option on `Set state` goes with it. A button placed before the upgrade still
+carries a `Hold` value in its saved options; the module ignores it and sends an ordinary state
+write, so those buttons keep working and need no attention.
 
 ## ⚠️ BREAKING CHANGE: `stale` is gone
 

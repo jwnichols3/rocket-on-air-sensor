@@ -31,7 +31,6 @@ button, input, select { font: inherit; color: inherit; }
 .muted { color: var(--muted); }
 .mono { font-family: var(--mono); font-size: 12.5px; }
 .err { color: var(--accent); }
-.small-note { font-size: 12px; }
 .spacer { flex: 1; }
 
 .btn { background: transparent; border: 1px solid var(--border); border-radius: 6px;
@@ -85,8 +84,6 @@ button, input, select { font: inherit; color: inherit; }
 .tally.hatched::before { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: repeating-linear-gradient(135deg, transparent 0 9px, var(--hatch) 9px 18px); }
 .tally-main { flex: 1; min-width: 0; position: relative; }
-.tally-side { position: relative; text-align: right; display: flex; flex-direction: column;
-              align-items: flex-end; gap: 6px; }
 .tally-eyebrow { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em;
                  text-transform: uppercase; opacity: 0.85; }
 .tally-word { font-size: 46px; font-weight: 800; letter-spacing: 0.01em; line-height: 1.08;

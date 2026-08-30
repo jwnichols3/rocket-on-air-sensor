@@ -11,7 +11,7 @@
 // Companion and any other client take the state key from the gated endpoints and the look
 // from GET /config/states." The contract wins - it is source of truth, and its reasoning is
 // sound. `/public/*` is a RENDERING view for two dumb browser pages: it is free to change
-// shape, and it carries no `confirmed`, no `hold` and no `source`. This module generates
+// shape, and it carries no `confirmed` and no `source`. This module generates
 // presets from the table, so it is a table-holder by definition.
 //
 // The cost is that the passphrase is required rather than optional. On the real deployment
@@ -370,8 +370,6 @@ class OnAirInstance extends InstanceBase {
 			'no_data',
 			'light_not_confirming',
 			'light_disagrees',
-			'held',
-			'held_to_this_state',
 		)
 	}
 
@@ -635,12 +633,15 @@ class OnAirInstance extends InstanceBase {
 			{ variableId: 'label', name: 'Current state label' },
 			{ variableId: 'busy', name: 'Busy (yes/no)' },
 			{ variableId: 'confirmed', name: 'Confirmed by the light' },
-			{ variableId: 'hold', name: 'Held state id (empty when nothing is pinned)' },
-			{ variableId: 'hold_label', name: 'Held state label (empty when nothing is pinned)' },
 			{ variableId: 'source', name: 'Who wrote the state' },
 			// BREAKING: `stale` is gone, not renamed. It was a judgement the server no longer
 			// makes, and a variable that silently resolves to nothing on a stream deck is worse
 			// than one that is loudly absent.
+			//
+			// BREAKING (D-126): `hold` and `hold_label` went the same way when the pin was
+			// retired. There is no held row to name any more - the last write wins - so a
+			// caption referencing $(rocket-onair:hold) resolves to nothing and must be edited
+			// by hand.
 			{ variableId: 'connection', name: 'Connection to the server (ok / not refreshing / no data)' },
 			{ variableId: 'seconds_since_contact', name: 'Seconds since the server last answered' },
 			{ variableId: 'age_seconds', name: 'Seconds since the last write (provenance only)' },
@@ -651,14 +652,11 @@ class OnAirInstance extends InstanceBase {
 	publishVariables() {
 		const s = this.current
 		const v = this.view()
-		const held = s?.hold ?? null
 		this.setVariableValues({
 			state: v.state,
 			label: v.label,
 			busy: v.busy ? 'yes' : 'no',
 			confirmed: s?.confirmed ?? '',
-			hold: held ?? '',
-			hold_label: held ? (this.states.find((r) => r.id === held)?.label ?? held) : '',
 			source: s?.source ?? '',
 			connection: v.connection,
 			seconds_since_contact: Number.isFinite(v.lostFor) ? Math.floor(v.lostFor / 1000) : '',
@@ -683,66 +681,10 @@ class OnAirInstance extends InstanceBase {
 						choices,
 						allowCustom: true,
 					},
-					{
-						// THE PIN, MADE EXPLICIT (D-120, #73). `leave` is what every existing
-						// button already does, so an upgrade changes nothing until an operator
-						// asks it to.
-						type: 'dropdown',
-						id: 'hold',
-						label: 'Hold',
-						default: 'leave',
-						choices: [
-							{ id: 'leave', label: 'Leave the hold alone' },
-							{ id: 'pin', label: 'Pin to this state' },
-							{ id: 'release', label: 'Release the hold' },
-						],
-					},
 				],
 				callback: async (event) => {
 					const id = await this.parseVariablesInString(String(event.options.state ?? ''))
-					await this.setState(id, { hold: String(event.options.hold ?? 'leave') })
-				},
-			},
-			pin_current_state: {
-				name: 'Pin the current state (hold)',
-				options: [],
-				callback: async () => {
-					// `current.state`, not `view().state`: once the module has given the state
-					// up, view() reports the RESERVED row, and pinning `unknown` would freeze
-					// every renderer on NO DATA until a human noticed.
-					if (!this.current || this.view().connection === 'no data') {
-						this.log('warn', 'pin: no fresh state from the server, refusing to pin')
-						return
-					}
-					await this.setState(this.current.state, { hold: 'pin' })
-				},
-			},
-			release_hold: {
-				name: 'Release the hold',
-				options: [],
-				callback: async () => {
-					const held = this.current?.hold ?? null
-					if (!held) {
-						this.log('info', 'release hold: nothing is pinned')
-						return
-					}
-					// RELEASING MUST NOT MOVE THE LIGHT, and the row it writes is what decides
-					// that. `POST /state/{id}` ALWAYS sets the row named in the path - there is
-					// no clear-the-pin-only route - so writing the HELD row here would drag the
-					// light back to it.
-					//
-					// That is a FALSE OFF in the contract's own worked example: pin
-					// `interruptible` (busy false), let the detector escalate to `on-air` (busy
-					// true, camera live, pin survives by the carve-out), then press UNPIN. The
-					// held row is calm and the live row is not. Writing the CURRENT row instead
-					// is idempotent - the state it names is the state already showing - so the
-					// pin goes and nothing else moves.
-					const v = this.view()
-					if (v.connection === 'no data') {
-						this.log('warn', 'release hold: no fresh data from the server, refusing to write')
-						return
-					}
-					await this.setState(this.current.state, { hold: 'release' })
+					await this.setState(id)
 				},
 			},
 			refresh_table: {
@@ -760,34 +702,16 @@ class OnAirInstance extends InstanceBase {
 		return choices.length ? choices : [{ id: '', label: '(no table yet)' }]
 	}
 
-	/**
-	 * `hold` is `leave` | `pin` | `release`, mapped onto the contract's `?hold=1` / `?hold=0`
-	 * / absent.
-	 */
-	async setState(id, { hold = 'leave' } = {}) {
+	async setState(id) {
 		if (!id) {
 			this.log('warn', 'set state: no state id')
 			return
 		}
 
-		// A PRESS THAT DROPS A PIN SAYS SO (D-120, #73). The module sends an unprefixed
-		// `source`, which the server reads as `human:companion` - and section 3's PIN RULE
-		// says a human write naming a state other than the held one releases the hold. That
-		// is the correct rule (a thumb on a physical key IS a human) and calling this
-		// automation to dodge it would make `source` lie. The defect was that it happened in
-		// silence.
-		const held = this.current?.hold ?? null
-		if (held && hold === 'leave' && held !== id) {
-			this.log(
-				'warn',
-				`set state "${id}" releases the hold on "${held}" - a human write naming another state ` +
-					`clears the pin (contract section 3). Use the Hold option if that was not intended.`,
-			)
-		}
-
+		// A PRESS IS JUST A WRITE (D-126). It used to have to warn that it might silently clear
+		// somebody's pin; there is no pin now, so LAST WRITE WINS is the whole rule - this write
+		// lands, and the detector's next one replaces it.
 		const params = new URLSearchParams({ source: 'companion' })
-		if (hold === 'pin') params.set('hold', '1')
-		else if (hold === 'release') params.set('hold', '0')
 
 		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
 		try {
@@ -800,9 +724,9 @@ class OnAirInstance extends InstanceBase {
 			if (res.ok) {
 				// PUBLISH FROM THE RESPONSE (D-121, #74). The server answers a write with the
 				// full GET /status body, AFTER the write and AFTER the light attempt - so it
-				// already carries `confirmed`, `hold` and `source`. Waiting for the stream to
-				// echo them means a press that failed to reach the lamp shows the fault
-				// whenever the next event happens to arrive, instead of immediately.
+				// already carries `confirmed` and `source`. Waiting for the stream to echo them
+				// means a press that failed to reach the lamp shows the fault whenever the next
+				// event happens to arrive, instead of immediately.
 				try {
 					this.ingest(await res.json())
 				} catch {
@@ -816,10 +740,10 @@ class OnAirInstance extends InstanceBase {
 			// operator is the difference between "the button is broken" and "that row is gone,
 			// here is what exists".
 			//
-			// There is deliberately no 409 branch here. A 409 on this route is the pin rule
-			// refusing an AUTOMATED write, and this module's writes are `human:companion` -
-			// a human write always applies (contract section 3). A branch for it would be
-			// unreachable code claiming to handle a case that cannot arrive.
+			// There is deliberately no 409 branch here. Since the pin was retired (D-126) no
+			// write is ever refused - LAST WRITE WINS - and the only 409 this route can still
+			// produce is `POST /on` or `/off` with no shortcut row configured, which this
+			// module never calls. The generic error line below covers it if that ever changes.
 			let detail = `${res.status}`
 			try {
 				const body = await res.json()
@@ -934,31 +858,6 @@ class OnAirInstance extends InstanceBase {
 				options: [],
 				callback: () => this.confirmation() === 'disagrees',
 			},
-			held: {
-				type: 'boolean',
-				name: 'A hold is in force',
-				description: 'True whenever any row is pinned, whichever row it is.',
-				defaultStyle: { color: black, bgcolor: combineRgb(142, 202, 230) },
-				options: [],
-				callback: () => Boolean(this.current?.hold),
-			},
-			held_to_this_state: {
-				type: 'boolean',
-				name: 'Held to this state',
-				description: 'True when the hold pins the row this button sets.',
-				defaultStyle: { color: black, bgcolor: combineRgb(142, 202, 230) },
-				options: [
-					{
-						type: 'dropdown',
-						id: 'state',
-						label: 'State',
-						default: choices[0]?.id ?? '',
-						choices,
-						allowCustom: true,
-					},
-				],
-				callback: (feedback) => Boolean(this.current?.hold) && this.current.hold === feedback.options.state,
-			},
 		}
 	}
 
@@ -984,10 +883,10 @@ class OnAirInstance extends InstanceBase {
 					color,
 					bgcolor: dim(bgcolor),
 				},
-				steps: [{ down: [{ actionId: 'set_state', options: { state: row.id, hold: 'leave' } }], up: [] }],
+				steps: [{ down: [{ actionId: 'set_state', options: { state: row.id } }], up: [] }],
 				// ORDER IS THE PRIORITY (D-122, #75). Later feedbacks win, so the state's own
-				// colours are laid down first, the pin badge next, and the two connection marks
-				// last: dark-because-dead must never be painted over by anything.
+				// colours are laid down first and the two connection marks last:
+				// dark-because-dead must never be painted over by anything.
 				feedbacks: [
 					{
 						feedbackId: 'state_is',
@@ -995,13 +894,6 @@ class OnAirInstance extends InstanceBase {
 						// Lit in the row's OWN colours, dimmed when it is not the current state, so a
 						// deck of buttons reads as one indicator rather than five.
 						style: { color, bgcolor },
-					},
-					{
-						feedbackId: 'held_to_this_state',
-						options: { state: row.id },
-						// The badge keeps the row's colours and changes the caption, so a pinned
-						// button still reads as its own state - it just says it is pinned.
-						style: { text: `PIN\n${row.label}`, size: 'auto', color, bgcolor: dim(bgcolor) },
 					},
 					{
 						feedbackId: 'connection_lost',
@@ -1023,22 +915,6 @@ class OnAirInstance extends InstanceBase {
 		}
 
 		if (this.states.length) {
-			presets.pin = {
-				type: 'button',
-				category: 'Utility',
-				name: 'Pin the current state',
-				style: { text: 'PIN', size: '18', color: combineRgb(0, 0, 0), bgcolor: combineRgb(142, 202, 230) },
-				steps: [{ down: [{ actionId: 'pin_current_state', options: {} }], up: [] }],
-				feedbacks: [{ feedbackId: 'held', options: {} }],
-			}
-			presets.unpin = {
-				type: 'button',
-				category: 'Utility',
-				name: 'Release the hold',
-				style: { text: 'UNPIN', size: '18', color: combineRgb(255, 255, 255), bgcolor: combineRgb(60, 60, 60) },
-				steps: [{ down: [{ actionId: 'release_hold', options: {} }], up: [] }],
-				feedbacks: [{ feedbackId: 'held', options: {} }],
-			}
 			presets.light = {
 				type: 'button',
 				category: 'Utility',

@@ -117,21 +117,6 @@ test('and the click still works after polls have run - the listener came with it
   );
 }
 
-test('the pin reads its state at CLICK time, not at build time');
-{
-  const label = () => page.textContent('#pin');
-  const first = (await label()).trim();
-  await page.click('#pin');
-  await page.waitForTimeout(400);
-  const second = (await label()).trim();
-  check(first !== second, `the pin label did not change: "${first}" -> "${second}"`);
-
-  await page.click('#pin');
-  await page.waitForTimeout(400);
-  const third = (await label()).trim();
-  check(third === first, `the pin did not toggle back: "${second}" -> "${third}" (wanted "${first}")`);
-}
-
 test('an open row editor is not destroyed by a poll');
 {
   await page.click('#rail button[data-sec="states"]');
@@ -198,7 +183,6 @@ test('the command surface is present and identical in BOTH views');
   const grab = () => page.evaluate(() => ({
     chips: document.querySelectorAll('#chips .chip').length,
     word: document.getElementById('tally-word').textContent,
-    pin: !!document.getElementById('pin').offsetParent,
   }));
   await page.click('#view-simple');
   const simple = await grab();
@@ -206,7 +190,6 @@ test('the command surface is present and identical in BOTH views');
   const advanced = await grab();
   check(simple.chips > 0 && simple.chips === advanced.chips, 'chip count differs between views');
   check(simple.word === advanced.word, 'the tally word differs between views');
-  check(simple.pin && advanced.pin, 'the pin is not reachable in both views');
   await page.click('#view-simple');
 }
 
@@ -378,7 +361,7 @@ test('an OLD WRITE on a LIVE connection is drawn fully lit - the D-91 headline')
 
   const painted = await page.evaluate((row) => {
     lastContactAt = Date.now(); // the service answered just now
-    liveStatus = { state: row.id, confirmed: row.id, hold: null, source: 'human:test',
+    liveStatus = { state: row.id, confirmed: row.id, source: 'human:test',
                    busy: false, intended: 'off', ageSeconds: 7200, tableVersion: 1 };
     renderTally();
     const card = document.getElementById('tally');
@@ -404,7 +387,7 @@ test('a CALM state on a LOST connection does NOT wear its own colour');
 
   const painted = await page.evaluate((row) => {
     lastContactAt = Date.now() - 120000; // two minutes with no answer from the service
-    liveStatus = { state: row.id, confirmed: row.id, hold: null, source: 'human:test',
+    liveStatus = { state: row.id, confirmed: row.id, source: 'human:test',
                    busy: false, intended: 'off', ageSeconds: 900, tableVersion: 1 };
     renderTally();
     const card = document.getElementById('tally');
@@ -429,7 +412,7 @@ test('a BUSY state on a LOST connection KEEPS its own colour - draining it weake
 
   const painted = await page.evaluate((row) => {
     lastContactAt = Date.now() - 120000;
-    liveStatus = { state: row.id, confirmed: row.id, hold: null, source: 'human:test',
+    liveStatus = { state: row.id, confirmed: row.id, source: 'human:test',
                    busy: true, intended: 'on', ageSeconds: 900, tableVersion: 1 };
     renderTally();
     const card = document.getElementById('tally');
@@ -475,7 +458,7 @@ test('and TWENTY-NINE minutes is still condition 2 - the thresholds are not chai
   const busy = (states.states || []).find((r) => r.busy && r.id !== 'unknown');
   const painted = await page.evaluate((row) => {
     lastContactAt = Date.now() - 1740000;
-    liveStatus = { state: row.id, confirmed: row.id, hold: null, source: 'human:test',
+    liveStatus = { state: row.id, confirmed: row.id, source: 'human:test',
                    busy: true, intended: 'on', ageSeconds: 1800, tableVersion: 1 };
     renderTally();
     const card = document.getElementById('tally');

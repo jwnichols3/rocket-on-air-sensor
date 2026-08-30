@@ -5,7 +5,8 @@ How to call the on-air service from your own code. A normative contract sits beh
 anything here does not match what the server actually does, trust the server and report the
 page.
 
-Everything below was checked against a running service on 2026-08-28.
+Everything below was checked against a running service on 2026-08-28, and revised on 2026-08-29
+when holds were removed - those removals are marked where they appear.
 
 ---
 
@@ -20,9 +21,10 @@ Your answer picks your routes, your credential and your `source` for the rest of
 | **A renderer** | a panel, a menu bar item, a wall display | `GET /status` + `GET /config/states` | none, you never write |
 | **A dumb kiosk** | a browser pointed at a screen | `GET /public/status`, or just `GET /display` | none |
 
-Two of these choices are load-bearing. An automated writer that uses a human route silently
-acquires the authority to override the owner's holds (section 4.1), and a renderer that reads
-`/public/status` gets a view that is free to change shape underneath it (section 7).
+Two of these choices are load-bearing. An automated writer that uses a human route loses its
+own name from `source`, which is the only trace it leaves in this system (section 4.1), and a
+renderer that reads `/public/status` gets a view that is free to change shape underneath it
+(section 7).
 
 ---
 
@@ -104,12 +106,12 @@ kind   := "auto" | "human"
 label  := free text, 1..32 chars, display only
 ```
 
-A **hold** is a pin the owner puts on a state so that automated writers cannot move the light
-off it. Section 4.4 gives the exact rule; what matters here is who may trip it. `auto:` writers
-are subject to a hold. `human:` writers are not, and may set and clear holds.
-**This is an authority boundary, not a label.**
+`auto:` and `human:` carry no different authority. Every accepted write is applied whichever
+kind sent it, and no write can block a later one (section 4.4). **The prefix is provenance** -
+it is how `GET /status` and every renderer can say who put the light where it is.
 
-The rule is split by route so neither audience pays for the other's convenience:
+The `source` requirement is split by route so neither audience pays for the other's
+convenience:
 
 | Route | `source` | If missing or unprefixed |
 |---|---|---|
@@ -117,8 +119,9 @@ The rule is split by route so neither audience pays for the other's convenience:
 | `POST /state/{id}`, `/on`, `/off` | optional | defaults to `human:anonymous` |
 
 An automated client that forgets the prefix on `PUT /state` gets a `400`, which is loud. The
-same client pointed at `POST /state/on-air` gets **human authority** and quietly overrides the
-owner's holds. **If you are automated, use `PUT /state`.**
+same client pointed at `POST /state/on-air` gets `human:anonymous` and quietly loses its own
+name from the one field that would have identified it. **If you are automated, use
+`PUT /state`.**
 
 The bare legacy string `detector` is mapped to `auto:detector` for continuity. Nothing else is.
 
@@ -135,7 +138,12 @@ curl -sS -X PUT http://127.0.0.1:8484/state \
 |---|---|---|
 | `state` | yes | A row `id` present in the current table. |
 | `source` | yes | Prefixed `auto:` or `human:`. |
-| `hold` | no | `true` pins, `false` releases, omitted leaves it alone. **`human:` only.** |
+
+Any other top-level key is **accepted and ignored**, including the retired `hold` (removed
+2026-08-29). A retired field never vetoes a state assertion: refusing the body would discard
+the write and leave the light saying the wrong thing, which is the failure this service exists
+to prevent. If you still send `hold`, delete it - it does nothing, and the response will not
+carry it back.
 
 Idempotent: repeating the same body refreshes `updatedAt` and nothing else. The response is the
 full status object, the same shape as `GET /status`, taken after the write and after the light
@@ -149,7 +157,7 @@ call and a JSON body is a nuisance.
 ```bash
 curl -sS -X POST 'http://127.0.0.1:8484/state/on-air?source=human:shortcut'
 curl -sS -X POST 'http://127.0.0.1:8484/on'
-curl -sS -X POST 'http://127.0.0.1:8484/off?hold=1'
+curl -sS -X POST 'http://127.0.0.1:8484/off'
 ```
 
 `/on` and `/off` resolve through configuration rather than naming a row. Out of the box `/on`
@@ -157,30 +165,23 @@ is `on-air` and `/off` is `available`, but the owner can point them anywhere. **
 is unset you get a `409`, not a guess** - falling back to the first row would mean an unset
 `/off` turning the light red.
 
-Query parameters: `?source=`, and `?hold=` to pin or release. `1` and `true` pin; `0` and
-`false` release. **Any other value is silently treated as if you had not sent the parameter**,
-leaving the hold exactly as it was, with no error - so a typo here fails quietly. Send one of
-those four words and nothing else.
+Query parameter: `?source=`. The retired `?hold=1` / `?hold=0` (removed 2026-08-29) is
+**accepted and ignored** rather than rejected, for the reason given in 4.2: a shell alias or
+phone Shortcut that still carries it must still be able to turn the light off.
 
-### 4.4 Holds
+### 4.4 No write outranks another
 
-A hold pins the state. Set and cleared only by a `human:` source, persisted, **never released
-on a timer**.
+> **Every write with a valid body is applied. No `source` outranks another, and no earlier
+> write can block a later one.**
 
-> While a hold is set, a write from an `auto:` source is applied only if it moves the system
-> from a `busy: false` state to a `busy: true` state. Every other automated write is refused
-> with `409` and the held state stands.
+There is no hold, no pin and no precedence, and the server keeps no memory of who wrote last
+beyond the `source` string itself. A person overriding the light mid-meeting is an ordinary
+state write; the detector's next write replaces it. That is the guarantee, not a side effect -
+the light ends up wherever the most recent writer put it.
 
-The carve-out is the whole design: without it, "I am available today" would hold the light calm
-while the camera is live. What it means for you as an automated writer:
-
-- Your escalation to a busy state **will** land even against a pin. That is intended.
-- Your later de-escalation **will** be refused with a `409`, and the server settles the light
-  back to the held row with `source: human:hold`.
-- **A `409` is not an error and not a retry signal.** It is the system working. Read the status
-  body that comes with it and carry on. Retrying will not help and only adds noise.
-- A `403` on a hold means your `source` is `auto:` and you tried to touch the pin. That is a
-  bug in your client. Fix the call; do not retry.
+What it means for you as an automated writer: your write lands, every time, and nothing on the
+server will hold the light away from what you last asserted. Making it stick is still your job,
+because the *light* can fail to follow even when the server accepted you - see 4.5.
 
 ### 4.5 Confirm your own write
 
@@ -229,7 +230,7 @@ curl -sS http://127.0.0.1:8484/status -H 'Authorization: Bearer <passphrase>'
 ```
 
 ```json
-{"state":"available","confirmed":"available","hold":null,"source":"human:admin",
+{"state":"available","confirmed":"available","source":"human:admin",
  "updatedAt":"2026-08-28T00:37:22.080Z","message":null,"busy":false,
  "intended":"off","ageSeconds":53529,"tableVersion":11}
 ```
@@ -240,8 +241,7 @@ curl -sS http://127.0.0.1:8484/status -H 'Authorization: Bearer <passphrase>'
 | `busy` | Does this state mean the camera may be live. Semantics, not presentation. |
 | `intended` | `busy ? "on" : "off"`. Derived and read-only. Key your logic here if you want to survive a row invented next year without a code change. |
 | `confirmed` | The row the light acknowledged. See 4.5. |
-| `hold` | The pinned row, or `null`. |
-| `source` | Who wrote it. |
+| `source` | Who wrote it. Provenance only - see 4.1. |
 | `updatedAt`, `ageSeconds` | When the state was last written, and how long ago. The server never judges whether that is too old. You do. |
 | `tableVersion` | Bumped on every config save. A change means refetch the table. |
 | `stateResolvedFrom` | Present only when the live row was deleted and the state fell back to `unknown`. Names the dead id. |
@@ -384,8 +384,8 @@ what died.
 ```
 
 They exist for `/display` and the landing page, which hold no table and should not fetch one.
-**They are a rendering view, not the state contract.** No `hold`, no `source`, no `confirmed`,
-and free to change shape to suit those two pages.
+**They are a rendering view, not the state contract.** No `source`, no `confirmed`, and free to
+change shape to suit those two pages.
 
 **If your client holds a table, do not read these.** Take the key from the gated routes and the
 look from `GET /config/states`.
@@ -415,20 +415,27 @@ Shape is `{"error": "<message>"}`, plus context fields where they help.
 |---|---|---|
 | `400` | Malformed JSON, a body over 16 KB, missing `state`, unknown state id, bad `source` shape | **Fix the call.** Never retry unchanged. An unknown id returns `validStates` - use it. |
 | `401` | Passphrase or session absent or wrong | Surface it to a human. Do not hammer. Check whether a rotation is in its 60-minute grace. |
-| `403` | An `auto:` source tried to set or clear a hold | **A bug in your client.** Fix the `source`. The state was left untouched. |
+| `403` | `POST /admin/restart` **always**, in the shipped service - the route wants a server-side token the service never wires up, and setting the passphrase does not supply it. Or `POST /admin/factory-reset` without the admin password | An authority or server-configuration problem, never a transient one. Surface it; never retry unchanged. **No state-write route returns `403`.** |
 | `404` | Unknown path | Fix the URL. |
 | `405` | Right path, wrong method | Fix the method. `PUT /state`, `POST /state/{id}`. |
-| `409` | **The pin rule** refused an automated write | Not an error. The full status body is merged into the response - read it and carry on. Do not retry. |
 | `409` | `/on` or `/off` with no shortcut row configured | The body is `{"error":...}` and nothing else. Only a person can fix it. Surface it; do not retry. |
 | `409` | A config save carrying a stale `version` | Refetch, re-apply your change, submit once more. |
-| `500` | An internal server fault | Retry once with backoff; if it repeats, report it. |
+| `409` | A config save that failed to write for a reason other than a full disk | The running config is untouched. Not yours to fix; report it. |
+| `409` | A port or bind change whose rebind failed and was rolled back | The service is still on the previous binding and still answering. Surface it; the new binding is what needs fixing. |
+| `500` | An internal server fault - in practice a write whose persist to the state file failed | Retry once with backoff; if it repeats, report it. Read `GET /status` first: the in-memory state has already moved. |
 | `501` | A route whose backing store is not wired up | Configuration problem on the server, not yours. |
 | `507` | A config save could not reach disk | The running config is untouched. Report it. |
 
-**Three different things return `409` and only one of them carries a status body.** The pin
-refusal merges the full state in, so you can see what stands without a second request. The
-other two carry `{"error":...}` alone - a client that reads `.state` off any `409` gets
-`undefined`. Branch on the shape, not on the code.
+**No `409` carries a status body**, and no state-write route can produce one. Every `409` is
+`{"error":...}` (the three config-save ones add the live `config`), so a client that reads
+`.state` off a `409` gets `undefined`, always. A `409` now means a person has to change
+something - an unset shortcut row, a config document someone else moved, a config that would
+not write, or a binding that would not open. Surface it.
+
+**This inverted on 2026-08-29.** Until then a `409` could also mean an automated write had been
+refused by the pin rule, it carried the full status merged in, and it was documented here as
+the system working rather than as a failure. The pin is gone; a client still treating `409` as
+success will silently swallow a real misconfiguration.
 
 A body over 16 KB is a `400`, not a `413` and not a `500`: the read fails inside the same
 parse that would have rejected bad JSON, so it arrives as
@@ -453,7 +460,7 @@ BASE="${ONAIR_BASE:-http://127.0.0.1:8484}"
 PASS="${ONAIR_PASSPHRASE:?set ONAIR_PASSPHRASE}"
 AUTH=(-H "Authorization: Bearer $PASS")
 
-# 0 accepted | 1 transient, retry | 2 our bug, never retry | 3 the pin decided
+# 0 accepted | 1 transient, retry | 2 never retry: our bug, or something a person must fix
 write() {
   local body code rc=0
   body=$(curl -sS -m 5 -w '\n%{http_code}' -X PUT "$BASE/state" "${AUTH[@]}" \
@@ -463,7 +470,7 @@ write() {
   code=${body##*$'\n'}
   case "$code" in
     200)         return 0 ;;
-    409)         echo "the pin refused this: ${body%$'\n'*}" >&2; return 3 ;;
+    409)         echo "a person must fix this: ${body%$'\n'*}" >&2; return 2 ;;
     400|401|403) echo "not retryable: ${body%$'\n'*}" >&2; return 2 ;;
     *)           echo "transient: HTTP $code" >&2; return 1 ;;
   esac
@@ -482,7 +489,6 @@ set_state() {
     rc=0; write "$1" || rc=$?
     case $rc in
       2) return 2 ;;                              # identical retry fails identically
-      3) return 0 ;;                              # the pin decided, and that IS the answer
       1) sleep $((attempt * 2)); continue ;;
     esac
     for ((i = 0; i < 20; i++)); do
@@ -498,8 +504,9 @@ set_state on-air
 ```
 
 `400`, `401` and `403` are never retried: the next identical request fails identically. A
-`409` is not retried either, but it is not a failure - the pin reached a decision, and that
-decision is the answer.
+`409` is not retried either, and it **is** a failure - something a person configured is wrong,
+so it is surfaced rather than swallowed. `PUT /state` cannot return `409` at all, but the arm
+costs one line and classifying an unexpected code as transient would retry it forever.
 
 ### A minimal renderer
 
@@ -556,7 +563,8 @@ tick();
 ## 11. Checklist before you ship a client
 
 - [ ] Automated writer? You use `PUT /state` with an `auto:` prefixed `source`.
-- [ ] You treat `409` as the system working, not as a retry signal.
+- [ ] You surface a `409` to a person rather than retrying it - it means something configured
+      is wrong, not something transient.
 - [ ] You never retry a `400` or a `403` unchanged.
 - [ ] You confirm your own writes rather than assuming they landed, and you stop once
       confirmed rather than heartbeating.

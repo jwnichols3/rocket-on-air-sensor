@@ -359,8 +359,6 @@ function renderTally() {
     caution.hidden = true;
   }
 
-  $('pin').textContent = liveStatus.hold === null ? 'Pin this state' : 'Release pin';
-  $('pin-note').textContent = liveStatus.hold === null ? 'auto' : 'pinned';
   $('table-ver').textContent = 'table v' + liveStatus.tableVersion;
 }
 
@@ -458,7 +456,6 @@ function renderStatus() {
     ['Last write', liveStatus.ageSeconds + 's ago', false],
     ['Service contact', contactLost() ? lostFor() + 's ago - not refreshing' : 'current', contactLost()],
     ['Light output (intended)', liveStatus.intended, false],
-    ['Pinned at', liveStatus.hold === null ? 'auto' : liveStatus.hold, false],
     ['Table version', String(liveStatus.tableVersion), false]
   ];
   if (liveStatus.stateResolvedFrom) facts.push(['Fell back from', liveStatus.stateResolvedFrom, true]);
@@ -666,10 +663,8 @@ function renderRows() {
 
 function confirmDelete(row) {
   var isLive = liveStatus && liveStatus.state === row.id;
-  var isPinned = liveStatus && liveStatus.hold === row.id;
   var consequences = [];
   if (isLive) consequences.push('The live state becomes "unknown", and GET /status reports it fell back from "' + row.id + '".');
-  if (isPinned) consequences.push('The pin is released.');
   consequences.push('Anything writing "' + row.id + '" starts getting 400 - Companion buttons and the detector included.');
   openModal('Delete ' + row.id + '?', consequences, 'Stage the delete', null, function () {
     draft.states = draft.states.filter(function (r) { return r.id !== row.id; });
@@ -936,7 +931,7 @@ function saveAll() {
 
 function factoryReset() {
   openModal('Factory reset', [
-    'Credentials, the state table, the pin, the live state, the port and the bind mode all return to their defaults.',
+    'Credentials, the state table, the live state, the port and the bind mode all return to their defaults.',
     'The device address and its credentials are kept.',
     'Every admin session ends, including this one.'
   ], 'Reset', 'Admin password', function (password, errLine) {
@@ -1049,15 +1044,6 @@ $('add-row').addEventListener('click', function () {
   saveDraft(); renderRows(); renderCommit(); renderRail();
 });
 $('factory-reset').addEventListener('click', factoryReset);
-
-// The pin reads its state AT CLICK TIME. Capturing it at build time was harmless only while
-// the node was being rebuilt every five seconds (#54).
-$('pin').addEventListener('click', function () {
-  if (!liveStatus) return;
-  var pinned = liveStatus.hold !== null;
-  api('/state/' + encodeURIComponent(liveStatus.state) + '?source=human:admin&hold=' + (pinned ? '0' : '1'),
-      { method: 'POST' }).then(refreshStatus);
-});
 
 $('view-simple').addEventListener('click', function () { setView('simple'); });
 $('view-advanced').addEventListener('click', function () { setView('advanced'); });

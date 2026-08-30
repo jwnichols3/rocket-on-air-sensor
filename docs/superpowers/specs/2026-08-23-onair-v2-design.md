@@ -142,6 +142,13 @@ no auto-raise are all unchanged - D-91 strengthens them.)*
 
 ### Hold is a pin with one carve-out
 
+*(**Retired in full by D-126 (2026-08-29).** There is no hold, no pin, no carve-out and no
+`409` on a state write: every write with a valid body is applied and the last one wins. This
+section is kept as the record of why the pin was built, not as a description of the system.
+The same retirement reaches two other lines in this document - the `state + hold` cell in the
+§1 diagram, and "the one thing that can break a pin" in §2's one-safety-attribute paragraph,
+where `busy` keeps every other job it is given.)*
+
 D-19's floor is meaningless over an unordered set. A **naive** pin is also wrong, and there
 is production evidence: Microsoft Teams ships `user-preferred state > session-level states`,
 so a Teams user who prefers `Available` and then joins a call shows **Available** - the
@@ -189,6 +196,12 @@ as `human:`, which keeps `curl` and phone Shortcuts working with no ceremony - a
 **unsafe** default, so the contract says in bold that an automated writer omitting `auto:`
 gets human authority and will break pins. **[taste]** - failing loud on an unprefixed source
 would be safer and would break every existing manual client.
+
+*(D-126 amends the reason, not the grammar. There is no authority difference left to get and
+no pin left to break: `auto:` and `human:` are provenance now, and the shape, the route split
+and the `400` on an unprefixed `source` for `PUT /state` all stand on the first sentence of
+this section - `source` is the detector's only trace, so a writer that mislabels itself is
+lying in the one field a person reads.)*
 
 ### Lifecycle
 

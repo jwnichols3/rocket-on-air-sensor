@@ -24,7 +24,6 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 		{ id: 'unknown', label: 'NO DATA', color: '#ff00ff', bgcolor: '#1a1a1a', busy: true, order: 99 },
 	]
 	let current = 'available'
-	let hold = null
 	// `null` means "the light agrees", which is the ordinary case. A test that wants a
 	// disagreeing or unreachable panel pins it to something else.
 	let confirmedOverride = null
@@ -44,12 +43,12 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 			busy: !!row?.busy,
 			intended: row?.busy ? 'on' : 'off',
 			confirmed: confirmedOverride ?? current,
-			hold,
 			source,
 			updatedAt: new Date(0).toISOString(),
 			ageSeconds: 0,
-			// NO `stale`. It was deleted from the wire by D-91, and a fixture that still emits
-			// it is the decoy-beside-the-real-thing that D-104 refuses in the module itself.
+			// NO `stale` and NO `hold`. Both were deleted from the wire - `stale` by D-91, `hold`
+			// by D-126 - and a fixture that still emits one is the decoy-beside-the-real-thing that
+			// D-104 refuses in the module itself.
 			tableVersion: version,
 			message: null,
 		}
@@ -97,7 +96,7 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 
 		if (req.method === 'POST' && url.pathname.startsWith('/state/')) {
 			const id = decodeURIComponent(url.pathname.slice('/state/'.length))
-			writes.push({ id, source: url.searchParams.get('source'), hold: url.searchParams.get('hold') })
+			writes.push({ id, source: url.searchParams.get('source') })
 			if (!states.some((r) => r.id === id)) {
 				res.writeHead(400, { 'Content-Type': 'application/json' })
 				return res.end(JSON.stringify({ error: `unknown state '${id}'`, validStates: states.map((r) => r.id) }))
@@ -107,15 +106,9 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 			// source lets a test claim it read the write's response when it read the seed.
 			const raw = url.searchParams.get('source')
 			source = raw ? (/^(auto|human):/.test(raw) ? raw : `human:${raw}`) : 'human:anonymous'
-			const holdParam = url.searchParams.get('hold')
-			// The PIN RULE for a `human:` source, which is what `?source=companion` normalises
-			// to (server/src/state.ts). A human write always applies; an explicit hold param
-			// pins or releases; and a human write naming a state other than the held one
-			// releases the pin. That last clause is the silent release #73 is about, so the
-			// fixture has to reproduce it or the regression test proves nothing.
-			if (holdParam === '1' || holdParam === 'true') hold = id
-			else if (holdParam === '0' || holdParam === 'false') hold = null
-			else if (hold !== null && hold !== id) hold = null
+			// LAST WRITE WINS (D-126). The fixture used to reproduce the human half of THE PIN
+			// RULE here - pin, release, and the silent release of somebody else's pin. There is no
+			// precedence left to emulate: every write with a valid body is applied.
 			current = id
 
 			const answer = () => {
@@ -164,18 +157,6 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 		},
 		get version() {
 			return version
-		},
-		get hold() {
-			return hold
-		},
-		setHold: (id) => {
-			hold = id
-		},
-		/// Move the server's state WITHOUT going through a write, so a test can set up the
-		/// escalation case (state busy, hold calm) the pin rule creates.
-		setState: (id) => {
-			current = id
-			broadcast()
 		},
 		/// What the light acknowledges. `'unknown'` is the server admitting ignorance; any
 		/// other row id that is not `state` is the light disagreeing.

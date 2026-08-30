@@ -316,7 +316,7 @@ test('the public stream carries everything /display needs, and nothing more', as
   assert.equal(body.message, 'back at 3');
   assert.equal('stale' in body, false, 'the public view carries facts, not judgements (D-91)');
   // Still thin: the things D-35 excluded stay excluded.
-  for (const forbidden of ['hold', 'source', 'confirmed']) {
+  for (const forbidden of ['source', 'confirmed']) {
     assert.equal(forbidden in body, false, forbidden);
   }
 });

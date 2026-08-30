@@ -70,8 +70,8 @@ else (state, light control, API) lives on the receiver.
 - **`label`** - a row's human phrase, freely editable, drawn by every renderer and carried
   alongside the `id` in every status response. **Never a key.**
 - **`busy`** - a per-row boolean: does this state mean the camera may be live. Carries the
-  entire safety axis - it defines `intended`, it is what the staleness rule is written over,
-  and it is the one thing that can break a pin (D-31/D-32/D-33).
+  entire safety axis - it defines `intended`, and it is what the staleness rule is written
+  over (D-31/D-32/D-33).
 - **`order`** - a row's display sort hint. Presentation only. **Never on the wire, never an
   address** (D-31/D-34).
 - **Profile refresh** - Rocket's phrase for the config pull: a renderer fetching the state
@@ -81,13 +81,13 @@ else (state, light control, API) lives on the receiver.
   `color` and `bgcolor` never ride on a state change; `busy`, `intended` and `confirmed` do.
 - **Current state** - the operational level: a **reference to a row**, not a copy of one
   (Type Object). Stored as an `id`.
-- **Hold** - a persisted **pin** on the current state, set by a `human:` source (D-32,
-  replacing D-19's floor). While pinned, an automated writer may only escalate from a
-  `busy: false` state to a `busy: true` one; nothing else moves it. Released explicitly by a
-  human, never on a timer. The released regime is called **auto**.
+- **Last write wins** - the precedence rule, and there is no other (D-126). Every write with a
+  valid body is applied; no `source` outranks another and no earlier write can block a later
+  one. A manual override is an ordinary state write, and the detector's next write replaces it.
 - **`source`** - `kind:label`, where `kind` is `auto` or `human`. Wire contract, because
   under D-30 it is the only trace the detector leaves here. An absent or unprefixed `source`
-  reads as `human:`.
+  reads as `human:`. **Provenance, not authority** (D-126): it says who wrote, and nothing in
+  the system behaves differently because of it.
 - **On-air API** - the REST service on the receiver: set state, query state, serve and edit
   config. The system's source of truth, callable by the detector or any other client.
   Contract: `docs/api-contract.md`.
@@ -103,9 +103,15 @@ else (state, light control, API) lives on the receiver.
   data routes. Presented by the ESP32, Companion and VCREC.
 - **Admin credentials** - the human credential (D-35). Gate the admin UI and nothing else.
 - **Gone words.** `level` and the ladder (`available < interruptible < dnd`) no longer exist.
-  Neither does `dnd` as a shipped state. Banned in code and docs: `state machine`,
+  Neither does `dnd` as a shipped state. Since D-126, neither does the **hold**: `hold` as a
+  wire field, and `pin` / `pinned` / `unpin` as a state concept, are gone from code and docs,
+  and so is `auto` as the name of a regime. Banned in code and docs: `state machine`,
   `statechart`, `transition`, `guard`, `event`, `taxonomy`, `traits`; `select` and `option`
   are ESPHome transport words only.
+  Carve-outs, because these are different words that merely look alike: the firmware's
+  `onair::held()` accessor and its `struct Held` (the panel's own singleton, nothing to do with
+  the retired hold), `threshold`, prose like "holds a table", the ESPHome version pin, and GPIO
+  pins.
 
 ## Invariants (draft)
 
@@ -149,9 +155,9 @@ else (state, light control, API) lives on the receiver.
 
 ## Decisions
 
-> **Supersession index (2026-08-23).** On-Air v2 rewrote the state model. Read this before
-> reading any decision below it - several are still written in a vocabulary the system no
-> longer uses.
+> **Supersession index (2026-08-23, extended 2026-08-29).** On-Air v2 rewrote the state model,
+> and D-126 then retired the hold. Read this before reading any decision below it - several are
+> still written in a vocabulary the system no longer uses.
 >
 > | Decision | Fate |
 > |---|---|
@@ -167,9 +173,9 @@ else (state, light control, API) lives on the receiver.
 > | **D-16** firmware in a separate repo | **Reversed** by D-28, implemented by D-37 and **done** in D-47. Firmware lives in `firmware/`. The ESPHome `2026.8.0` pin and its warning survive. |
 > | **D-17** device transport over plain HTTP | **Intact**, **amended** by D-38: the device entity moves from `select` to `text`. Basic auth stays mandatory and stays separate from the passphrase. |
 > | **D-18** three-rung ladder | **Superseded** by D-31 (table), D-32 (busy rule), D-33 (`intended`), and **deleted from the code** by D-48. `level`, `onAir` and the rung routes no longer exist. |
-> | **D-19** hold as a floor | **Superseded** by D-32, **shipped** by D-49. Hold is a pin with one escalation carve-out, and a refusal settles back to the held row. |
+> | **D-19** hold as a floor | **Superseded** by D-32, **shipped** by D-49, and **retired outright** by D-126. There is no floor and no pin; the last valid write wins. |
 > | **D-21.1** reconciliation merges only on contradiction | **Intact in spirit**, restated over `busy` rather than rungs. |
-> | **D-21.2** a manual write below the floor releases the floor | **Superseded** by D-32, shipped in D-48/D-49: a `human:` write naming a state other than the held one releases the pin. |
+> | **D-21.2** a manual write below the floor releases the floor | **Superseded** by D-32, shipped in D-48/D-49, and **moot since D-126**: with nothing to release, a manual write is just a write. |
 > | **D-22** ESP32 integration live and accepted | **Intact.** All three sub-findings survive; D-22.3 (a write is not confirmed by the next read) is re-verified against `text` in D-38. D-22.1's `Render` sensor gains a fifth branch in D-46. |
 > | **D-23** `ONAIR_TOKEN` set on this host | **Superseded** by D-35 and D-51. The value now lives in `config.json`'s `auth` block; the env var overrides it. |
 > | **D-24** loopback alone does not authenticate; `Origin` does | **Survives, unweakened**, cited verbatim by D-35 and **implemented clause by clause** in D-51. Both measured attacks are regression tests, at the unit level and over HTTP. |
@@ -177,12 +183,17 @@ else (state, light control, API) lives on the receiver.
 > | **D-26** SwiftBar, not a native app | **Survives**, confirmed. |
 > | **D-27** one credential, no read/write split | **Carried forward** onto the passphrase by D-35, shipped in D-51, and sharpened: the split that *does* exist is machine credential vs human admin credential, which is a different axis. |
 > | **D-30** the detector is decoupled | **Intact**, and load-bearing: it is why `source` is wire contract in D-32. |
-> | **D-32** unprefixed `source` reads as `human:` | **Amended** by D-41: required and prefixed on `PUT /state`, optional on the convenience routes. |
+> | **D-32** unprefixed `source` reads as `human:` | **Amended** by D-41: required and prefixed on `PUT /state`, optional on the convenience routes. The grammar survives D-126; what it means does not. `auto:` and `human:` are provenance now, so an unprefixed `source` mislabels a writer and breaks nothing. |
+> | **D-32** THE PIN RULE (hold as a pin, with the `busy: false -> busy: true` carve-out) | **Retired** by D-126. There is no hold, no pin, no `409` on a state write and no escalation carve-out. THE BUSY RULE from the same decision is **intact** - it never depended on the pin. |
 > | **D-38** ESPHome cannot serve a custom device page or persist a table | **Corrected** by D-40. It can, via an external component. D-38's architecture stands; only its feasibility verdict was wrong. Its `select`->`text` half is proven by D-44 and **shipped** by D-46; the `select` no longer exists. Its **config-pull half is shipped by D-54**, which also removes the last hardcoded row list from the firmware. Its claim that `mode: password` keeps a value out of the device's REST API is **factually wrong and corrected by D-55** - a second feasibility-shaped error in the same decision. |
 > | **D-40** ESPHome CAN serve a custom page, via an external component | **Narrowed** by D-57. The verdict was right and the mechanism was not: `web_server_base::add_handler()` registers a handler on the server ESPHome already runs, so the page needed two headers and no component. D-40's evidence - the `add_handler` / `canHandle` surface, `captive_portal` using it in-tree - is exactly what made that possible, and its NVS-persistence half is **shipped** by D-57 for the overlay only. |
 > | **D-55**'s operational note, *"rotating it in the admin console is cheap ... it is on the review list"* | **Retired** by D-61. The defaults are the product, the way a router's are. The first-run change is the operator's step, not remediation, and it is not an open item to keep raising. |
 > | **D-31** "colour is on the wire" | **Narrowed** by D-42: colour is in the profile (`GET /config/states`), never on a state change. Presentation travels with the profile, semantics with the state. |
 > | **D-42** presentation travels with the profile; the version nudge | **Shipped** by D-53 (server payload) and D-54 (the nudge, and the device end of the pull). The nudge fires on a state write *and* on a config save. |
+> | **D-49** the pin refuses and the held state stands | **Retired** by D-126, along with `judgeWrite()`, the `409` settle-back and the `human:hold` source value. Read its closing line - *"the pin is what the system falls back TO, not merely a veto"* - as a description of the refusal path, not of an invariant: D-126 deletes the refusal, and the false ON that sentence guards against goes with it. |
+> | **D-120** a Companion press stays `human:`, and the pin it drops is announced | **Retired** by D-126. No press can drop a pin, so the `leave`/`pin`/`release` option, `pin_current_state`, `release_hold`, the two hold feedbacks, `$(hold)`/`$(hold_label)` and the PIN/UNPIN presets all go. Its load-bearing half survives as a general rule: `POST /state/{id}` always SETS the row named in the path. Module `0.2.0` -> `0.3.0`; buttons already placed on a deck are orphaned. |
+> | **D-118** *"`409` is three different things and only one carries a status body"* | **Inverted** by D-126. There are four `409`s now, none of them a write refusal and **none carrying a status body**: an unset `/on`/`/off` shortcut row, a stale config `version`, a config save that failed for a reason other than disk-full, and a rebind that rolled back. Every one means a person must change something. D-118's other two corrections (the 16 KB `400`, the `403` rows) stand; its `holdFromQuery` note describes a function that no longer exists. |
+> | Every decision that **enumerates `hold` as a wire field** - D-30, D-32, D-35, D-36, D-48, D-51, D-52, D-63, D-75, D-91, D-121, D-122 | **Read them without it.** The bodies are left alone on purpose - a decision is a record of what was decided, not a description of today - but `hold` is off the wire, out of the state object and out of the persisted file since D-126, so every list of payload fields, every "factory reset clears the hold", and D-51's *"`/display` needs `message` and `hold`"* is one item shorter - D-52 had already taken the HELD badge off that page. Nothing else in any of them moves. |
 
 - **D-1 (2026-08-05)** Receiver is a Raspberry Pi hosting a REST API; the work Mac runs
   only a thin detector that calls that API. Rationale: light-control logic must not
@@ -4337,3 +4348,144 @@ else (state, light control, API) lives on the receiver.
   Four of the 67 agents died on an unrelated API error. A dead skeptic returns null and the
   surviving vote decided those findings, which is a second reason the gate was not taken as
   final.
+
+- **D-126 (2026-08-29)** **The hold is retired. Every write with a valid body is applied, and
+  the last one wins.**
+
+  **Supersedes D-19, D-21.2 and D-32's PIN RULE; retires D-49 and D-120.** `judgeWrite()`, the
+  `hold` field, the `?hold=` parameters, the `human:hold` source value and every `403` and
+  `409` a state-write route could produce all go. D-32's BUSY RULE is untouched - it never
+  depended on the pin, and it is still the thing that keeps a stale calm state off the glass.
+
+  **The workflow the pin was built for is not Rocket's.** His is: the detector drives the
+  light; he overrides by hand mid-meeting when he wants something else on the glass; when the
+  meeting ends the detector's `available` lands and puts him back. A pin does the exact
+  opposite - it exists so the detector's end-of-call write loses. He has never wanted one, and
+  `~/.onair/state.json` on the live host reads `"hold": null`. An unused feature that silently
+  changes what a write means is a liability, not an option: the next person to trip it will be
+  debugging a light that will not move, in a system whose entire job is moving the light.
+
+  So section 3 of the contract gains a positive rule rather than a hole. **LAST WRITE WINS:
+  every write with a valid body is applied, no `source` outranks another, no earlier write can
+  block a later one, and the server keeps no memory of who wrote last beyond the `source`
+  string itself.** Stated positively on purpose. An absence is not a contract, and the next
+  reader of D-19 or D-32 would fill it back in with precedence.
+
+  **What is genuinely lost, named rather than buried.** Pinned at a `busy: true` row, an
+  `auto:` write to a calm row was refused and the light stayed ON. That was real false-OFF
+  protection and it is being removed deliberately. Its scope was always narrow - it needed a
+  human to have explicitly pinned at a busy row, it protected only against a detector that was
+  already wrong, and after this the detector is the sole authority by design - but it existed.
+  This is not a purely subtractive change and the record should not pretend otherwise.
+
+  **Against that, three false-OFF paths go, and the adversarial review reproduced each against
+  the real `StateStore` rather than arguing it.**
+
+  - **The pin turned a contract-mandated retry into a false OFF, mid-call.** The client guide
+    tells every automated writer to re-send until `confirmed` matches. Pin at `available`, the
+    meeting starts, the detector writes `on-air` - allowed by the carve-out. The light is
+    unreachable for a beat, `confirmed` never matches, so the writer re-sends the byte-identical
+    body. Now `movingToBusy` is false, because the current state is *already* busy. Measured:
+    `409`, and the settle-back drove the light back to the held row - `driver.calls
+    ['available','on-air','available']`, `intended: off`, camera live. Worse, the guide's own
+    published writer read that `409` as success and stopped retrying. The carve-out protected
+    the first escalation and then punished its retry.
+  - **The `403` fired before anything read `current.hold`**, so it was live on this host with
+    no pin set anywhere. Measured against the running daemon: `PUT /state
+    {"state":"on-air","source":"auto:vcrec","hold":false}` -> `403`, and the state change
+    discarded. An escalation thrown away because of a field name.
+  - **D-125's reproduced false OFF was still reachable**: pin `interruptible`, let the detector
+    escalate, press UNPIN mid-call, and the lamp went calm with the camera live. The Companion
+    module carries a hand-written guard and a regression test that exist only to apologise for
+    it.
+
+  **The carve-out was a mitigation OF the pin, not a protection the pin provided.** Contract
+  section 3 says the escalation carve-out exists so a pin cannot force calm against a live
+  camera, and D-49's settle-back exists so a refusal does not leave a false ON standing. Both
+  are repairs to damage the refusal path does. Delete the refusal and the hazard and its two
+  repairs leave together. D-49's closing line - *"the pin is what the system falls back TO, not
+  merely a veto"* - describes that repair, and on a careless read makes this change look like
+  removing a false-ON guard. It is not: it removes what the guard was guarding against.
+
+  **A stray `hold` is IGNORED, never rejected, and this deliberately overrides the repo's usual
+  dislike of a silent degradation.** A `400` would discard the state write, which is the exact
+  failure this system exists to prevent, arriving through a field name - and the guide
+  published `POST /off?hold=1` as a copyable example, so refusing it would leave the light
+  asserting ON AIR after the meeting ended. Three senders are known: the admin console (ships
+  with the server), the installed Companion 0.2.0 (a separate artifact on another host that
+  this commit does not update), and whatever a human wired from that guide line. VCREC is
+  external (D-30) and cannot be edited in lockstep. The rule, stated once: **a retired rider
+  must never veto a state assertion.** The usual "a typo must not be silent" instinct does not
+  reach this case - it is scoped to the *state value*, where accepting an unknown id could
+  render calm, and a stray `hold` carries no state semantics at all. What loudness there is goes
+  somewhere it cannot cost an escalation: an explicit accepted-and-ignored sentence in both
+  documents rather than a quiet omission, and the read-back the contract already mandates,
+  where a client that pins and reads its own `200` back sees no `hold` in it. The server itself
+  says nothing - `hold` simply joins every other unknown body key, so no branch anywhere in
+  `server/src` names it. **Open:** the safety review wanted one dated `log()` line naming the
+  field on any write that still carries it, on the grounds that VCREC is a black box and phone
+  Shortcuts are invisible, so a sender we cannot enumerate is otherwise undiscoverable. It was
+  not built. The counter-argument is the decoy principle applied to source instead of to the
+  wire: a branch that names `hold` keeps it alive in the server for ever. Revisit if a stray
+  sender is ever actually suspected.
+
+  **`hold` is deleted from the wire, not nulled.** No tombstone in `GET /status`, the state
+  object, the SSE frames or the persisted file. The contract already makes this argument
+  against itself, about the retired `stale` field: *"a field still called `stale` beside the
+  real thing is a decoy the next renderer keys on."* A permanent `hold: null` is that decoy,
+  and admin-ui's four null comparisons on `liveStatus.hold` are the proof it is not
+  theoretical - drop the field and every one of them flips, so the console would render
+  "Release pin" and "pinned" for ever, asserting a regime that cannot exist. A `hold` key in an
+  existing `~/.onair/state.json` is dropped at the load boundary and never re-written:
+  `loadState` builds a fresh object literal and validates only
+  `updatedAt` and a resolvable state, so an unknown key cannot quarantine the file or take the
+  supervised daemon down on restart. That is the one thing standing between this change and
+  the light on the wall, so it has its own test.
+
+  **`auto:` and `human:` survive as PROVENANCE, with no authority difference.** `judgeWrite`
+  was the only place in the entire server where `source.kind` changed behaviour, so with it
+  gone the prefix decides nothing. Kept anyway, unchanged: required and prefixed on
+  `PUT /state` with its `400`, optional on the convenience routes. `source` is the only trace
+  the external detector leaves (D-30), four renderers display it, and changing the shape of a
+  required field is a breaking wire change to a client this repo cannot edit, for no gain. But
+  the rule's written justification - *"an automated writer that forgot the prefix would
+  silently get human authority and break the owner's holds"* - dies with the thing it named,
+  and a rule whose only stated reason has gone is a rule the next reviewer correctly deletes.
+  So the documents now say it outright: **nothing a `human:` source may do is denied to an
+  `auto:` source. The prefix is provenance.**
+
+  **The `409` semantics invert, and there is no deprecation mechanism to stage it behind.**
+  There is no URL versioning, and the contract is written to be implemented against by someone
+  who is not reading our source, so the only honest mitigation is a dated removal note in both
+  documents. Until today a `409` could mean *"the pin decided; read the merged status body and
+  carry on"*. The pin's two refusals, the `409` and the `403`, both went through `refuseWrite`,
+  which was the only place in the entire server that merged a status body into an error - so
+  after this, **no 4xx carries a status object at all**, and the guide's advice to branch on
+  the shape of a `409` describes a distinction that no longer exists. Now every `409` is
+  `{"error":...}` and every one means a person has to change something: an
+  unset `/on`/`/off` shortcut row, a stale config `version`, a save that failed for a reason
+  other than disk-full, or a rebind that rolled back. **`403` becomes admin-only** -
+  `POST /admin/restart` with no passphrase configured, `POST /admin/factory-reset` without the
+  admin password. D-118 rewrote these same error rows yesterday because they were wrong; both
+  replacement cells were re-derived from the source rather than from memory, for the same
+  reason.
+
+  **The one place `403` must NOT be tidied away** is the client guide's `400|401|403)` case
+  arm. `403` is still real on the admin surface, and dropping it there sends it to the `*)`
+  lane, which the example treats as transient and retries - turning a documentation edit into a
+  retry loop against a never-retryable code. The arm is unchanged. `409` gained an arm of its
+  own into the same never-retry lane, because the published example reported a `409` as
+  **success**: after this change the only `409` a write route can produce is an unset shortcut,
+  which means the light did not move, and swallowing that would be a fresh false OFF inherited
+  from the old text rather than fixed by the change that exposed it.
+
+  **The Companion module goes 0.2.0 -> 0.3.0, and that one is a breaking change with manual
+  work attached.** The `pin_current_state` and `release_hold` actions, `set_state`'s Hold
+  option, the `held` and `held_to_this_state` feedbacks, the `$(hold)` / `$(hold_label)`
+  variables and the PIN/UNPIN presets are all gone - the whole surface D-120 added. Regenerating
+  presets does not touch buttons a human has already placed, so any placed button bound to one
+  of those is orphaned and has to be re-bound by hand. `npm run package -w companion-module` is
+  not part of `verify`, so the tarball was built explicitly; until Rocket sideloads it, the
+  Companion host keeps running 0.2.0 and keeps sending `?hold=1|0` from its PIN/UNPIN buttons.
+  That surviving external sender is exactly why the server ignores a stray `hold` instead of
+  rejecting it.

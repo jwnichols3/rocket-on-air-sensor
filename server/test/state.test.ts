@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import {
   coerceSource,
   defaultState,
-  judgeWrite,
   ID_PATTERN,
   parseSource,
   SEED_ROWS,
@@ -92,9 +91,13 @@ test('parseSource is STRICT: the prefix is required', () => {
   assert.equal(parseSource(`auto:${'x'.repeat(33)}`), null);
 });
 
-test('an automated writer that forgets the prefix does NOT quietly get human authority', () => {
-  // This is the whole reason the strict/lenient split exists (D-41). Silently promoting
-  // `vcrec` to human: would let a detector break the owner's holds.
+test('an automated writer that forgets the prefix is REJECTED, not relabelled as human', () => {
+  // The strict/lenient split (D-41) survives the pin's retirement, but its reason changed.
+  // It is no longer about authority: since D-126 nothing a `human:` source may do is denied
+  // to an `auto:` source. What is left is PROVENANCE, and provenance a machine guessed is
+  // worse than none - `source` is the only trace the external detector leaves (D-30), it is
+  // what four renderers display, and silently promoting `vcrec` to `human:vcrec` would put a
+  // lie in the one field a person reads to answer "what moved the light?".
   assert.equal(parseSource('vcrec'), null);
 });
 
@@ -200,14 +203,6 @@ test('stateResolvedFrom is absent once a real state is written again', () => {
   assert.equal('stateResolvedFrom' in store.status(), false);
 });
 
-test('deleting the pinned row releases the pin in the same operation', () => {
-  const store = new StateStore(defaultState(), new StateTable());
-  store.write('interruptible', HUMAN, new Date(), true);
-  assert.equal(store.get().hold, 'interruptible');
-  store.setTable(new StateTable(SEED_ROWS.filter((r) => r.id !== 'interruptible'), 2));
-  assert.equal(store.get().hold, null);
-});
-
 test('a confirmed id that leaves the table decays to unknown, never to a stale row', () => {
   const store = new StateStore(defaultState(), new StateTable());
   store.write('recording', HUMAN);
@@ -216,29 +211,62 @@ test('a confirmed id that leaves the table decays to unknown, never to a stale r
   assert.equal(store.get().confirmed, UNKNOWN_ID);
 });
 
-// ------------------------------------------------------------------- holds
+// --------------------------------------------------- LAST WRITE WINS (§3, D-126)
 
-test('hold:true pins at this write, hold:false releases, omitted leaves it alone', () => {
-  const store = new StateStore(defaultState(), new StateTable());
-  store.write('interruptible', HUMAN, new Date(), true);
-  assert.equal(store.get().hold, 'interruptible');
-  store.write('interruptible', AUTO);
-  assert.equal(store.get().hold, 'interruptible', 'an auto write does not disturb the pin');
-  store.write('interruptible', HUMAN, new Date(), false);
-  assert.equal(store.get().hold, null);
+/**
+ * The pin is gone, and its absence is not a contract - this section is. Every write with a
+ * valid body is applied, no `source` outranks another, and no earlier write can block a
+ * later one. The tests below are the unit-level statement of that, written positively so a
+ * future implementer cannot read a gap and re-add precedence.
+ */
+
+test('a human write and an auto write are the SAME write - the prefix is provenance', () => {
+  // Deliberately stronger than "each write lands": a surviving special case that only fires
+  // on some rows, or only on the busy->calm move, would pass a spot check and fail here.
+  const at = new Date('2026-08-24T12:00:00Z');
+  const run = (source: Source): Record<string, unknown> => {
+    const store = new StateStore(defaultState(), new StateTable());
+    for (const id of ['on-air', 'available', 'on-air']) store.write(id, source, at);
+    const st = { ...store.status(at) } as Record<string, unknown>;
+    // `source` is the one field that is SUPPOSED to differ, and updatedAt/ageSeconds are
+    // clock, not decision.
+    delete st.source;
+    delete st.updatedAt;
+    delete st.ageSeconds;
+    return st;
+  };
+  assert.deepEqual(run(AUTO), run(HUMAN));
+  assert.equal(run(AUTO).state, 'on-air', 'and the sequence really did run');
 });
 
-test('pinning to available is legal - it cannot force calm against a live camera', () => {
+test("a human override does not stick: the detector's next write replaces it", () => {
+  // Rocket's actual workflow, at the store level. Override by hand mid-meeting; when the
+  // meeting ends the detector writes calm and that write wins.
   const store = new StateStore(defaultState(), new StateTable());
-  store.write('available', HUMAN, new Date(), true);
-  assert.equal(store.get().hold, 'available');
+  store.write('on-air', AUTO);
+  store.write('interruptible', HUMAN);
+  assert.equal(store.status().state, 'interruptible', 'the manual write is honoured...');
+  store.write('available', AUTO);
+  assert.equal(store.status().state, 'available', '...and it is transient');
+  assert.equal(store.status().intended, 'off');
 });
 
-test('a human write naming a different state releases the pin', () => {
+test('the state object carries no hold - a decoy is worse than a gap (D-83)', () => {
   const store = new StateStore(defaultState(), new StateTable());
-  store.write('interruptible', HUMAN, new Date(), true);
   store.write('on-air', HUMAN);
-  assert.equal(store.get().hold, null, 'the store never reports a hold that contradicts state');
+  assert.equal('hold' in store.status(), false, 'not on the wire');
+  assert.equal('hold' in store.get(), false, 'not in memory');
+  assert.equal('hold' in store.persisted(), false, 'and not on disk');
+  // Note what is NOT asserted: `hold === null`. A permanent null is the decoy the contract
+  // already argues against for the retired `stale` field - the key is absent, not empty.
+});
+
+test('judgeWrite is GONE from the module, not merely unreachable', async () => {
+  // Cheap, and it is what stops the function being quietly reintroduced by someone reading
+  // D-32 without reading D-126.
+  const mod = (await import('../src/state.js')) as unknown as Record<string, unknown>;
+  assert.equal('judgeWrite' in mod, false);
+  assert.equal('setHold' in StateStore.prototype, false, 'and the store cannot pin either');
 });
 
 // ---------------------------------------------------------------- persistence
@@ -252,106 +280,4 @@ test('persisted() carries intended and tableVersion, and never a live confirmed'
   assert.equal(p.intended, 'on');
   assert.equal(p.tableVersion, 1);
   assert.equal(p.confirmed, UNKNOWN_ID, 'a file records intent, never evidence about the device');
-});
-
-// ------------------------------------------------- THE PIN RULE (§3, D-32)
-
-const TABLE = new StateTable();
-
-function pinned(at: string) {
-  const store = new StateStore(defaultState(), new StateTable());
-  store.write(at, HUMAN, new Date(), true);
-  return store;
-}
-
-test('an auto write is REFUSED while pinned, unless it moves calm -> busy', () => {
-  const store = pinned('interruptible'); // busy: false
-  // The one carve-out. A detector escalation to a busy row is allowed...
-  assert.deepEqual(judgeWrite(store.get(), TABLE, 'on-air', AUTO), { ok: true });
-  // ...and nothing else automated is.
-  assert.equal(judgeWrite(store.get(), TABLE, 'available', AUTO).ok, false);
-  assert.equal(judgeWrite(store.get(), TABLE, 'interruptible', AUTO).ok, false);
-});
-
-test('a refused auto write is 409, not an error to retry', () => {
-  const store = pinned('interruptible');
-  const v = judgeWrite(store.get(), TABLE, 'available', AUTO);
-  assert.equal(v.ok, false);
-  if (!v.ok) {
-    assert.equal(v.status, 409, 'this is the system working, not a fault');
-    assert.match(v.error, /held/);
-  }
-});
-
-test('pinned to a busy row, NOTHING automated moves it', () => {
-  const store = pinned('recording'); // busy: true - there is no calm -> busy move available
-  for (const target of ['available', 'interruptible', 'on-air', 'unknown']) {
-    assert.equal(judgeWrite(store.get(), TABLE, target, AUTO).ok, false, `${target} must be refused`);
-  }
-});
-
-test('a human write always applies while pinned', () => {
-  const store = pinned('interruptible');
-  for (const target of ['available', 'on-air', 'recording', 'interruptible']) {
-    assert.deepEqual(judgeWrite(store.get(), TABLE, target, HUMAN), { ok: true });
-  }
-});
-
-test('only a human source may set, move or clear a pin - an auto attempt is 403', () => {
-  const store = new StateStore(defaultState(), new StateTable());
-  for (const hold of [true, false]) {
-    const v = judgeWrite(store.get(), TABLE, 'on-air', AUTO, hold);
-    assert.equal(v.ok, false);
-    if (!v.ok) assert.equal(v.status, 403);
-  }
-  // And a human may.
-  assert.deepEqual(judgeWrite(store.get(), TABLE, 'on-air', HUMAN, true), { ok: true });
-});
-
-test('the 403 is checked BEFORE the pin refusal: a wrong-authority write is not a 409', () => {
-  const store = pinned('recording');
-  const v = judgeWrite(store.get(), TABLE, 'on-air', AUTO, false);
-  assert.equal(v.ok, false);
-  // An auto: source trying to RELEASE a pin is an authority problem, and reporting it as
-  // "the pin refused you" would tell the client to back off rather than to fix its source.
-  if (!v.ok) assert.equal(v.status, 403);
-});
-
-test('with no pin set, an auto write is never refused', () => {
-  const store = new StateStore(defaultState(), new StateTable());
-  store.write('on-air', HUMAN);
-  assert.deepEqual(judgeWrite(store.get(), TABLE, 'available', AUTO), { ok: true });
-});
-
-test("THE REGRESSION: 'I am interruptible today' survives a meeting", () => {
-  const store = pinned('interruptible');
-  const table = store.getTable();
-
-  // The detector sees a call start. calm -> busy, so the carve-out lets it through.
-  assert.deepEqual(judgeWrite(store.get(), table, 'on-air', AUTO), { ok: true });
-  store.write('on-air', AUTO);
-  assert.equal(store.get().hold, 'interruptible', 'the pin SURVIVES the escalation');
-
-  // The call ends and the detector writes calm. Refused - and this is the whole point.
-  assert.equal(judgeWrite(store.get(), table, 'available', AUTO).ok, false);
-
-  // Nothing applied it, so the state the human pinned is what stands once they put it back.
-  store.write('interruptible', HUMAN);
-  assert.equal(store.get().state, 'interruptible');
-});
-
-test('no TTL: a pin an hour old is still in force', () => {
-  const store = new StateStore(defaultState(), new StateTable());
-  store.write('interruptible', HUMAN, new Date(Date.now() - 3600_000), true);
-  assert.equal(store.get().hold, 'interruptible');
-  assert.equal(store.status().ageSeconds > 3000, true, 'the age is VISIBLE...');
-  assert.equal(judgeWrite(store.get(), TABLE, 'available', AUTO).ok, false, '...and never acted on');
-});
-
-test('a pin at available is legal and still refuses automated calm', () => {
-  const store = pinned('available');
-  assert.equal(store.get().hold, 'available');
-  // It cannot force calm against a live camera - the carve-out sees to that.
-  assert.deepEqual(judgeWrite(store.get(), TABLE, 'on-air', AUTO), { ok: true });
-  assert.equal(judgeWrite(store.get(), TABLE, 'interruptible', AUTO).ok, false);
 });

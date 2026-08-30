@@ -112,16 +112,29 @@ test('boot survives an unreachable light with confirmed unknown', async (t) => {
   assert.equal(app.store.get().confirmed, UNKNOWN_ID);
 });
 
-test('boot restores a persisted hold', async (t) => {
-  const stateFile = await stateFileWith({ state: 'interruptible', hold: 'interruptible' });
-  const app = await boot(t, { stateFile, driver: new FakeLight() });
-  assert.equal(app.store.get().hold, 'interruptible');
+test('boot ignores a legacy hold left in the state file, and boots on the state (D-126)', async (t) => {
+  // The live daemon's file carries `"hold": null` today and older ones carry a row id.
+  // Boot must read straight past it rather than quarantine the file, or the restart that
+  // ships the pin's retirement is the restart that puts NO DATA on the wall.
+  // Written by hand rather than through stateFileWith: the key is not in PersistedState any
+  // more, and the point is a file this build could not have produced.
+  const stateFile = join(await mkdtemp(join(tmpdir(), 'onair-boot-')), 'state.json');
+  await writeFile(stateFile, JSON.stringify({
+    state: 'interruptible', confirmed: 'unknown', intended: 'off', tableVersion: 1,
+    source: 'human:ui', hold: 'interruptible', updatedAt: new Date().toISOString(), message: null,
+  }), 'utf8');
+  const light = new FakeLight();
+  const app = await boot(t, { stateFile, driver: light });
+  assert.equal(app.store.get().state, 'interruptible');
+  assert.equal(app.store.get().message, null, 'not quarantined');
+  assert.equal('hold' in app.store.get(), false);
+  assert.deepEqual(light.sets, ['interruptible'], 'and the light was driven to the recorded row');
 });
 
 test('a v1 state file boots on the migrated row, not on unknown', async (t) => {
   const file = join(await mkdtemp(join(tmpdir(), 'onair-boot-')), 'state.json');
   await writeFile(file, JSON.stringify({
-    intended: 'on', confirmed: 'unknown', level: 'dnd', source: 'webui', hold: null,
+    intended: 'on', confirmed: 'unknown', level: 'dnd', source: 'webui',
     updatedAt: new Date().toISOString(), message: null,
   }), 'utf8');
   const light = new FakeLight();

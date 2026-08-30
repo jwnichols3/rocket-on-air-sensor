@@ -33,8 +33,10 @@ export const DISPLAY_HTML = `<!doctype html>
     max-width: 84vw; opacity: 0.85; overflow-wrap: anywhere;
   }
 
-  /* The badges sit in the corners so they can never displace or cover the state word. */
-  #lost, #held {
+  /* The badge sits in a corner so it can never displace or cover the state word. A #held
+     badge shared this rule until D-52 removed it from the page; the selector outlived it
+     and is gone with the pin (D-126). */
+  #lost {
     position: fixed; top: 2vh; font-size: 2.4vw; font-weight: 700; letter-spacing: 0.12em;
     padding: 0.6vh 1.4vw; border: 0.25vh solid currentColor; border-radius: 0.6vh;
     display: none;

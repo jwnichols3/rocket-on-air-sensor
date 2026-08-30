@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>On Air</xbar.title>
-# <xbar.desc>Current state, hold, and service control for the on-air light.</xbar.desc>
+# <xbar.desc>Current state and service control for the on-air light.</xbar.desc>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
 #
@@ -177,8 +177,8 @@ def get(path):
         return None
 
 
-# TWO requests, because D-42 split semantics from presentation. `/status` carries the state,
-# the hold and the age; it does NOT carry label or colour.
+# TWO requests, because D-42 split semantics from presentation. `/status` carries the state
+# and the age; it does NOT carry label or colour.
 #
 # The LOOK is looked up in the state table, NOT read from /public/status. The contract says
 # so in as many words: /public/status is a rendering view for /display and the landing page,
@@ -392,7 +392,6 @@ if status is None:
 
 state = safe(status.get("state") or "unknown", 64)
 busy = bool(status.get("busy"))
-hold = safe(status.get("hold"), 64)
 message = safe(status.get("message"), 200)
 
 # `ageSeconds` IS NOW PURELY DISPLAY TEXT. It used to carry the safety decision - a private
@@ -462,17 +461,12 @@ else:
 src = safe(status.get("source"), 64)
 if src:
     line("Source: %s" % src)
-if hold:
-    # `hold` is the PINNED ROW ID, not who pinned it (state.ts: `hold: string | null`).
-    # "Held by" read as a person and was wrong.
-    line("Pinned to: %s" % hold, "color=#e8a317")
-    # Releasing a pin is a `PUT /state` with `hold: false` and a `human:` source. The CLI has
-    # no verb for it, and `reset-state` is NOT that verb - it also clears the message and
-    # restarts the service. Offering it here would have been a much bigger hammer than the
-    # label implied, so this links to the console instead.
-    line("Release it in the console", "href=%s/" % base)
-else:
-    line("Hold: none")
+# NOTHING IS DRAWN FROM `hold` (D-126). The field is retired: no pin, no hold, no
+# precedence - the last write wins, so there is no held row to name. This block is deleted
+# rather than left keyed on a field that never arrives, because recall_contact() replays a
+# CACHED /status body for up to thirty minutes, and a cached body from before the retirement
+# still carries `hold`. An `if hold:` here would draw "Pinned to: X" from that cache, hours
+# after the concept stopped existing.
 confirmed = safe(status.get("confirmed"), 64)
 line("Light says: %s" % (confirmed if confirmed else "unknown"))
 if message:

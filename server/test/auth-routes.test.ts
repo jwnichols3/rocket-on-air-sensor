@@ -235,7 +235,7 @@ test('FACTORY RESET ALWAYS DEMANDS THE PASSWORD - including from loopback', asyn
   assert.equal(wrong.status, 403);
 });
 
-test('factory reset restores the shipped defaults and clears the pin', async (t) => {
+test('factory reset restores the shipped defaults', async (t) => {
   const h = await boot(t);
   const cfg = (await json(await fetch(`${h.base}/admin/config`))).config as OnAirConfig;
   await fetch(`${h.base}/admin/config`, {
@@ -248,7 +248,7 @@ test('factory reset restores the shipped defaults and clears the pin', async (t)
       states: cfg.states.filter((r) => r.id !== 'recording'),
     }),
   });
-  await fetch(`${h.base}/state/interruptible?hold=1`, { method: 'POST' });
+  await fetch(`${h.base}/state/interruptible`, { method: 'POST' });
 
   const res = await fetch(`${h.base}/admin/factory-reset`, {
     method: 'POST',
@@ -265,7 +265,6 @@ test('factory reset restores the shipped defaults and clears the pin', async (t)
 
   const status = await json(await fetch(`${h.base}/status`));
   assert.equal(status.state, UNKNOWN_ID);
-  assert.equal(status.hold, null);
 });
 
 test('factory reset KEEPS the device credentials - they are compiled into the firmware', async (t) => {
@@ -304,10 +303,12 @@ test('GET /public/status is thin, resolved for rendering, and leaks nothing', as
   assert.equal(body.state, 'on-air');
   assert.equal(body.label, 'ON AIR');
   assert.equal(body.bgcolor, '#c1121f');
-  // No passphrase, no config, no hold, no source, no device detail.
+  // No passphrase, no config, no source, no device detail.
   // `message` is present because /display needs it and cannot read the gated stream. It
   // discloses nothing the panel on the wall does not already show.
-  for (const forbidden of ['hold', 'source', 'confirmed', 'passphrase', 'auth', 'light']) {
+  // `hold` is NOT in this list, deliberately: it exists nowhere since D-126, and guarding
+  // a name the system no longer has is the decoy-beside-the-real-thing pattern D-83 rejects.
+  for (const forbidden of ['source', 'confirmed', 'passphrase', 'auth', 'light']) {
     assert.equal(forbidden in body, false, forbidden);
   }
 });
@@ -320,7 +321,7 @@ test('GET /public/events streams the same thin view, unauthenticated', async (t)
   const reader = res.body!.getReader();
   const first = new TextDecoder().decode((await reader.read()).value!);
   assert.match(first, /"label"/);
-  assert.equal(/"hold"|"source"/.test(first), false);
+  assert.equal(/"source"/.test(first), false);
   await reader.cancel();
 });
 

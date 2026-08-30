@@ -21,7 +21,6 @@ import { escapeHtml, repairHtml } from './repair.js';
 import { createSseHub, type SseHub } from './sse.js';
 import {
   coerceSource,
-  judgeWrite,
   parseSource,
   SEED_SHORTCUTS,
   UNKNOWN_ID,
@@ -299,8 +298,8 @@ function statusBody(deps: ServerDeps): StatusBody {
 
 /**
  * The unauthenticated view: the current row already RESOLVED for rendering. It is not the
- * state contract and no machine client should read it - it has no `hold`, no `source`, no
- * `confirmed`, and it is free to change shape to suit the two pages it serves.
+ * state contract and no machine client should read it - it has no `source`, no `confirmed`,
+ * and it is free to change shape to suit the two pages it serves.
  */
 function publicBody(deps: ServerDeps): Record<string, unknown> {
   const s = deps.store.status();
@@ -351,9 +350,8 @@ async function doWrite(
   stateId: string,
   source: Source,
   log: (line: string) => void,
-  hold?: boolean,
 ): Promise<void> {
-  const applied = deps.store.write(stateId, source, new Date(), hold).state;
+  const applied = deps.store.write(stateId, source, new Date()).state;
   await persistCurrent(deps);
   // A write always succeeds if the body is valid (contract §7). An unreachable light is
   // not a failed write - it surfaces as `confirmed: "unknown"`.
@@ -374,14 +372,6 @@ async function doWrite(
   } catch (err) {
     log(`[onair] version nudge failed: ${errorMessage(err)}`);
   }
-}
-
-/** `?hold=1|true` pins, `?hold=0|false` releases, absent leaves it alone. */
-function holdFromQuery(raw: string | null): boolean | undefined {
-  if (raw === null) return undefined;
-  if (raw === '1' || raw === 'true') return true;
-  if (raw === '0' || raw === 'false') return false;
-  return undefined;
 }
 
 type EnqueueWrite = (run: () => Promise<void>) => Promise<void>;
@@ -515,7 +505,7 @@ async function handle(
   // ---- the two unauthenticated endpoints (D-35, §5) -------------------------------
   //
   // Deliberately THIN, and a rendering VIEW of the state rather than the state contract:
-  // no passphrase, no config, no hold, no source, no device detail. They exist because
+  // no passphrase, no config, no source, no device detail. They exist because
   // /display and the landing page are served unauthenticated and therefore cannot read the
   // gated stream - and because colour lives in the table now, so the server has to resolve
   // the row for a page that holds none. A renderer that DOES hold a table must not use
@@ -728,10 +718,9 @@ async function handle(
   if (path === '/state') {
     let state: unknown;
     let source: unknown;
-    let hold: unknown;
     try {
       const body: unknown = JSON.parse(await readBody(req));
-      ({ state, source, hold } = body as { state?: unknown; source?: unknown; hold?: unknown });
+      ({ state, source } = body as { state?: unknown; source?: unknown });
     } catch (err) {
       sendJson(res, 400, { error: `malformed JSON body: ${errorMessage(err)}` });
       return;
@@ -744,25 +733,24 @@ async function handle(
       sendJson(res, 400, { error: 'state must be a string' });
       return;
     }
-    if (hold !== undefined && typeof hold !== 'boolean') {
-      sendJson(res, 400, { error: 'hold must be a boolean' });
-      return;
-    }
-    // STRICT on this route, and only this route. It is what an automated client uses, so
-    // a forgotten prefix must be a 400 rather than a silent grant of human authority
-    // (D-41, §4). The convenience routes below are lenient on purpose.
+    // `hold` used to be read here and a non-boolean was a `400`. Retired (D-126), and
+    // deliberately NOT replaced by a "hold is retired" rejection: VCREC is external (D-30)
+    // and cannot be edited in lockstep, and a rejected body means the state write is
+    // DISCARDED - a false OFF manufactured by a field name. A retired rider must never veto
+    // a state assertion, so `hold` now joins every other unknown key and is ignored.
+
+    // STRICT on this route, and only this route. It is what an automated client uses, so a
+    // forgotten prefix must be a 400 rather than a silent relabelling as `human:anonymous`.
+    // There is no authority to grant any more (D-126) - the reason is provenance: `source` is
+    // the detector's only trace (D-30) and a writer nobody can tell from a human is a writer
+    // nobody can debug. The convenience routes below are lenient on purpose (D-41, §4).
     const parsed = parseSource(source);
     if (!parsed) {
       sendJson(res, 400, { error: 'source must be prefixed auto: or human:' });
       return;
     }
     if (!checkState(res, deps, state)) return;
-    const verdict = judgeWrite(deps.store.get(), deps.store.getTable(), state, parsed, hold as boolean | undefined);
-    if (!verdict.ok) {
-      await refuseWrite(res, deps, verdict, enqueueWrite, hub, ws, log);
-      return;
-    }
-    await enqueueWrite(() => doWrite(deps, state, parsed, log, hold as boolean | undefined));
+    await enqueueWrite(() => doWrite(deps, state, parsed, log));
     broadcastAndSend(res, deps, hub, ws);
     return;
   }
@@ -773,13 +761,11 @@ async function handle(
     const id = decodeURIComponent(byId[1]!);
     if (!checkState(res, deps, id)) return;
     const source = coerceSource(url.searchParams.get('source'));
-    const hold = holdFromQuery(url.searchParams.get('hold'));
-    const verdict = judgeWrite(deps.store.get(), deps.store.getTable(), id, source, hold);
-    if (!verdict.ok) {
-      await refuseWrite(res, deps, verdict, enqueueWrite, hub, ws, log);
-      return;
-    }
-    await enqueueWrite(() => doWrite(deps, id, source, log, hold));
+    // `?hold=` is read by nothing now (D-126). Ignored rather than rejected, for the reason
+    // spelled out on `PUT /state` above - and doubly so here, because this is the surface a
+    // phone Shortcut reaches, where a refusal would leave the light asserting ON AIR after
+    // the human already said they were done.
+    await enqueueWrite(() => doWrite(deps, id, source, log));
     broadcastAndSend(res, deps, hub, ws);
     return;
   }
@@ -795,60 +781,25 @@ async function handle(
   }
   if (!checkState(res, deps, target)) return;
   const source = coerceSource(url.searchParams.get('source'));
-  const hold = holdFromQuery(url.searchParams.get('hold'));
-  const verdict = judgeWrite(deps.store.get(), deps.store.getTable(), target, source, hold);
-  if (!verdict.ok) {
-    await refuseWrite(res, deps, verdict, enqueueWrite, hub, ws, log);
-    return;
-  }
-  await enqueueWrite(() => doWrite(deps, target, source, log, hold));
+  await enqueueWrite(() => doWrite(deps, target, source, log));
   broadcastAndSend(res, deps, hub, ws);
 }
 
 /**
- * The source recorded when THE PIN decides the state rather than a client. It is a
- * `human:` source because a pin is a human instruction and the row it names is a human's
- * choice - the settle-back is that instruction being carried out, not a new decision.
+ * THE PIN RULE stood at the door here, as `PIN_SOURCE` and `refuseWrite` - the settle-back
+ * that drove the light to the held row and answered `403`/`409` with the status body merged
+ * into the error. Retired with the rule itself (D-126). LAST WRITE WINS: a state route can
+ * no longer refuse a write, so there is nothing to settle back to and no `human:hold` source
+ * to write it under.
+ *
+ * Two consequences worth stating rather than leaving to be rediscovered. No state route
+ * answers `403` any more - `403` is admin-only: factory reset without the admin password, and
+ * restart, which gates on a `ServerDeps.token` that `app.ts` never supplies and is therefore
+ * unconditional in the shipped service. And no 4xx body anywhere in this server carries state
+ * fields now: this was the only place that merged one in, so every error body is `{error}`
+ * plus at most one of three context fields - `validStates` on an unknown state id, `problems`
+ * on a config document that failed validation, or the live `config` on a refused save.
  */
-const PIN_SOURCE: Source = { kind: 'human', label: 'hold', raw: 'human:hold' };
-
-/**
- * THE PIN RULE at the door (§3), including the half that is easy to miss: **"and the held
- * state stands"**.
- *
- * Refusing the write is not enough. Pinned at `interruptible`, the carve-out lets a
- * detector escalate to `on-air` when a call starts; when the call ends and the detector's
- * `available` is refused, leaving `on-air` standing would be a **false ON that never
- * clears** - the meeting is over and nothing will move the light again until a human
- * notices. So a refusal settles the system back at the held row. The pin is what the
- * system falls back TO, not merely a veto.
- *
- * A `403` does no such thing: that is an authority fault in the caller, not the pin
- * reaching a decision, and it must leave the world exactly as it found it.
- *
- * Either way the response carries the CURRENT status body alongside the error, so the
- * client sees what stands without a second round trip.
- */
-async function refuseWrite(
-  res: ServerResponse,
-  deps: ServerDeps,
-  verdict: { status: 403 | 409; error: string },
-  enqueueWrite: EnqueueWrite,
-  hub: SseHub,
-  ws: WsBridge,
-  log: (line: string) => void,
-): Promise<void> {
-  const cur = deps.store.get();
-  if (verdict.status === 409 && cur.hold !== null && cur.state !== cur.hold) {
-    log(`[onair] pin refused an automated write; settling back to ${cur.hold}`);
-    const held = cur.hold;
-    await enqueueWrite(() => doWrite(deps, held, PIN_SOURCE, log));
-    const settled = statusBody(deps);
-    hub.broadcast(settled);
-    ws.broadcast(settled);
-  }
-  sendJson(res, verdict.status, { error: verdict.error, ...statusBody(deps) });
-}
 
 /**
  * An unknown id is a `400` that LISTS the valid ids - never accept-and-fall-back. A typo

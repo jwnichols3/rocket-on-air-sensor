@@ -535,7 +535,7 @@ inline std::string format_clock(bool valid, uint8_t hour, uint8_t minute) {
  * Pulls the state key out of a `GET /status` body (#65).
  *
  * Deliberately reads ONE field. The status object carries `busy`, `intended`, `confirmed`,
- * `hold`, `source`, `ageSeconds` and `tableVersion`, and this panel needs none of them: the
+ * `source`, `ageSeconds` and `tableVersion`, and this panel needs none of them: the
  * key is the address (D-31/D-34) and everything else about how to draw it comes from the
  * table it already holds. Reading `busy` from here instead of from the row would put a
  * second copy of the safety flag on the device, able to disagree with the first.

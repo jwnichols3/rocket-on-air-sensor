@@ -111,7 +111,7 @@ dropdown** instead, one click away, coloured to match the sign.
 
 | Page | URL | What it is |
 |---|---|---|
-| Admin console | `http://127.0.0.1:8484/` | Set the state, pin and release a hold, edit the row table and its colours |
+| Admin console | `http://127.0.0.1:8484/` | Set the state, edit the row table and its colours |
 | Public display | `http://127.0.0.1:8484/display` | A dumb full-screen tally. Point a kiosk at it |
 | Panel status | `http://<light>/onair` | What the ESP32 itself believes, open |
 | Panel settings | `http://<light>/onair/config` | The device's own table editor, behind device basic auth (D-57) |

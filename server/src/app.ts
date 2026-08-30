@@ -225,7 +225,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
   /**
    * Everything back to shipped defaults (D-35, amended by D-43 on the passphrase): admin
    * credentials to `rocket`/`ESP32`, the passphrase to `onair`, the table to the seed rows,
-   * the hold cleared, live state `unknown`, `bind` to `all`, port to 8484.
+   * live state `unknown`, `bind` to `all`, port to 8484.
    *
    * The device credentials are kept. They are not ours to reset - they were compiled into
    * the firmware (D-17) and a reset that silently forgot them would take the light offline
@@ -238,7 +238,6 @@ export async function createApp(opts: AppOptions): Promise<App> {
     problem = undefined;
     store.setTable(new StateTable(fresh.states, fresh.version));
     store.write(UNKNOWN_ID, { kind: 'human', label: 'factory-reset', raw: 'human:factory-reset' });
-    store.setHold(null);
     await saveState(opts.stateFile, store.persisted());
     log('[onair] factory reset: credentials, table, state and bind are back to defaults');
   }

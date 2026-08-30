@@ -23,12 +23,11 @@ function persisted(over: Partial<PersistedState> = {}): PersistedState {
   };
 }
 
-test('save then load round-trips state, hold and message', async () => {
+test('save then load round-trips state and message', async () => {
   const file = await tmpStateFile();
-  await saveState(file, persisted({ state: 'interruptible', hold: 'interruptible', message: 'back at 3' }));
+  await saveState(file, persisted({ state: 'interruptible', message: 'back at 3' }));
   const loaded = await loadState(file);
   assert.equal(loaded?.state, 'interruptible');
-  assert.equal(loaded?.hold, 'interruptible');
   assert.equal(loaded?.message, 'back at 3');
 });
 
@@ -50,10 +49,21 @@ test('load always returns confirmed unknown: a file is not evidence about the de
   assert.equal((await loadState(file))?.confirmed, UNKNOWN_ID);
 });
 
-test('the hold survives a restart', async () => {
-  const file = await tmpStateFile();
-  await saveState(file, persisted({ state: 'interruptible', hold: 'interruptible' }));
-  assert.equal((await loadState(file))?.hold, 'interruptible');
+test('A FILE STILL CARRYING A LEGACY hold LOADS CLEANLY, and drops the key (D-126)', async () => {
+  // The single most operationally important test in the pin's retirement. The live daemon's
+  // ~/.onair/state.json on Rocket's Mac contains `"hold": null` right now, and older files
+  // carry a real row id there. A loader that quarantined an unknown key - or a shape check
+  // tightened alongside this change - would boot the supervised daemon at `unknown` and put
+  // a wrong light on the wall, on the restart that ships the fix.
+  for (const legacy of [null, 'interruptible']) {
+    const file = await tmpStateFile();
+    await saveState(file, { ...persisted({ state: 'interruptible' }), hold: legacy } as unknown as PersistedState);
+    assert.match(await readFile(file, 'utf8'), /"hold"/, 'the fixture really has the key on disk');
+    const loaded = await loadState(file);
+    assert.equal(loaded?.state, 'interruptible', 'the state it recorded is the state it loads');
+    assert.equal(loaded?.message, null, 'and it is NOT quarantined');
+    assert.equal('hold' in (loaded ?? {}), false, 'the key is dropped at the boundary, not carried');
+  }
 });
 
 // ------------------------------------------------- the one-time v1 migration
@@ -65,7 +75,7 @@ test('a v1 file saying level:"dnd" loads as on-air, not as unknown', async () =>
   // and resolving it to NO DATA would flip the live panel to the fault appearance on the
   // upgrade restart. Both are busy, so the meaning is preserved exactly.
   await writeFile(file.replace('/nested/', '/'), '', 'utf8').catch(() => {});
-  await saveState(file, { intended: 'on', confirmed: 'unknown', level: 'dnd', source: 'webui', hold: null,
+  await saveState(file, { intended: 'on', confirmed: 'unknown', level: 'dnd', source: 'webui',
     updatedAt: '2026-08-23T19:17:20.304Z', message: null } as unknown as PersistedState);
   const lines: string[] = [];
   const loaded = await loadState(file, (l) => lines.push(l));
@@ -78,17 +88,10 @@ test('a v1 file saying level:"dnd" loads as on-air, not as unknown', async () =>
 test('the other two v1 levels map straight across', async () => {
   for (const [level, expected] of [['interruptible', 'interruptible'], ['available', 'available']] as const) {
     const file = await tmpStateFile();
-    await saveState(file, { intended: 'off', confirmed: 'unknown', level, source: 'x', hold: null,
+    await saveState(file, { intended: 'off', confirmed: 'unknown', level, source: 'x',
       updatedAt: '2026-08-23T19:17:20.304Z', message: null } as unknown as PersistedState);
     assert.equal((await loadState(file))?.state, expected);
   }
-});
-
-test('a v1 hold is migrated with the same map', async () => {
-  const file = await tmpStateFile();
-  await saveState(file, { intended: 'on', confirmed: 'unknown', level: 'dnd', hold: 'dnd', source: 'x',
-    updatedAt: '2026-08-23T19:17:20.304Z', message: null } as unknown as PersistedState);
-  assert.equal((await loadState(file))?.hold, 'on-air');
 });
 
 test('a file older than `level` (intended only) still loads, on the busy side', async () => {
@@ -101,7 +104,7 @@ test('a file older than `level` (intended only) still loads, on the busy side', 
 test('a v2 file wins over any legacy field beside it', async () => {
   const file = await tmpStateFile();
   await saveState(file, { state: 'recording', level: 'available', intended: 'off', confirmed: 'unknown',
-    source: 'x', hold: null, updatedAt: '2026-08-24T00:00:00Z', message: null } as unknown as PersistedState);
+    source: 'x', updatedAt: '2026-08-24T00:00:00Z', message: null } as unknown as PersistedState);
   assert.equal((await loadState(file))?.state, 'recording');
 });
 
@@ -151,4 +154,5 @@ test('what lands on disk carries state, intended and tableVersion', async () => 
   assert.equal(raw.intended, 'on');
   assert.equal(raw.tableVersion, 1);
   assert.equal(raw.confirmed, UNKNOWN_ID);
+  assert.equal('hold' in raw, false, 'and never a retired field, not even as a null (D-126)');
 });
