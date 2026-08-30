@@ -4489,3 +4489,175 @@ else (state, light control, API) lives on the receiver.
   Companion host keeps running 0.2.0 and keeps sending `?hold=1|0` from its PIN/UNPIN buttons.
   That surviving external sender is exactly why the server ignores a stray `hold` instead of
   rejecting it.
+
+- **D-127 (2026-08-30)** **The gate's flakes are fixed by waiting for the property, not by
+  widening the window.** Two server tests asserted "the timer keeps firing" as a fixed
+  `sleep` followed by a count - `sleep(70)` then `>= 3` on a 20ms hub, and `sleep(200)` then
+  `>= 3` on a 25ms re-assert. Both encode a property as a race against the scheduler, and the
+  scheduler wins often enough to matter: measured on rocket-studio-m1 at **load average 164**,
+  from OBS, OBSBOT Center, Dante Virtual Soundcard and X32-Edit - Rocket's ordinary studio
+  setup, not an agent workload - `sse.test.ts` failed one run in five, and two consecutive
+  `npm run verify` runs failed on a different one of the two tests each time.
+
+  That is worse than an annoyance because this project has **no CI by design**, so `verify` is
+  the whole discipline. A gate that goes red for reasons unrelated to the change trains you to
+  re-run instead of read, and the run where it bit was the one verifying a system-wide contract
+  change - exactly when a spurious red is most expensive, and when "unrelated flake" and "I
+  just broke the suite" look identical at a glance.
+
+  `server/test/wait-for.ts` polls to a generous deadline. **The deadline is not a timing
+  assertion**; it is the point at which "not yet" becomes "never", and tightening it to
+  something that looks like the expected duration puts the margin straight back. Both
+  alternatives were rejected on the ticket and stay rejected: raising the sleep trades
+  flakiness for a slower suite and only moves a threshold that is still fixed against a load
+  that is still unbounded, and lowering the assertion to `>= 2` weakens the test to fit the
+  flake when two events do not demonstrate "keeps firing".
+
+  **Proven by mutation rather than by assertion**, which is the part worth keeping: a heartbeat
+  stubbed to deliver one beat and stop still fails (`got 2`), and a supervisor that refreshes
+  `lastAssertAt` on `read()` too - the exact regression that test's own comment warns about -
+  still fails (`got 0`). Then 20 consecutive runs of the 326-test server suite, all green,
+  while load climbed 150 to 217.
+
+  **One sleep stays, on purpose.** `sse.test.ts` asserts that nothing further is written after
+  `closeAll`. That is an ABSENCE, and an absence cannot be polled for; a slow machine only
+  makes it pass more easily, which is the safe direction. The rule this establishes is
+  narrower than "no sleeps in tests": **do not sleep and then assert that something HAS
+  happened.** Sleeping and asserting that something has NOT happened is sound.
+
+  **The population is bigger than the two.** A sweep of `server/test/` found roughly ten more
+  sites with the same shape - `sleep(40)` then `assert(sets.includes(...))` and similar,
+  mostly in `supervise.test.ts`. None fired in 20 runs at load 217, and none is in #89's
+  scope, so they are filed rather than swept up here. Widening a fix past its ticket is how a
+  test suite gets rewritten by accident.
+
+- **D-128 (2026-08-30)** **One SSE hub serves two audiences, so `broadcast` carries no payload
+  at all.** `SseHub` fed both the gated `/events` and the unauthenticated `/public/events`.
+  `attach` took a per-connection snapshot function and was always right; `broadcast` took one
+  body and wrote it to everyone, and the body it was given was the gated one. Verified on the
+  live daemon before the fix, on an unauthenticated stream from the LAN:
+
+  ```
+  connect: {"state":"available","label":"AVAILABLE","color":...,"bgcolor":...,"busy":false,...}
+  change : {"state":"available","confirmed":"available","source":"human:anonymous",
+            "updatedAt":"2026-08-30T22:48:20.602Z","message":null,"busy":false,
+            "intended":"off","ageSeconds":0,"tableVersion":11}
+  ```
+
+  Two faults, and the second is the one that mattered to a person. **Disclosure:** `source`,
+  `confirmed`, `updatedAt` and `intended` reached any LAN client, which is the opposite of what
+  `docs/api-contract.md` section 8 says in as many words. D-27 and D-35 accepted disclosing
+  *presence*; they did not accept disclosing who wrote it and when. **Presentation:** the change
+  event has no `label`, `color` or `bgcolor`, so `/display` fell back to the raw state id in
+  the reserved row's colours and showed **"ON-AIR" in magenta on near-black for up to 15
+  seconds after every state change**, until the heartbeat repainted from `snapshot()`. On the
+  renderer whose entire job is to be trustworthy at a glance.
+
+  The fix is not "pass the right body". `broadcast()` now takes **nothing** and renders each
+  client from the snapshot closure it attached with, which is the mechanism the heartbeat has
+  always used. There is no longer a body for a caller to get wrong, so the two audiences cannot
+  drift apart again - and there were three call sites passing two different shapes
+  (`statusBody(deps)` in `server.ts`, `store.status()` in `app.ts`), which is how one of them
+  was wrong without anyone noticing.
+
+  **Why no test caught it:** the existing coverage read only the FIRST event on the stream,
+  which is the per-connection snapshot and was correct. The new test asserts the exact key set
+  of a CHANGE event rather than a forbidden list, because a forbidden list only catches the
+  leaks somebody thought of and this was four nobody had. It is red against the pre-fix source.
+
+  This was **pre-existing**, found while verifying the contract against the code during D-126.
+  The pin work only deleted a redundant `hub.broadcast` standing next to it.
+
+- **D-129 (2026-08-30)** **The supervisor logs edges, because the driver already does.**
+  `[supervisor] device state agrees but the panel is not repainting` fired unconditionally
+  inside a tick scheduled at `pollMs`, 5000 by default - so a frozen panel wrote the same
+  unstamped, unattributed string 720 times an hour. That is the census D-109 took of the driver
+  (1133 lines, 1127 of them two repeated strings) reappearing in a second component; D-109
+  fixed the driver and left this line alone.
+
+  One stamped line naming the host on the way in, one on the way out carrying how long the
+  glass was still and how many ticks reported it, in `esphome-driver.ts`'s `BACK after 3s and
+  45 failed calls` shape. Steady-state repeats are **dropped, not rate-limited** - D-109's
+  argument is unchanged: the second identical line says nothing the first did not, and the
+  recovery line's count says it better. A flapping panel still logs per transition, because
+  alternating results are a different fault from a dead one and must not read like one.
+
+  **A `null` reading is not recovery.** `repainted()` returns `true`, `false` or `null`, and
+  `null` is "cannot tell yet". Only `true` clears the edge. Treating no evidence as recovery
+  would log a panel back to a health it never reached, which is a lie in the one place a person
+  goes to find out what happened. There is a test for it.
+
+  `stamp()` and `humanMs()` move to `server/src/log-format.ts`. Two copies of `humanMs` would
+  have drifted, and the comment explaining why only edge lines are stamped - rather than the
+  sink, which is the better log and a much larger change - belongs with the functions.
+
+- **D-130 (2026-08-30)** **A write always waits for the light. It just stops waiting on hosts
+  already known to be dead - and the version nudge is not the write's business.** Rocket's call
+  on #68 was candidates 1 and 2, with candidate 3 (answering before the light is attempted)
+  dropped permanently so that the simple story survives.
+
+  **The defect was never the latency on its own.** Every write and every supervisor tick share
+  one queue (`app.ts`); against an unplugged panel a write's own device work measured 6.4s;
+  and both the supervisor (5s) and the detector (~5s, D-90) arrive faster than that. Arrivals
+  outpaced drains and the queue grew for as long as the panel was away.
+
+  **The nudge comes off the write path.** It was 2 of the 6.4 seconds, for something its own
+  docstring calls advisory and that the device re-pulls on its own interval regardless. It
+  still reaches the device on the two paths that own it: `applyConfig` nudges the moment the
+  table changes, and the supervisor re-nudges on its tick when that one did not land. A table
+  edit is delayed by at worst one poll, never lost. The supervisor nudges on **every** tick and
+  lets the driver dedupe, and that coupling is load-bearing: `EsphomeTextDriver` returns without
+  touching a socket when the version has not moved, and deliberately does **not** cache a
+  version it failed to send. A supervisor that deduped on its own side would send a failed
+  nudge exactly once and leave the device on an old table with the server believing it had been
+  told. It has its own test now, because the next reader will otherwise "optimise" it.
+
+  **A failing host is left alone for 15 seconds.** `DEFAULT_REPROBE_MS = 15_000` is three
+  supervisor polls at the 5s default, which is what turns "every tick pays the ladder" into
+  "one tick in three does". Measured against a black-hole host (accepts the connection, never
+  answers) with the shipped constants:
+
+  ```
+  before   set() -> 4411ms, 4404ms, 4410ms, 4403ms, 4406ms
+  after    set() -> 4402ms,    0ms,    0ms,    0ms,    0ms
+  ```
+
+  **The first call still pays in full, and that is not hidden.** Somebody has to discover the
+  host is dead. In service that discovering call is a supervisor tick, not a write, so the
+  ticket's "a write returns in under 1s" holds for every write that arrives after the panel has
+  already been noticed missing - which is all of them in the case the ticket describes. The
+  guard is on the whole `attempt`, not on each retry inside it: `retries` exists to survive one
+  dropped request, and a breaker that ate the retry would trade this defect for a worse one, a
+  healthy panel written off for a single lost packet.
+
+  **The cost is named rather than buried:** a panel that comes back is not noticed here for up
+  to 15s. That is affordable only because the panel does not depend on this path to recover -
+  it polls the server for state itself and re-pulls the table on its own interval. The window
+  delays the SERVER learning the panel is back; it does not delay the panel.
+
+  **Skips are counted and never logged.** A line per skipped call is D-109's flood wearing the
+  opposite label. The count appears once, on the recovery line: `BACK after 1s and 16 failed
+  calls (340 skipped while it was down)`.
+
+  **The test asserts queue depth, not wall time**, and `App` grows a `writeQueueDepth()` for it.
+  Wall time is the thing a machine at load average 200 ruins, and the queue is the actual
+  defect. With the skip window disabled the same test reaches **depth 8**; with it, 2. The
+  writes are fired on a timer rather than awaited one at a time, because awaiting each would
+  make the queue trivially shallow and the test would pass against the bug.
+
+  **The live log says what this costs in practice, and it is worth Rocket's eye.** The daemon's
+  own history on 10.42.14.239 is dominated by short blips - `UNREACHABLE ... BACK after 5s and
+  1 failed call`, several times a day, with one 8m 37s outage in the record. A flat 15s window
+  turns those 5s blips into roughly 15s before the server notices the panel is back, so
+  `confirmed` reads `unknown` for three times as long on the most common failure this device
+  actually has. Nothing false is reported and the light itself is unaffected - the panel holds
+  its own state and polls the server - but the "not confirmed" mark in the Companion module and
+  the admin console will linger longer than it used to. A backoff (probe soon after the first
+  failure, back off as the outage persists) would get both, and was NOT built: it is a second
+  constant and a second piece of state for a cosmetic gain, and the flat window is the thing
+  the ticket asked for. If the lingering `unknown` turns out to annoy, that is the change.
+
+  **Two existing driver tests take `reprobeMs: 0`**, which disables the window. Both walk a host
+  down and back on consecutive calls and are about the failure log's edges rather than about
+  this; with the window on they would be measuring the breaker instead. The window's own
+  recovery behaviour is covered in `server/test/write-latency.test.ts`.
