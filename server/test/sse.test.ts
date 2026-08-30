@@ -3,6 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { test } from 'node:test';
 import type { ServerResponse } from 'node:http';
 import { createSseHub } from '../src/sse.js';
+import { waitFor } from './wait-for.js';
 
 class FakeRes {
   chunks: string[] = [];
@@ -71,12 +72,17 @@ test('heartbeat sends fresh status events until detach', async () => {
   const res = new FakeRes();
   let n = 0;
   hub.attach(asRes(res), () => ({ n: ++n }));
-  await sleep(70);
-  const statusEvents = res.chunks.filter((c) => c.startsWith('event: status'));
-  assert.ok(statusEvents.length >= 3); // snapshot + at least 2 heartbeats
+  const status = (): string[] => res.chunks.filter((c) => c.startsWith('event: status'));
+  // snapshot + at least 2 heartbeats. Waited for rather than slept for (#89): three events in
+  // a 70ms window was a 1.17x margin against an unbounded load, and it lost 1 run in 5.
+  await waitFor(() => status().length >= 3, () => `expected repeated heartbeats, got ${status().length}`);
+  const statusEvents = status();
   assert.notEqual(statusEvents.at(-1), statusEvents[0]); // snapshot re-evaluated per beat
   hub.closeAll();
   const count = res.chunks.length;
+  // This sleep STAYS. "nothing further is written" is an absence, and an absence cannot be
+  // polled for. A slow machine only makes it pass more easily, which is the safe direction:
+  // the failure it catches is a timer that kept firing, which no amount of load can fake.
   await sleep(50);
   assert.equal(res.chunks.length, count); // timer stopped
 });

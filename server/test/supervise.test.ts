@@ -4,6 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { LightDriver } from '../src/driver.js';
 import { startSupervisor } from '../src/supervise.js';
 import { defaultState, StateStore, StateTable, UNKNOWN_ID, type OnAirState } from '../src/state.js';
+import { waitFor } from './wait-for.js';
 
 class FakeLight implements LightDriver {
   sets: string[] = [];
@@ -64,11 +65,11 @@ function rig(over: Record<string, unknown> = {}, state?: OnAirState): Rig {
 
 test('supervisor: the heartbeat keeps firing - lastAssertAt advances only on a successful set', async () => {
   const r = rig();
-  await sleep(200);
+  // reassertMs is 25ms. Advancing the clock on read() too would leave this at exactly 1
+  // forever, and the panel would go STALE in the healthy case. Waited for rather than slept
+  // for (#89): "the timer keeps firing" is a property, not a count inside a fixed window.
+  await waitFor(() => r.light.sets.length >= 3, () => `expected repeated heartbeats, got ${r.light.sets.length}`);
   r.stop();
-  // reassertMs is 25ms over a 200ms window. Advancing the clock on read() too would
-  // leave this at exactly 1 forever, and the panel would go STALE in the healthy case.
-  assert.equal(r.light.sets.length >= 3, true, `expected repeated heartbeats, got ${r.light.sets.length}`);
   assert.deepEqual([...new Set(r.light.sets)], ['on-air']);
 });
 
