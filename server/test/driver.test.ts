@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { NoopDriver, type LightDriver } from '../src/driver.js';
-import { DEFAULT_FROZEN_AFTER_MS, DriverConfigError, EsphomeTextDriver } from '../src/esphome-driver.js';
+import { DEFAULT_FROZEN_AFTER_MS, DriverConfigError, EsphomeTextDriver, NIGHT_DARK } from '../src/esphome-driver.js';
 import { UNKNOWN_ID } from '../src/state.js';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -33,6 +33,10 @@ interface FakeDevice {
   versionPosts: string[];
   /** When true the device has no TableVersion entity, i.e. firmware older than #43. */
   noVersionEntity: boolean;
+  /** What the `Night` text_sensor says. `null` = no such entity, i.e. firmware before #78. */
+  night: string | null;
+  /** Every GET of the Night sensor, so a skipped or latched read can be counted. */
+  nightGets: number;
   gets: string[];
   auth: string[];
   value: string;
@@ -49,7 +53,8 @@ interface FakeDevice {
 
 async function fakeDevice(): Promise<FakeDevice> {
   const d: Partial<FakeDevice> = {
-    posts: [], versionPosts: [], noVersionEntity: false, gets: [], auth: [], value: 'on-air', minLength: 1, maxLength: 64,
+    posts: [], versionPosts: [], noVersionEntity: false, night: 'lit (daytime)', nightGets: 0,
+    gets: [], auth: [], value: 'on-air', minLength: 1, maxLength: 64,
     swallowWrites: false, applyDelayMs: 0, status: null, frames: 0,
   };
   const server: Server = createServer((req, res) => {
@@ -95,6 +100,16 @@ async function fakeDevice(): Promise<FakeDevice> {
           min_length: d.minLength, max_length: d.maxLength, pattern: '',
         }),
       );
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/text_sensor/Night') {
+      d.nightGets!++;
+      if (d.night === null) {
+        res.writeHead(404).end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ id: 'text_sensor/Night', value: d.night, state: d.night }));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/sensor/Frames') {
@@ -442,4 +457,76 @@ test('the boot check is the first contact, so a dead host at boot is an edge lik
   assert.equal(lines.length, 1, JSON.stringify(lines));
   assert.match(lines[0]!, /UNREACHABLE/);
   assert.ok(lines[0]!.includes(host));
+});
+
+// ================================================== #82: can anyone SEE the pixels?
+
+test('glassDark reads the panel\'s own Night verdict', async (t) => {
+  const d = await fakeDevice();
+  t.after(() => d.close());
+  const driver = driverFor(d);
+  d.night = 'dark';
+  assert.equal(await driver.glassDark(), true);
+  assert.equal(driver.nightReason(), 'dark');
+  for (const lit of ['lit (daytime)', 'lit (schedule off)', 'lit (no time yet)', 'lit (woken by a state change)', 'lit (holding off - busy or no data)']) {
+    d.night = lit;
+    assert.equal(await driver.glassDark(), false, lit);
+    assert.equal(driver.nightReason(), lit);
+  }
+});
+
+test('firmware with no Night sensor is written off after one 404, and is NOT an outage', async (t) => {
+  const d = await fakeDevice();
+  t.after(() => d.close());
+  d.night = null; // firmware older than #78
+  const lines: string[] = [];
+  const driver = driverFor(d, { retries: 0, log: (l: string) => lines.push(l) });
+
+  assert.equal(await driver.glassDark(), null);
+  const after = d.nightGets;
+  for (let i = 0; i < 5; i++) assert.equal(await driver.glassDark(), null);
+  assert.equal(d.nightGets, after, 'a missing entity is asked for once, not once per tick');
+
+  // THE TRAP. getJson() routes a non-ok response into attempt(), which retries it and then
+  // calls unreachable() - so a 404 from old firmware would have logged a permanent
+  // UNREACHABLE edge about a panel that is perfectly healthy, and the driver would have
+  // stopped talking to it under #68's skip window.
+  assert.equal(lines.filter((l) => l.includes('UNREACHABLE')).length, 0, lines.join('\n'));
+  assert.equal(lines.filter((l) => l.includes('predates the night schedule')).length, 1, lines.join('\n'));
+
+  // And it must not have poisoned the rest of the driver.
+  assert.equal(await driver.set('available'), 'available');
+});
+
+test('glassDark reports null rather than "lit" when it cannot tell', async (t) => {
+  const d = await fakeDevice();
+  const driver = driverFor(d, { retries: 0, timeoutMs: 300 });
+  await d.close(); // nothing is listening
+  // NOT false. Guessing "lit" is the false confirmation this whole ticket exists to stop:
+  // it would put the supervisor straight back into the branch that claims pixels.
+  assert.equal(await driver.glassDark(), null);
+});
+
+test('the NIGHT_DARK constant matches what the firmware can actually emit', () => {
+  // A REGRESSION GUARD ACROSS TWO COMPONENTS, the same shape as the freeze-threshold guard
+  // above and here for the same reason: the server decides "the glass is off" by comparing
+  // a string to a string a YAML lambda returns. Renaming it there and not here does not
+  // fail a build - it silently reports every dark panel as lit, which is the bug this
+  // ticket closes, restored. D-106 is the record of what that costs.
+  const core = readFileSync(join(REPO, 'firmware', 'configs', 'onair-core.yaml'), 'utf8');
+  const block = /name: "Night"[\s\S]*?lambda: \|-\n([\s\S]*?)\n  - platform:/.exec(core);
+  assert.ok(block, 'the Night text_sensor moved or was renamed - re-check this coupling');
+  const returns = [...block[1]!.matchAll(/return \{"([^"]*)"\}/g)].map((m) => m[1]!);
+  assert.ok(returns.length >= 2, `expected several verdicts, got ${JSON.stringify(returns)}`);
+  assert.ok(
+    returns.includes(NIGHT_DARK),
+    `NIGHT_DARK is "${NIGHT_DARK}" and the firmware can never emit it: ${JSON.stringify(returns)}`,
+  );
+  // Exactly one verdict means dark. If the firmware ever grows a second, this server reads
+  // it as lit and the panel is confirmed while black.
+  assert.equal(
+    returns.filter((r) => !r.startsWith('lit')).length,
+    1,
+    `exactly one Night verdict may mean dark, got ${JSON.stringify(returns)}`,
+  );
 });

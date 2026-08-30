@@ -76,13 +76,54 @@ One object, persisted atomically, restored on restart.
 | `state` | string | The row `id` currently asserted. **A reference to a row, not a copy of one.** |
 | `busy` | boolean | `table[state].busy`. Carried because it is **semantics, not presentation** - see the rule below. |
 | `intended` | `"on"` \| `"off"` | **Derived, read-only.** `busy ? "on" : "off"`. Writing it has no effect. Exists so a client that has never heard of a row invented tomorrow still does something correct. |
-| `confirmed` | string \| `"unknown"` | The row `id` the light acknowledged, read back from the device itself. `unknown` when the light is unreachable or the panel is not repainting. **Never guessed.** |
+| `confirmed` | string \| `"unknown"` | The row `id` the light acknowledged, read back from the device itself. `unknown` when the light is unreachable, when the panel is not repainting, **or when the panel's glass is deliberately dark**. **Never guessed.** |
+| `confirmedReason` | `"asleep"` \| `"not-repainting"` \| `"unreachable"` \| absent | **Why** `confirmed` is `unknown`, when the server knows. Absent whenever it does not - including when `confirmed` is a real row. See the rule below: **absent is not reassurance.** |
 | `source` | string | Who wrote it. `kind:label` - see §4. |
 | `updatedAt` | ISO 8601 | **Provenance.** Time of the last state write, refreshed by idempotent repeats. |
 | `ageSeconds` | integer | **Provenance.** How long ago that write happened, computed at read time. |
 | `tableVersion` | integer | The table version in force. Bumped on every config save. |
 | `stateResolvedFrom` | string \| absent | Present only when the live row was deleted and the state fell back to `unknown`. Names the dead `id`. |
 | `message` | string \| `null` | Optional display message. Independent of state writes - a state write never touches it. |
+
+> **A DARK PANEL IS NOT A FAULT, AND `confirmed` SAYS SO (#82/#83, 2026-08-30).**
+>
+> The panel can be scheduled to go black overnight. While it is dark, `confirmed` reads
+> `unknown` and `confirmedReason` reads `asleep`.
+>
+> `unknown` is correct there and is not a hedge. `confirmed` means *the light acknowledged
+> this, read back from the device*, and a panel showing nothing has acknowledged nothing.
+> The old definition - unreachable **or** not repainting - was insufficient, because **a dark
+> panel is still repainting**: the firmware's display loop keeps running with the backlight
+> off, so the frame counter the server infers repainting from keeps advancing. Without this,
+> the server reported a confirmation of pixels nobody could see.
+>
+> **What a client must do with it:**
+>
+> - **Do not escalate on `asleep`.** It is a healthy panel doing what it was told. A client
+>   that alarms on it alarms for eight hours every night, and an alarm that fires nightly is
+>   one the operator learns to ignore - which is worse than not having it.
+> - **Do escalate on `not-repainting` and `unreachable`**, exactly as before.
+> - **Treat an ABSENT `confirmedReason` as unexplained, never as fine.** The field is omitted
+>   whenever the server cannot name a reason, including in the gap between a write and the
+>   supervisor's next poll. Reading absence as reassurance is a false OK, which is the same
+>   family of failure as a false OFF.
+> - **Do not branch on `confirmed`'s value to detect this.** `unknown` is also a real row a
+>   light can legitimately be displaying. `confirmedReason` is the only field that
+>   distinguishes them, and it is the reason it exists.
+>
+> **The SETTING is not on the wire; the CONSEQUENCE is.** The night schedule itself - the
+> times, the enable switch, the brightness - is device-local and configured on the panel's own
+> page, following the precedent set for the other panel-local settings. Nothing about it
+> appears in this API. But `confirmed` is already contract, so what sleeping DOES to
+> `confirmed` is contract too. That distinction is the whole design: a client never learns
+> when the panel sleeps, only that it currently is.
+>
+> **The `Frames` coupling, stated because it is load-bearing and was undocumented.** The
+> server decides "is the panel repainting" by polling a counter the firmware increments on
+> every display pass. That is an inference, not a report, and it has two consequences a future
+> change can break silently: firmware that stops incrementing that counter makes every healthy
+> panel read as frozen, and firmware that increments it while showing nothing makes a blank
+> panel read as confirmed - which is exactly the bug this section was written for.
 
 > **PRESENTATION TRAVELS WITH THE PROFILE, NOT WITH THE STATE.**
 >

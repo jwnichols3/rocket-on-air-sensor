@@ -375,6 +375,75 @@ test('an OLD WRITE on a LIVE connection is drawn fully lit - the D-91 headline')
   check(/LAST WRITE 7200S AGO/.test(painted.eyebrow), `eyebrow reads: "${painted.eyebrow}"`);
 }
 
+test('a panel DARK ON SCHEDULE does not cry wolf (#82)');
+{
+  // Eight hours a night, every night, `confirmed` reads `unknown` by design. Before #82's
+  // wire field this console appended "light says unknown" to the tally and painted the
+  // Confirmed row yellow through all of it - about a panel that is working perfectly. A
+  // console that cries wolf nightly teaches you to ignore it.
+  const asleepPaint = await page.evaluate(() => {
+    lastContactAt = Date.now();
+    liveStatus = { state: 'on-air', confirmed: 'unknown', confirmedReason: 'asleep',
+                   source: 'human:test', busy: true, intended: 'on', ageSeconds: 5, tableVersion: 1 };
+    renderTally();
+    renderStatus();
+    const marks = [...document.getElementById('tally-marks').children].map((n) => n.textContent);
+    const dds = [...document.querySelectorAll('#status-facts dd')];
+    const confirmedDd = dds.find((d) => /unknown/.test(d.textContent));
+    return { marks, cls: confirmedDd ? confirmedDd.className : '(row missing)',
+             text: confirmedDd ? confirmedDd.textContent : '' };
+  });
+
+  check(!asleepPaint.marks.some((m) => /light says unknown/.test(m)),
+        `the tally still says "light says unknown": ${JSON.stringify(asleepPaint.marks)}`);
+  check(asleepPaint.marks.some((m) => /dark on schedule/.test(m)),
+        `the tally does not explain why: ${JSON.stringify(asleepPaint.marks)}`);
+  check(!/warn/.test(asleepPaint.cls), `the Confirmed row went yellow on a healthy night: "${asleepPaint.cls}"`);
+  check(/dark on schedule/.test(asleepPaint.text), `the Confirmed row reads: "${asleepPaint.text}"`);
+}
+
+test('but a panel that is genuinely not answering STILL cries wolf (#82)');
+{
+  // The other half, and the one that matters more. Making the asleep case quiet must not
+  // have made the broken case quiet with it - that would be a false OK, which is the same
+  // family of failure as a false OFF.
+  const brokenPaint = await page.evaluate(() => {
+    lastContactAt = Date.now();
+    liveStatus = { state: 'on-air', confirmed: 'unknown', confirmedReason: 'unreachable',
+                   source: 'human:test', busy: true, intended: 'on', ageSeconds: 5, tableVersion: 1 };
+    renderTally();
+    renderStatus();
+    const dds = [...document.querySelectorAll('#status-facts dd')];
+    const confirmedDd = dds.find((d) => /unknown/.test(d.textContent));
+    return { cls: confirmedDd ? confirmedDd.className : '(row missing)',
+             text: confirmedDd ? confirmedDd.textContent : '',
+             marks: [...document.getElementById('tally-marks').children].map((n) => n.textContent) };
+  });
+
+  check(/warn/.test(brokenPaint.cls), `a dead panel did NOT warn: "${brokenPaint.cls}"`);
+  check(/not answering/.test(brokenPaint.text), `it does not say why: "${brokenPaint.text}"`);
+  check(brokenPaint.marks.some((m) => /no answer from the panel/.test(m)),
+        `the tally does not say it: ${JSON.stringify(brokenPaint.marks)}`);
+}
+
+test('a plain unknown with NO reason still warns - absence is not reassurance (#82)');
+{
+  // `confirmedReason` is absent whenever the server cannot name a reason, including in the
+  // gap between a write and the supervisor's next tick. Treating absent as "fine" would put
+  // the cry-wolf fix on the wrong side of the default.
+  const bare = await page.evaluate(() => {
+    lastContactAt = Date.now();
+    liveStatus = { state: 'on-air', confirmed: 'unknown', source: 'human:test',
+                   busy: true, intended: 'on', ageSeconds: 5, tableVersion: 1 };
+    renderTally();
+    renderStatus();
+    const dds = [...document.querySelectorAll('#status-facts dd')];
+    const confirmedDd = dds.find((d) => /unknown/.test(d.textContent));
+    return confirmedDd ? confirmedDd.className : '(row missing)';
+  });
+  check(/warn/.test(bare), `an unexplained unknown did not warn: "${bare}"`);
+}
+
 test('a CALM state on a LOST connection does NOT wear its own colour');
 {
   // Drive the server to a calm row, then age the evidence past the threshold from the

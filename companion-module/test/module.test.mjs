@@ -665,6 +665,69 @@ test('#74 a write publishes from the RESPONSE, with no stream event delivered', 
 	await fake.close()
 })
 
+test('#82 a panel dark on schedule is NOT "not confirming"', async () => {
+	// Eight hours a night, every night, `confirmed` reads unknown by design. A Stream Deck
+	// button lit blue from 23:00 to 07:00 about a panel that is working perfectly is a lamp
+	// you learn to ignore, and a lamp you ignore is worse than no lamp.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	fake.setConfirmed('unknown')
+	fake.setConfirmedReason('asleep')
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	assert.equal(seen.feedbacks.light_not_confirming.callback({}), false, 'the alarm must be dark')
+	assert.equal(seen.feedbacks.panel_asleep.callback({}), true)
+	assert.equal(seen.feedbacks.light_disagrees.callback({}), false)
+	assert.equal(seen.variables.confirmed, 'unknown', 'confirmed itself is unchanged and still honest')
+	assert.equal(seen.variables.confirmed_reason, 'asleep')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#82 an UNEXPLAINED unknown still lights the alarm - absence is not reassurance', async () => {
+	// The half that matters more. `confirmedReason` is absent whenever the server cannot name
+	// one, including between a write and the supervisor's next tick. Reading absent as "fine"
+	// would be a false OK, which is the same family of failure as a false OFF.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	fake.setConfirmed('unknown') // and NO reason
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	assert.equal(seen.feedbacks.light_not_confirming.callback({}), true)
+	assert.equal(seen.feedbacks.panel_asleep.callback({}), false)
+	assert.equal(seen.variables.confirmed_reason, '')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#82 a genuinely unreachable panel still lights the alarm', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	fake.setConfirmed('unknown')
+	fake.setConfirmedReason('unreachable')
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	assert.equal(seen.feedbacks.light_not_confirming.callback({}), true)
+	assert.equal(seen.feedbacks.panel_asleep.callback({}), false)
+
+	await inst.destroy()
+	await fake.close()
+})
+
 test('#74 the four "something is off" feedbacks have four distinct default styles', async () => {
 	const OnAir = await loadInstanceClass()
 	const fake = startFakeServer()
@@ -674,13 +737,15 @@ test('#74 the four "something is off" feedbacks have four distinct default style
 	await inst.init(config)
 	await settle()
 
-	const family = ['connection_lost', 'no_data', 'light_not_confirming', 'light_disagrees']
+	// FIVE since #82 - `panel_asleep` joined the family, and it must not be mistaken at a
+	// glance for any of the four that mean something is wrong.
+	const family = ['connection_lost', 'no_data', 'light_not_confirming', 'light_disagrees', 'panel_asleep']
 	const styles = family.map((id) => {
 		const s = seen.feedbacks[id].defaultStyle
 		assert.ok(s, `${id} needs a default style`)
 		return `${s.color}/${s.bgcolor}`
 	})
-	assert.equal(new Set(styles).size, family.length, `four faults need four looks, got ${styles.join(' ')}`)
+	assert.equal(new Set(styles).size, family.length, `five states need five looks, got ${styles.join(' ')}`)
 
 	await inst.destroy()
 	await fake.close()

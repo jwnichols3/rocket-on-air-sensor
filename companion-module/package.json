@@ -1,6 +1,6 @@
 {
   "name": "companion-module-rocket-onair",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Bitfocus Companion module, sideloaded, with presets generated from the state table. Built by #44, rebuilt for the v2 client contract by #72-#76.",
   "type": "module",

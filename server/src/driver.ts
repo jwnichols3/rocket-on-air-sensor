@@ -14,6 +14,16 @@ export interface LightDriver {
   /** Has the panel repainted since the last call? `null` = the driver cannot tell. */
   repainted?(): Promise<boolean | null>;
   /**
+   * Is the panel's glass deliberately dark? `null` = the driver cannot tell - no such
+   * entity, or the host is not answering.
+   *
+   * SEPARATE FROM `repainted()` on purpose. "Did the pixels change" and "can anyone see
+   * them" are different questions with different answers, and folding them into one boolean
+   * is exactly what let a panel dark on schedule report itself as confirmed (#82): the
+   * display lambda keeps running and `Frames` keeps advancing with the backlight off.
+   */
+  glassDark?(): Promise<boolean | null>;
+  /**
    * Tell the device which table version is current, so a device holding an older one
    * re-pulls at once instead of waiting out its 300s interval (D-42's version nudge).
    *

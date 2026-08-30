@@ -319,6 +319,42 @@ function lostFor() {
   return Math.floor(sinceContact() / 1000);
 }
 
+/**
+ * IS THE PANEL DARK ON PURPOSE? (#82)
+ *
+ * The panel goes black on a schedule, so `confirmed` reads `unknown` for eight hours every
+ * night by design. Left alone, this console would append "light says unknown" to the tally
+ * and paint the Confirmed row yellow from 23:00 to 07:00 - every night, about a panel that
+ * is working perfectly. A console that cries wolf nightly teaches you to ignore it, and
+ * then it is worse than not having it at all.
+ *
+ * `confirmedReason` is absent whenever the server cannot name a reason, so this is false by
+ * default: nothing here turns a genuine unknown into a reassurance.
+ */
+function asleep() {
+  return !!liveStatus && liveStatus.confirmedReason === 'asleep';
+}
+
+/** The tally mark, in words rather than a bare row id. */
+function confirmedMark() {
+  if (asleep()) return 'panel dark on schedule';
+  if (liveStatus.confirmedReason === 'not-repainting') return 'panel not repainting';
+  if (liveStatus.confirmedReason === 'unreachable') return 'no answer from the panel';
+  return 'light says ' + liveStatus.confirmed;
+}
+
+/** The Confirmed row's value. Says WHY when the server knows, so `unknown` is readable. */
+function confirmedFact() {
+  if (liveStatus.confirmed !== 'unknown' || !liveStatus.confirmedReason) return liveStatus.confirmed;
+  return 'unknown - ' + confirmedReasonText();
+}
+
+function confirmedReasonText() {
+  if (liveStatus.confirmedReason === 'asleep') return 'the glass is dark on schedule';
+  if (liveStatus.confirmedReason === 'not-repainting') return 'the panel is not repainting';
+  return 'the panel is not answering';
+}
+
 // ---------------------------------------------------------------- the command surface
 
 function renderTally() {
@@ -342,10 +378,11 @@ function renderTally() {
   $('tally-word').textContent = row ? row.label : liveStatus.state.toUpperCase();
 
   var marks = $('tally-marks');
+
   clear(marks);
   marks.appendChild(el('span', 'mark', 'light asked for ' + liveStatus.intended));
   if (liveStatus.confirmed !== liveStatus.state) {
-    marks.appendChild(el('span', 'mark', 'light says ' + liveStatus.confirmed));
+    marks.appendChild(el('span', 'mark', confirmedMark()));
   }
 
   // The caution band sits BETWEEN the tally and the chips, so the sentence saying the
@@ -451,7 +488,7 @@ function renderStatus() {
   var facts = [
     ['State', liveStatus.state, false],
     ['Busy', liveStatus.busy ? 'yes' : 'no', false],
-    ['Confirmed by the light', liveStatus.confirmed, liveStatus.confirmed !== liveStatus.state],
+    ['Confirmed by the light', confirmedFact(), liveStatus.confirmed !== liveStatus.state && !asleep()],
     ['Written by', liveStatus.source, false],
     ['Last write', liveStatus.ageSeconds + 's ago', false],
     ['Service contact', contactLost() ? lostFor() + 's ago - not refreshing' : 'current', contactLost()],

@@ -27,6 +27,9 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 	// `null` means "the light agrees", which is the ordinary case. A test that wants a
 	// disagreeing or unreachable panel pins it to something else.
 	let confirmedOverride = null
+	// The server omits `confirmedReason` whenever it cannot name one, so `null` here is the
+	// ordinary case and the fixture must NOT emit the key at all when it is null (#82).
+	let confirmedReason = null
 	let writeDelayMs = 0
 	let eventsAvailable = true
 	let source = 'human:seed'
@@ -43,6 +46,7 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 			busy: !!row?.busy,
 			intended: row?.busy ? 'on' : 'off',
 			confirmed: confirmedOverride ?? current,
+			...(confirmedReason === null ? {} : { confirmedReason }),
 			source,
 			updatedAt: new Date(0).toISOString(),
 			ageSeconds: 0,
@@ -162,6 +166,10 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 		/// other row id that is not `state` is the light disagreeing.
 		setConfirmed: (id) => {
 			confirmedOverride = id
+		},
+		/// Why `confirmed` is unknown, when the server knows (#82). `null` omits the field.
+		setConfirmedReason: (reason) => {
+			confirmedReason = reason
 		},
 		setWriteDelay: (ms) => {
 			writeDelayMs = ms

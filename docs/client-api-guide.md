@@ -194,10 +194,18 @@ Two different fields, two different questions:
 
 - `state` - did the server accept my write? Present in the write's own response.
 - `confirmed` - did the **light** acknowledge it, read back from the device? Never guessed.
-  `confirmed` is always a row id. When the device is unreachable or is not repainting it reads
-  `unknown` - which is **also a real row a light can legitimately be displaying**, so this one
-  field cannot tell the two apart. Read `confirmed: "unknown"` as *not confirmed*, never as
-  *the light is showing the unknown row*.
+  `confirmed` is always a row id. When the device is unreachable, is not repainting, or has its
+  glass deliberately dark, it reads `unknown` - which is **also a real row a light can
+  legitimately be displaying**, so this one field cannot tell the two apart. Read
+  `confirmed: "unknown"` as *not confirmed*, never as *the light is showing the unknown row*.
+- `confirmedReason` - **why** `confirmed` is unknown, when the server knows: `asleep`,
+  `not-repainting` or `unreachable`. Absent whenever the server cannot name a reason.
+
+  **`asleep` is not a fault.** The panel can be scheduled to go black overnight, and while it
+  is dark there are simply no pixels to confirm. A client that escalates on `asleep` alarms
+  for eight hours every night, which teaches its operator to ignore it. Escalate on the other
+  two. And treat an **absent** reason as unexplained rather than as fine - reading absence as
+  reassurance is a false OK, which fails the same way a false OFF does.
 
 A write with a valid body **always succeeds** even when the light is dead. The light failure
 surfaces as `confirmed: "unknown"`, not as a status code. If you care about the glass, check

@@ -475,7 +475,16 @@ class OnAirInstance extends InstanceBase {
 		)
 	}
 
-	/// The `confirmed` verdict (#74), as two distinct faults rather than one lamp.
+	/// The `confirmed` verdict (#74), as distinct faults rather than one lamp.
+	///
+	/// FOUR VERDICTS SINCE #82, not three. The panel goes black on a schedule, so `confirmed`
+	/// reads unknown for eight hours every night by design - and a button that lights
+	/// "not confirming" from 23:00 to 07:00 about a panel that is working perfectly is a lamp
+	/// you learn to ignore, which is worse than no lamp at all.
+	///
+	/// `asleep` is read from `confirmedReason`, which the server omits whenever it cannot name
+	/// a reason. So this defaults to `unconfirmed`: nothing here turns an unexplained unknown
+	/// into a reassurance, which would be a false OK - the same family of failure as a false OFF.
 	confirmation() {
 		const s = this.current
 		const v = this.view()
@@ -484,7 +493,9 @@ class OnAirInstance extends InstanceBase {
 		// put a second alarm on the same fact.
 		if (!s || v.connection === 'no data') return 'none'
 		const c = s.confirmed
-		if (c === undefined || c === null || c === '' || c === RESERVED_ID) return 'unconfirmed'
+		if (c === undefined || c === null || c === '' || c === RESERVED_ID) {
+			return s.confirmedReason === 'asleep' ? 'asleep' : 'unconfirmed'
+		}
 		return c === v.state ? 'agrees' : 'disagrees'
 	}
 
@@ -633,6 +644,7 @@ class OnAirInstance extends InstanceBase {
 			{ variableId: 'label', name: 'Current state label' },
 			{ variableId: 'busy', name: 'Busy (yes/no)' },
 			{ variableId: 'confirmed', name: 'Confirmed by the light' },
+			{ variableId: 'confirmed_reason', name: 'Why confirmed is unknown (asleep / not-repainting / unreachable)' },
 			{ variableId: 'source', name: 'Who wrote the state' },
 			// BREAKING: `stale` is gone, not renamed. It was a judgement the server no longer
 			// makes, and a variable that silently resolves to nothing on a stream deck is worse
@@ -657,6 +669,10 @@ class OnAirInstance extends InstanceBase {
 			label: v.label,
 			busy: v.busy ? 'yes' : 'no',
 			confirmed: s?.confirmed ?? '',
+			// Empty when the server named no reason, which is most of the time. A button that
+			// shows `confirmed` alone reads "unknown" all night with no way to tell a healthy
+			// dark panel from a dead one; this is that way (#82).
+			confirmed_reason: s?.confirmedReason ?? '',
 			source: s?.source ?? '',
 			connection: v.connection,
 			seconds_since_contact: Number.isFinite(v.lostFor) ? Math.floor(v.lostFor / 1000) : '',
@@ -841,12 +857,24 @@ class OnAirInstance extends InstanceBase {
 				type: 'boolean',
 				name: 'Light not confirming',
 				description:
-					'True when the server has no evidence from the light: `confirmed` reads unknown. The ' +
-					'panel is unreachable or frozen. This is the server admitting ignorance, not a claim ' +
-					'that the light is wrong.',
+					'True when the server has no evidence from the light: `confirmed` reads unknown and the ' +
+					'panel is unreachable, frozen, or unexplained. This is the server admitting ignorance, ' +
+					'not a claim that the light is wrong. It is FALSE while the panel is dark on its night ' +
+					'schedule - that is healthy, and there is a separate feedback for it.',
 				defaultStyle: { color: white, bgcolor: combineRgb(27, 64, 121) },
 				options: [],
 				callback: () => this.confirmation() === 'unconfirmed',
+			},
+			panel_asleep: {
+				type: 'boolean',
+				name: 'Panel asleep on schedule',
+				description:
+					'True when the panel is deliberately dark on its night schedule. `confirmed` reads ' +
+					'unknown throughout, which is honest - there are no pixels to confirm - but it is NOT ' +
+					'a fault and must not be treated as one.',
+				defaultStyle: { color: combineRgb(120, 120, 130), bgcolor: black },
+				options: [],
+				callback: () => this.confirmation() === 'asleep',
 			},
 			light_disagrees: {
 				type: 'boolean',

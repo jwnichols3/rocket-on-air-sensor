@@ -15,6 +15,8 @@ class FakeLight implements LightDriver {
   /** When false, set() is accepted but does not take: models the silent-drop 200. */
   accepts = true;
   frames: boolean | null | undefined = undefined;
+  /** The `Night` verdict. `null` is "cannot tell", which is the default everywhere else. */
+  night: boolean | null = null;
 
   async set(stateId: string): Promise<string> {
     this.sets.push(stateId);
@@ -28,6 +30,9 @@ class FakeLight implements LightDriver {
   }
   async repainted(): Promise<boolean | null> {
     return this.frames ?? null;
+  }
+  async glassDark(): Promise<boolean | null> {
+    return this.night;
   }
 }
 
@@ -295,4 +300,80 @@ test('supervisor: "cannot tell" is not recovery - a null reading logs nothing (#
   // reached would put a lie in the one place a person goes to find out what happened.
   assert.equal(back(lines).length, 0, lines.join('\n'));
   assert.equal(frozen(lines).length, 1, lines.join('\n'));
+});
+
+// ------------------------------------------- confirmed must describe PIXELS SOMEBODY CAN SEE (#82)
+
+const asleep = (lines: string[]): string[] => lines.filter((l) => l.includes('ASLEEP'));
+const awake = (lines: string[]): string[] => lines.filter((l) => l.includes('AWAKE after'));
+
+test('supervisor: a panel dark on schedule confirms NOTHING, and says why (#82)', async () => {
+  const r = rig();
+  // The exact shape of the bug: the display lambda keeps running with the backlight off, so
+  // Frames advances all night and repainted() says true about a panel emitting nothing.
+  r.light.frames = true;
+  r.light.night = true;
+  // Waited on the REASON, not on `confirmed`. The rig starts at `confirmed: unknown`, so
+  // waiting for that is satisfied at t=0 and the test passes without a tick ever running -
+  // the vacuous-wait trap D-127's helper makes easy to fall into.
+  await waitFor(() => r.store.get().confirmedReason === 'asleep', () => JSON.stringify(r.store.get()));
+  r.stop();
+  assert.equal(r.store.get().confirmed, UNKNOWN_ID, 'confirmed must describe pixels somebody can see');
+});
+
+test('supervisor: the dark test runs BEFORE the repainting test, or it never runs at all (#82)', async () => {
+  // A dark panel IS repainting. Placed after that branch this test is dead code, and the
+  // server reports a confirmation of pixels nobody can see - which is the whole bug.
+  const r = rig();
+  r.light.frames = true;
+  r.light.night = true;
+  await waitFor(() => r.changes.some((c) => c.confirmedReason === 'asleep'), () => JSON.stringify(r.changes));
+  r.stop();
+  assert.equal(r.changes.at(-1)!.confirmed, UNKNOWN_ID);
+});
+
+test('supervisor: waking up restores confirmed, and clears the reason (#82)', async () => {
+  const r = rig();
+  r.light.frames = true;
+  r.light.night = true;
+  await waitFor(() => r.store.get().confirmedReason === 'asleep', () => JSON.stringify(r.store.get()));
+  r.light.night = false;
+  await waitFor(() => r.store.get().confirmed === 'on-air', () => JSON.stringify(r.store.get()));
+  r.stop();
+  // A stale reason surviving a recovery is the same lie as a stale confirmed, one level out.
+  assert.equal(r.store.get().confirmedReason, undefined, JSON.stringify(r.store.get()));
+});
+
+test('supervisor: a whole night is TWO log lines, not one per tick (#82)', async () => {
+  // Eight hours at the shipped 5s poll is 5,760 ticks. A line each would be 5,760 lines
+  // before breakfast, every night, about a panel that is working perfectly.
+  const lines: string[] = [];
+  const r = rig({ log: (l: string) => lines.push(l) });
+  r.light.frames = true;
+  r.light.night = true;
+  await waitFor(() => r.enqueued >= 12, () => `wanted 12 ticks, got ${r.enqueued}`);
+  assert.equal(asleep(lines).length, 1, lines.join('\n'));
+  r.light.night = false;
+  await waitFor(() => awake(lines).length === 1, () => lines.join('\n'));
+  r.stop();
+  assert.equal(asleep(lines).length, 1, lines.join('\n'));
+  assert.match(asleep(lines)[0]!, ISO);
+  assert.match(asleep(lines)[0]!, /10\.42\.14\.239/);
+  // NOT an error line and it must not read like one. A panel dark at 2am is healthy.
+  assert.match(asleep(lines)[0]!, /dark on schedule/);
+  assert.doesNotMatch(asleep(lines)[0]!, /fail|error|unreachable/i);
+});
+
+test('supervisor: the three reasons stay distinguishable (#82)', async () => {
+  // Two, not three: a surface that cannot tell "dark on purpose" from "broken" alarms every
+  // night, and one that cannot tell "gone" from "frozen" is not worth reading.
+  const frozen = rig();
+  frozen.light.frames = false;
+  await waitFor(() => frozen.store.get().confirmedReason === 'not-repainting', () => JSON.stringify(frozen.store.get()));
+  frozen.stop();
+
+  const gone = rig();
+  gone.light.device = UNKNOWN_ID; // unreachable: set() goes nowhere, read() says nothing
+  await waitFor(() => gone.store.get().confirmedReason === 'unreachable', () => JSON.stringify(gone.store.get()));
+  gone.stop();
 });

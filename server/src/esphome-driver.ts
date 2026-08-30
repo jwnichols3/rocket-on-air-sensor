@@ -10,6 +10,8 @@ export interface EsphomeDriverOptions {
    * which is the pre-#68 behaviour. See DEFAULT_REPROBE_MS.
    */
   reprobeMs?: number;
+  /** The ESPHome text_sensor NAME carrying the night verdict. Default `Night` (#82). */
+  nightEntity?: string;
   /** The ESPHome text NAME, not its object_id. Must match the YAML `name:`. */
   entity?: string;
   /** The ESPHome text NAME carrying the table version (D-42's nudge). */
@@ -66,6 +68,18 @@ export const DEFAULT_FROZEN_AFTER_MS = 90_000;
  */
 export const DEFAULT_REPROBE_MS = 15_000;
 
+/**
+ * THE ONE STRING THE `Night` text_sensor EMITS THAT MEANS THE GLASS IS OFF (#82).
+ *
+ * The firmware's lambda returns `dark` or one of several `lit (...)` strings explaining why
+ * it is not dark. This is a CROSS-COMPONENT COUPLING - a server constant that has to match a
+ * string in a YAML lambda - so it is named here and asserted against the YAML by a test,
+ * the same way `driver.test.ts` already asserts `frozenAfterMs` against the firmware's 30s
+ * safety-net interval. D-106 is the record of what an uncalibrated coupling of this shape
+ * costs.
+ */
+export const NIGHT_DARK = 'dark';
+
 /** A wrong entity name or rejected credentials. A deploy bug, so never retried. */
 export class DriverConfigError extends Error {}
 
@@ -95,6 +109,7 @@ export class EsphomeTextDriver implements LightDriver {
   private readonly base: string;
   private readonly entity: string;
   private readonly versionEntity: string;
+  private readonly nightEntity: string;
   private readonly headers: Record<string, string>;
   private readonly timeoutMs: number;
   private readonly retries: number;
@@ -107,6 +122,10 @@ export class EsphomeTextDriver implements LightDriver {
   private lastFrameChangeAt = 0;
   private lastVersionSent: number | null = null;
   private versionEntityMissing = false;
+  /** Firmware older than #78 has no `Night` sensor and answers 404 forever. Said once. */
+  private nightEntityMissing = false;
+  /** The panel's own words for why it is lit or dark, for a human reading a log. */
+  private lastNightReason: string | null = null;
   /**
    * WHETHER THIS HOST IS ANSWERING, and since when. The log's whole job in an outage is to
    * answer two questions - *when did it go, and which one* - and describing every poll
@@ -141,6 +160,7 @@ export class EsphomeTextDriver implements LightDriver {
     this.base = `http://${opts.host}`;
     this.entity = encodeURIComponent(opts.entity ?? 'PresenceKey');
     this.versionEntity = encodeURIComponent(opts.versionEntity ?? 'TableVersion');
+    this.nightEntity = encodeURIComponent(opts.nightEntity ?? 'Night');
     this.timeoutMs = opts.timeoutMs ?? 2000;
     this.retries = opts.retries ?? 1;
     this.retryGapMs = opts.retryGapMs ?? 400;
@@ -316,6 +336,52 @@ export class EsphomeTextDriver implements LightDriver {
       return true;
     }
     return now - this.lastFrameChangeAt > this.frozenAfterMs ? false : null;
+  }
+
+  /**
+   * Is the glass off? Reads the panel's own `Night` verdict.
+   *
+   * NOT through `getJson()`, and that is the whole difficulty of this method. `getJson` goes
+   * through `attempt()`, which turns any non-`ok` response into a RETRYABLE throw and then
+   * feeds `unreachable()`. A `404` from firmware that predates the night schedule would
+   * therefore cost a retry and then log a permanent UNREACHABLE edge about a panel that is
+   * perfectly healthy. So the 404 is caught explicitly, BEFORE the retry, and latched - the
+   * same shape `setTableVersion` uses for a missing `TableVersion` entity.
+   *
+   * `null` on anything it cannot read. A driver that cannot see the glass must say so rather
+   * than guess "lit", because guessing lit is the false confirmation this exists to stop.
+   */
+  async glassDark(): Promise<boolean | null> {
+    if (this.nightEntityMissing) return null;
+    if (this.skipping()) return null;
+    this.lastAttemptAt = Date.now();
+    try {
+      const res = await fetch(`${this.base}/text_sensor/${this.nightEntity}`, {
+        headers: this.headers,
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      if (res.status === 404) {
+        await res.arrayBuffer();
+        this.nightEntityMissing = true;
+        this.log(`[esphome-driver] no "${this.nightEntity}" text_sensor - firmware predates the night schedule`);
+        return null;
+      }
+      if (!res.ok) throw new Error(`GET ${res.status}`);
+      const body = (await res.json()) as { state?: unknown } | null;
+      this.reachable();
+      const state = body?.state;
+      if (typeof state !== 'string' || state === '') return null;
+      this.lastNightReason = state;
+      return state === NIGHT_DARK;
+    } catch (err) {
+      this.unreachable(err);
+      return null;
+    }
+  }
+
+  /** The panel's own words for its night verdict - "dark", "lit (daytime)" - or null. */
+  nightReason(): string | null {
+    return this.lastNightReason;
   }
 
   private async getJson(url: string): Promise<unknown> {

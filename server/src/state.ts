@@ -165,6 +165,13 @@ export function coerceSource(raw: unknown): Source {
  */
 
 /** The persisted, in-memory state object. Everything else in §2 is derived at read time. */
+/**
+ * Why there is no confirmation. Three and not two, because a human surface has to tell
+ * "dark on purpose" from "broken" to stop alarming, and "unreachable" from "reachable but
+ * frozen" to be worth reading at all.
+ */
+export type ConfirmedReason = 'asleep' | 'not-repainting' | 'unreachable';
+
 export interface OnAirState {
   /** A REFERENCE to a row, never a copy of one. */
   state: string;
@@ -175,6 +182,19 @@ export interface OnAirState {
   message: string | null;
   /** Present ONLY when the live row was deleted and the state fell back to `unknown`. */
   stateResolvedFrom?: string;
+  /**
+   * WHY `confirmed` is `unknown`, when the server knows. Absent otherwise - including when
+   * `confirmed` is a real row, and when it is `unknown` for a reason the server cannot name.
+   *
+   * Optional and additive on purpose (#82/#83), following `stateResolvedFrom` above:
+   * `confirmed` keeps its type and its domain, so every deployed client keeps working
+   * unchanged - which matters because Companion buttons are already on a physical deck.
+   *
+   * `asleep` is the one that is NOT a fault. A panel dark on schedule at 2am is healthy and
+   * has no pixels to confirm; a client that escalates on it is crying wolf every night, and
+   * a feature that does that is worse than not having it.
+   */
+  confirmedReason?: ConfirmedReason;
 }
 
 /** The §2 object as it goes on the wire, with the derived fields filled in. */
@@ -256,8 +276,13 @@ export class StateStore {
     return this.get();
   }
 
-  setConfirmed(confirmed: string): OnAirState {
-    this.state = { ...this.state, confirmed };
+  setConfirmed(confirmed: string, reason?: ConfirmedReason): OnAirState {
+    // The reason is REPLACED, never merged: a stale "asleep" surviving into a genuine
+    // outage would be the same lie as a stale `confirmed`, one level further out.
+    const next = { ...this.state, confirmed };
+    if (reason === undefined) delete next.confirmedReason;
+    else next.confirmedReason = reason;
+    this.state = next;
     return this.get();
   }
 

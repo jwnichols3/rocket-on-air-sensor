@@ -1,6 +1,6 @@
 import type { LightDriver } from './driver.js';
 import { humanMs, stamp } from './log-format.js';
-import { UNKNOWN_ID, type OnAirState, type StateStore } from './state.js';
+import { UNKNOWN_ID, type ConfirmedReason, type OnAirState, type StateStore } from './state.js';
 
 export interface SuperviseOptions {
   store: StateStore;
@@ -45,6 +45,29 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
    */
   let frozenSince: number | null = null;
   let frozenTicks = 0;
+
+  /**
+   * WHETHER THE GLASS IS OFF ON PURPOSE, and since when (#82). Same edge discipline as
+   * above, and it has to be an edge for a reason this one does not share: the panel is dark
+   * for EIGHT HOURS a night, so a per-tick line would be roughly 5,760 of them before
+   * breakfast, every night, about a panel that is working perfectly.
+   */
+  let darkSince: number | null = null;
+
+  /** The panel went dark on schedule. Not a fault, and the line must not read like one. */
+  function goingDark(): void {
+    if (darkSince !== null) return;
+    darkSince = Date.now();
+    log(`[supervisor] ${stamp()} ${host} ASLEEP: the glass is dark on schedule, confirmed is unknown until it wakes`);
+  }
+
+  /** The glass came back. Silent unless that is news. */
+  function wakingUp(): void {
+    if (darkSince === null) return;
+    const asleepFor = humanMs(Date.now() - darkSince);
+    darkSince = null;
+    log(`[supervisor] ${stamp()} ${host} AWAKE after ${asleepFor}`);
+  }
 
   /** The panel is not repainting. Silent unless that is news. */
   function notRepainting(): void {
@@ -129,22 +152,52 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
       painting = await bestEffort('repainted()', () => o.driver.repainted!(), null);
     }
 
+    /**
+     * CAN ANYONE SEE THE PIXELS? A different question from whether they changed, and the
+     * one the old code never asked (#82). The display lambda keeps running with the
+     * backlight off, so `Frames` advances all night and `repainted()` says `true` about a
+     * panel emitting nothing at all.
+     */
+    let dark: boolean | null = null;
+    if (got === settled && o.driver.glassDark) {
+      dark = await bestEffort('glassDark()', () => o.driver.glassDark!(), null);
+    }
+
+    if (dark === true) goingDark();
+    else if (dark === false) wakingUp();
     if (painting === true) repainting();
     else if (painting === false) notRepainting();
 
+    const cur = o.store.get();
     let next: string;
-    if (got === settled && painting !== false) {
+    let reason: ConfirmedReason | undefined;
+    if (dark === true) {
+      // FIRST, and it has to be. A dark panel IS repainting, so this test placed any later
+      // falls straight through into `next = settled` and reports a confirmation of pixels
+      // nobody can see. `unknown` here is this system's word for "no evidence" - never for
+      // "broken" - and `asleep` is what stops every surface downstream reading it as a fault.
+      next = UNKNOWN_ID;
+      reason = 'asleep';
+    } else if (got === settled && painting !== false) {
       lastGoodAt = Date.now();
       next = settled;
     } else if (painting === false) {
       next = UNKNOWN_ID;
+      reason = 'not-repainting';
     } else if (Date.now() - lastGoodAt > decayMs) {
       next = UNKNOWN_ID; // an admission of ignorance, never a claim
+      reason = 'unreachable';
     } else {
-      next = o.store.get().confirmed; // hold briefly through a single blip
+      next = cur.confirmed; // hold briefly through a single blip
+      reason = cur.confirmedReason;
     }
 
-    if (next !== o.store.get().confirmed) o.onChange(o.store.setConfirmed(next));
+    // The REASON is part of the change. A panel that goes from frozen to asleep has the
+    // same `confirmed` either way, and a surface that alarms on one and not the other has
+    // to be told - otherwise the admin console stays yellow through a healthy night.
+    if (next !== cur.confirmed || reason !== cur.confirmedReason) {
+      o.onChange(o.store.setConfirmed(next, reason));
+    }
 
     // D-42's version nudge lives here rather than on the write path (#68). The driver
     // caches the last version it sent, so on a healthy panel this is a no-op that touches
