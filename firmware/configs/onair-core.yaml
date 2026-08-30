@@ -752,6 +752,23 @@ interval:
           //
           // A LEVEL TEST, evaluated every tick, so there is no edge to miss and no trigger to
           // fire late. `v` is already in hand on the line above.
+          //
+          // WHAT EACH BOARD DOES WITH THE VERDICT, so a reader of the core never has to open
+          // a board file to find out (#80). The core decides WHETHER; the board decides HOW,
+          // and one of the two boards has legitimately decided "not at all" (D-85, D-111).
+          //
+          //   CrowPanel - drives its own `backlight` from `effective_backlight()`
+          //               (crowpanel-7.yaml). This is the panel the schedule is for.
+          //   Elegoo    - IGNORES IT, deliberately, and this is the answer rather than an
+          //               oversight. It is a bench board and is normally powered off (D-87),
+          //               so burn-in does not apply. Its `display:` block has no `id:`, so
+          //               there is nothing for an automation to address. And `ssd1306_base`
+          //               issues `turn_on` only in `setup()` and keeps writing the
+          //               framebuffer with the panel off - so a "dark" SH1106 would still
+          //               advance `frames` and would be INDISTINGUISHABLE TO THE SERVER,
+          //               which is precisely the bug #82 exists to close. Darkening it would
+          //               create a second instance of that bug on a second board. Contrast
+          //               is the cheaper lever if this is ever actually wanted.
           {
             auto nt = id(wall_clock).now();
             onair::NightInput ni;
