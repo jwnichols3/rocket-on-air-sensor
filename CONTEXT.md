@@ -4738,3 +4738,70 @@ else (state, light control, API) lives on the receiver.
   firmware increments; firmware that stops incrementing it makes every healthy panel read as
   frozen, and firmware that increments it while showing nothing makes a blank panel read as
   confirmed - which is precisely this bug.
+
+- **D-132 (2026-08-30)** **A read may be skipped. A write may never be.** An adversarial review
+  of the *deployed* D-130 and D-131 found two confirmed defects, both mine, both shipped. This
+  records the fix and the rule that should have been written down first.
+
+  **THE REGRESSION.** D-130's skip window keyed on `failingSince`, which means *"the last call,
+  on any entity, failed once"* - it is the LOG's edge flag, and it is armed by the three
+  callers that have no retry ladder at all (`setTableVersion`, `glassDark`, `verifyEntity`).
+  Using it as a traffic gate meant **one dropped packet silenced the driver for 15 seconds**,
+  and `set()` was gated with everything else. Reproduced against a panel that swallowed two
+  packets once and was healthy thereafter:
+
+  ```
+  2. blip write:   unknown | 4409ms | device holds on-air
+  3.0 write:       unknown |    1ms | device holds on-air | requests reaching the device: 0
+  3.4 write:       unknown |    0ms | device holds on-air | requests reaching the device: 0
+  ```
+
+  Five writes to a live panel, nothing on the wire, the panel still showing the previous row.
+  If the swallowed write is the one turning the light ON, **that is a false OFF** - D-6 and
+  D-63, the invariant the system exists to protect. It was not an emergency only because the
+  firmware polls `GET /status` itself and drives `presence_key` from it, so the glass
+  self-corrects in about a second. **That redundancy was load-bearing and nobody had written it
+  down**; it is not a licence to drop writes.
+
+  **THE RULE, which is the durable part.** Every other call in the driver is the server
+  *learning* something and can wait fifteen seconds. `set()` is the server *changing* something.
+  A skipped read costs knowledge that is re-acquired on the next tick; a skipped write costs
+  the light. So: `set()` is never gated, and only an **exhausted retry ladder** - `attempt()`
+  running out of tries - is evidence a host is dead. `deadSince` is now that evidence and is
+  separate from `failingSince`, which goes on logging exactly as D-129 left it.
+
+  **The latency criterion #68 asked for is given up, deliberately.** "A write against a
+  black-hole host returns in under 1s" was only ever true because writes were being skipped,
+  and a fast write that never reaches the panel is not a fast write. A write pays its full
+  4.4s ladder against a dead host again. **The feedback loop #68 was actually about survives
+  this**: it was the SUPERVISOR's polling, ticking every 5s against a ladder that outlasted the
+  interval, and that is still skipped. With the nudge already off the write path (D-130), a
+  4.4s write against 5s arrivals drains rather than grows.
+
+  **THE SECOND DEFECT, in D-131.** `glassDark()` returns `null` when it cannot tell - correctly,
+  and its docstring says guessing "lit" is the false confirmation the whole ticket exists to
+  stop. The supervisor then guessed lit anyway: `if (dark === true) ... else if (got === settled
+  && painting !== false) next = settled`, so a `null` fell straight through into a positive
+  confirmation. One dropped packet on the Night sensor published **`confirmed: on-air` about a
+  panel that was black** - D-131's lie, restored, by exactly the mechanism D-131 removed. The
+  same blip armed the skip window, so the false confirmation was then held for the full 15s
+  rather than corrected on the next tick.
+
+  A `null` now HOLDS the last real answer, the same discipline `confirmed` itself already uses
+  for a single blip. It starts `null`, so a driver that has never read the entity - old
+  firmware, no such sensor - behaves exactly as before. If a reading is ever held forever it is
+  held at `unknown`, which is an admission of ignorance rather than a claim.
+
+  **What this says about the process, and it is the reason this decision is written at length.**
+  Both defects were in code that had passed `npm run verify`, passed a mutation check on the
+  behaviour it was written for, been measured against the real panel, and been deployed. **The
+  tests encoded the bug**: `write-latency.test.ts` asserted a sub-second write against a dead
+  host, which is the symptom of the defect stated as a requirement. Two existing driver tests
+  had to be handed `reprobeMs: 0` to keep passing, and that was the signal - a change that makes
+  existing tests need an opt-out has probably changed something nobody asked it to. The review
+  that caught it did what the mutation checks could not: it asked what the change did to cases
+  the change was not about.
+
+  All three fixes are mutation-proven. Restoring the `failingSince` gate, gating `set()`, or
+  removing the glass hold each turns a named test red, and the third one prints the failure in
+  the only words that matter: `confirmed went positive at some point: ["unknown","on-air","unknown"]`.

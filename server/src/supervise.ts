@@ -54,6 +54,23 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
    */
   let darkSince: number | null = null;
 
+  /**
+   * THE LAST THING `glassDark()` ACTUALLY TOLD US (D-132).
+   *
+   * `glassDark()` returns `null` when it cannot tell, and the first version of this let a
+   * `null` fall through into the positive branch - so one dropped packet on the Night sensor
+   * published `confirmed: on-air` about a panel that was black, which is precisely the lie
+   * #82 was written to remove. Measured before the fix: three consecutive ticks claiming a
+   * confirmation of pixels nobody could see.
+   *
+   * So a `null` HOLDS the last real answer instead of being read as "lit", exactly as
+   * `confirmed` itself holds through a single blip. It starts `null`, so a driver that has
+   * never successfully read the entity - old firmware, no such sensor - behaves as it always
+   * did. And if the reading is ever held forever, it is held at `unknown`, which is an
+   * admission of ignorance rather than a claim.
+   */
+  let lastGlass: boolean | null = null;
+
   /** The panel went dark on schedule. Not a fault, and the line must not read like one. */
   function goingDark(): void {
     if (darkSince !== null) return;
@@ -161,6 +178,8 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
     let dark: boolean | null = null;
     if (got === settled && o.driver.glassDark) {
       dark = await bestEffort('glassDark()', () => o.driver.glassDark!(), null);
+      if (dark === null) dark = lastGlass; // hold the last real answer through a blip
+      else lastGlass = dark;
     }
 
     if (dark === true) goingDark();

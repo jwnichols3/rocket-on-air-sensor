@@ -154,6 +154,20 @@ export class EsphomeTextDriver implements LightDriver {
   private readonly reprobeMs: number;
   private lastAttemptAt = 0;
   private skippedCalls = 0;
+  /**
+   * THE GATE IS NOT `failingSince`, and separating them is the whole of the fix to the
+   * regression #68 shipped (D-132).
+   *
+   * `failingSince` means "the last call, on any entity, failed once" - it feeds the LOG, and
+   * it is armed by single-shot callers with no retry ladder (`setTableVersion`, `glassDark`,
+   * `verifyEntity`). Using it as a traffic gate meant one dropped packet on a poll silenced
+   * the driver for 15 seconds. Measured: after one blip, five writes to a fully healthy panel
+   * returned `unknown` in under a millisecond each and NOTHING reached the device.
+   *
+   * `deadSince` means "a full retry ladder was exhausted", which is the only evidence in this
+   * driver that a host is actually gone. Only `attempt()` arms it.
+   */
+  private deadSince: number | null = null;
 
   constructor(opts: EsphomeDriverOptions) {
     this.host = opts.host;
@@ -217,17 +231,23 @@ export class EsphomeTextDriver implements LightDriver {
     const url = `${this.base}/text/${this.entity}/set?value=${encodeURIComponent(stateId)}`;
     // fetch() with no body sends Content-Length: 0 and no Content-Type, which is what
     // the device requires - web_server_idf returns 411 if Content-Length is absent.
-    const ok = await this.attempt(async () => {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: this.headers,
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-      if (res.status === 404) throw new DriverConfigError(`404 ${url}`);
-      if (!res.ok) throw new Error(`POST ${res.status}`);
-      await res.arrayBuffer();
-      return true;
-    });
+    // UNGATED (D-132). Every other call in this driver is the server learning something and
+    // can wait 15 seconds; this one is the server CHANGING something, and a skipped write is
+    // a light left showing the wrong row.
+    const ok = await this.attempt(
+      async () => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: this.headers,
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+        if (res.status === 404) throw new DriverConfigError(`404 ${url}`);
+        if (!res.ok) throw new Error(`POST ${res.status}`);
+        await res.arrayBuffer();
+        return true;
+      },
+      false,
+    );
     if (!ok) return UNKNOWN_ID;
     // The 200 proves nothing: it is sent before the value is applied, and an invalid
     // value is dropped in silence. Only the read-back is evidence. Under `text` the
@@ -371,8 +391,10 @@ export class EsphomeTextDriver implements LightDriver {
         return null;
       }
       if (!res.ok) throw new Error(`GET ${res.status}`);
-      const body = (await res.json()) as { state?: unknown } | null;
+      // BEFORE the parse. The host answered; a body this driver cannot read is a firmware
+      // question, not an outage, and routing it through `unreachable()` would say otherwise.
       this.reachable();
+      const body = (await res.json()) as { state?: unknown } | null;
       const state = body?.state;
       if (typeof state !== 'string' || state === '') return null;
       this.lastNightReason = state;
@@ -401,8 +423,8 @@ export class EsphomeTextDriver implements LightDriver {
    * throwing: a dead light must never take the service down. A DriverConfigError is not
    * retried - it will fail identically every time.
    */
-  private async attempt<T>(fn: () => Promise<T>): Promise<T | null> {
-    if (this.skipping()) return null;
+  private async attempt<T>(fn: () => Promise<T>, gated = true): Promise<T | null> {
+    if (gated && this.skipping()) return null;
     this.lastAttemptAt = Date.now();
     let last: unknown;
     for (let i = 0; i <= this.retries; i++) {
@@ -425,6 +447,10 @@ export class EsphomeTextDriver implements LightDriver {
         if (i < this.retries) await new Promise((r) => setTimeout(r, this.retryGapMs));
       }
     }
+    // An EXHAUSTED LADDER is the only thing that arms the gate. A single-shot caller that
+    // failed once has not demonstrated the host is dead, and treating it as if it had is
+    // what dropped writes to a live panel.
+    this.deadSince ??= Date.now();
     this.unreachable(last);
     return null;
   }
@@ -436,9 +462,15 @@ export class EsphomeTextDriver implements LightDriver {
    * The guard is on the whole `attempt`, not on each retry inside it. `retries` exists to
    * survive a single dropped request, and a breaker that ate the retry would trade this
    * defect for a worse one - a healthy panel written off for one lost packet.
+   *
+   * NEVER REACHED FROM `set()` (D-132). Skipping a READ costs the server knowledge it can
+   * re-acquire in 15 seconds. Skipping a WRITE costs the light: the panel goes on showing
+   * the previous row, and if the write it swallowed was the one turning the light ON, that
+   * is a false OFF - the failure this whole system exists to prevent. The queue that #68 was
+   * about is drained by skipping the supervisor's polling, which is where the traffic is.
    */
   private skipping(): boolean {
-    if (this.failingSince === null) return false;
+    if (this.deadSince === null) return false;
     if (Date.now() - this.lastAttemptAt >= this.reprobeMs) return false;
     this.skippedCalls++;
     return true;
@@ -455,6 +487,7 @@ export class EsphomeTextDriver implements LightDriver {
     const n = this.failedCalls;
     const skipped = this.skippedCalls;
     this.failingSince = null;
+    this.deadSince = null;
     this.failedCalls = 0;
     this.skippedCalls = 0;
     this.configErrorLogged = false;

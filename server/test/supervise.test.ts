@@ -17,6 +17,10 @@ class FakeLight implements LightDriver {
   frames: boolean | null | undefined = undefined;
   /** The `Night` verdict. `null` is "cannot tell", which is the default everywhere else. */
   night: boolean | null = null;
+  /** Count of glassDark() calls, so a test can blip exactly one of them. */
+  nightReads = 0;
+  /** When > 0, that many glassDark() calls fail (return null) - a dropped packet. */
+  nightBlips = 0;
 
   async set(stateId: string): Promise<string> {
     this.sets.push(stateId);
@@ -32,6 +36,11 @@ class FakeLight implements LightDriver {
     return this.frames ?? null;
   }
   async glassDark(): Promise<boolean | null> {
+    this.nightReads++;
+    if (this.nightBlips > 0) {
+      this.nightBlips--;
+      return null; // the driver could not tell, and says so
+    }
     return this.night;
   }
 }
@@ -376,4 +385,40 @@ test('supervisor: the three reasons stay distinguishable (#82)', async () => {
   gone.light.device = UNKNOWN_ID; // unreachable: set() goes nowhere, read() says nothing
   await waitFor(() => gone.store.get().confirmedReason === 'unreachable', () => JSON.stringify(gone.store.get()));
   gone.stop();
+});
+
+test('#82/D-132: a BLIP on the Night sensor must not confirm a dark panel', async () => {
+  // The defect the adversarial review found in the deployed #82. glassDark() correctly
+  // returns null when it cannot tell - and the supervisor then guessed "lit" anyway,
+  // publishing `confirmed: on-air` about a panel that was black. That is precisely the lie
+  // #82 was written to remove, restored by a single dropped packet.
+  const r = rig();
+  r.light.frames = true;
+  r.light.night = true;
+  await waitFor(() => r.store.get().confirmedReason === 'asleep', () => JSON.stringify(r.store.get()));
+
+  // One dropped packet on an otherwise perfect panel, mid-night.
+  const before = r.light.nightReads;
+  r.light.nightBlips = 1;
+  await waitFor(() => r.light.nightReads > before + 2, () => `reads ${r.light.nightReads}`);
+  r.stop();
+
+  // A null HOLDS the last real answer rather than reading as lit.
+  assert.equal(r.store.get().confirmed, UNKNOWN_ID, 'a blip published a confirmation of a dark panel');
+  assert.equal(r.store.get().confirmedReason, 'asleep');
+  assert.ok(
+    r.changes.every((c) => c.confirmed === UNKNOWN_ID),
+    `confirmed went positive at some point: ${JSON.stringify(r.changes.map((c) => c.confirmed))}`,
+  );
+});
+
+test('#82/D-132: a driver that has NEVER read the glass behaves as it always did', async () => {
+  // The other side of holding the last answer. Old firmware with no Night sensor returns
+  // null forever, and must not be held at `unknown` for want of an answer it cannot give.
+  const r = rig();
+  r.light.frames = true;
+  r.light.night = null; // cannot tell, ever
+  await waitFor(() => r.store.get().confirmed === 'on-air', () => JSON.stringify(r.store.get()));
+  r.stop();
+  assert.equal(r.store.get().confirmedReason, undefined);
 });
