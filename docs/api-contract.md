@@ -373,10 +373,18 @@ down would otherwise sit on `NO CONFIG` for up to five minutes after the server 
 
 **The version nudge.** Polling alone would leave a colour edit up to 5 minutes from the panel,
 which feels broken when you just made it in the admin UI. So the server also writes the current
-`tableVersion` to a small entity on the device, alongside the state it already writes. A device
-seeing a version it does not hold re-pulls at once. This is a *trigger* for a pull, not a push
-of the table - the server still sends no configuration on the state path, and still keeps no
-device registry beyond the one host it already writes to.
+`tableVersion` to a small entity on the device. A device seeing a version it does not hold
+re-pulls at once. This is a *trigger* for a pull, not a push of the table - the server still
+sends no configuration on the state path, and still keeps no device registry beyond the one
+host it already writes to.
+
+The nudge fires when the table is saved, and again on the supervisor's poll if that first
+attempt did not land. **It does NOT ride along with a state write** (changed 2026-08-30,
+D-130): against an unreachable device it was two seconds of every write's latency, for
+something advisory that the device re-pulls on its own interval anyway. The consequence is
+that a table edit made while the panel is unreachable reaches it at worst one supervisor poll
+later than it used to, instead of waiting for the next state write. Nothing on this API's
+surface changes.
 
 ### Driving the ESP32 (measured, 2026-08-24)
 
