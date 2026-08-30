@@ -34,6 +34,15 @@ a bare `lsof -ti :8484` also lists every CLIENT with a socket open to it, so
 daemon running the old build while the restart appears to have worked. Never foreground `esphome logs` or `make -C firmware
 flash` - they tail with no timeout and hang the turn.
 
+**A flash is not done when the upload says it is.** `esphome upload` has reported success,
+the device has rebooted, and it has come back on the OLD firmware (#87). The cause is not yet
+known and may never reproduce, but the rule holds regardless: **after flashing, wait for a
+marker that only the new build can produce** - a new entity, a changed version string, a log
+line that did not exist before. `/onair` answering proves nothing: the panel serves HTTP
+throughout the OTA write, so the page you are talking to may be the build you were trying to
+replace. This has cost a measurement twice (D-100, then #87); both times the flash looked
+fine and the thing measured was the old firmware.
+
 ## Agent skills
 
 ### Issue tracker
