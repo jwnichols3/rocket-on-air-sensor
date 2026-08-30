@@ -5,6 +5,11 @@ import { UNKNOWN_ID } from './state.js';
 export interface EsphomeDriverOptions {
   /** "10.42.12.77" or "elegoo-esp32.local". No scheme. */
   host: string;
+  /**
+   * How long to leave a failing host alone between probes (#68). 0 probes on every call,
+   * which is the pre-#68 behaviour. See DEFAULT_REPROBE_MS.
+   */
+  reprobeMs?: number;
   /** The ESPHome text NAME, not its object_id. Must match the YAML `name:`. */
   entity?: string;
   /** The ESPHome text NAME carrying the table version (D-42's nudge). */
@@ -36,6 +41,30 @@ export interface EsphomeDriverOptions {
  * calibrated to. 90s = three of the panel's 30s safety-net repaints (#64).
  */
 export const DEFAULT_FROZEN_AFTER_MS = 90_000;
+
+/**
+ * HOW LONG A HOST KNOWN TO BE FAILING IS LEFT ALONE BEFORE IT IS PROBED AGAIN (#68).
+ *
+ * The defect this exists for is not latency, it is a feedback loop. Every write and every
+ * supervisor tick shares one queue (`app.ts`), and against an unplugged panel one write's own
+ * device work measured 6.4s - a 2-attempt ladder of 2s timeouts for `set`, then the version
+ * nudge. The supervisor ticks every 5s and the detector writes every ~5s (D-90), so arrivals
+ * outpace drains and the queue grows for as long as the panel is away: writes answered after
+ * 7.7s, 9.1s, 14.9s, 16.3s, 17.7s in the measurement on the ticket.
+ *
+ * So a host the driver already knows is dead is not asked again on every call - it is asked
+ * again every 15 seconds. 15s is three supervisor polls at the 5s default, which is what
+ * turns "every tick pays the ladder" into "one tick in three does".
+ *
+ * The cost is named rather than hidden: a panel that comes back is not noticed here for up to
+ * 15s. That is affordable because the panel does not depend on this path to recover - it
+ * polls the server for the state itself, and it re-pulls the table on its own interval. This
+ * window delays the SERVER learning the panel is back; it does not delay the panel.
+ *
+ * `reprobeMs: 0` disables the skip entirely - every call goes to the network. Used by the
+ * tests that are about the failure log's edges rather than about this.
+ */
+export const DEFAULT_REPROBE_MS = 15_000;
 
 /** A wrong entity name or rejected credentials. A deploy bug, so never retried. */
 export class DriverConfigError extends Error {}
@@ -97,6 +126,15 @@ export class EsphomeTextDriver implements LightDriver {
   private failingSince: number | null = null;
   private failedCalls = 0;
   private configErrorLogged = false;
+  /**
+   * THE SKIP WINDOW (#68). `lastAttemptAt` is stamped when a call actually goes to the
+   * network, so "due for a re-probe" is measured from the last time this host was bothered
+   * rather than from when it first failed - a host down for an hour is probed on a steady
+   * cadence, not once.
+   */
+  private readonly reprobeMs: number;
+  private lastAttemptAt = 0;
+  private skippedCalls = 0;
 
   constructor(opts: EsphomeDriverOptions) {
     this.host = opts.host;
@@ -112,6 +150,7 @@ export class EsphomeTextDriver implements LightDriver {
     // ever grows; a freeze detector calibrated below the panel's own idle rate does not
     // detect freezes, it manufactures them.
     this.frozenAfterMs = opts.frozenAfterMs ?? DEFAULT_FROZEN_AFTER_MS;
+    this.reprobeMs = opts.reprobeMs ?? DEFAULT_REPROBE_MS;
     this.log = opts.log ?? console.log;
     this.headers = opts.username
       ? { authorization: `Basic ${Buffer.from(`${opts.username}:${opts.password ?? ''}`).toString('base64')}` }
@@ -130,6 +169,7 @@ export class EsphomeTextDriver implements LightDriver {
    * has no such list and is not supposed to (D-38). That check is gone, not replaced.
    */
   async verifyEntity(): Promise<true | null> {
+    this.lastAttemptAt = Date.now();
     try {
       const res = await fetch(`${this.base}/text/${this.entity}`, {
         headers: this.headers,
@@ -207,6 +247,10 @@ export class EsphomeTextDriver implements LightDriver {
    */
   async setTableVersion(version: number): Promise<void> {
     if (this.versionEntityMissing || this.lastVersionSent === version) return;
+    // The nudge does not bypass the skip window. It is a request to the same dead host as
+    // every other, and it was 2 of the 6.4 seconds a write paid against one (#68).
+    if (this.skipping()) return;
+    this.lastAttemptAt = Date.now();
     const url = `${this.base}/text/${this.versionEntity}/set?value=${encodeURIComponent(String(version))}`;
     try {
       const res = await fetch(url, {
@@ -288,6 +332,8 @@ export class EsphomeTextDriver implements LightDriver {
    * retried - it will fail identically every time.
    */
   private async attempt<T>(fn: () => Promise<T>): Promise<T | null> {
+    if (this.skipping()) return null;
+    this.lastAttemptAt = Date.now();
     let last: unknown;
     for (let i = 0; i <= this.retries; i++) {
       try {
@@ -314,6 +360,21 @@ export class EsphomeTextDriver implements LightDriver {
   }
 
   /**
+   * Is this host inside its skip window? Counted, never logged: a line per skipped call is
+   * the same flood D-109 removed, wearing the opposite label.
+   *
+   * The guard is on the whole `attempt`, not on each retry inside it. `retries` exists to
+   * survive a single dropped request, and a breaker that ate the retry would trade this
+   * defect for a worse one - a healthy panel written off for one lost packet.
+   */
+  private skipping(): boolean {
+    if (this.failingSince === null) return false;
+    if (Date.now() - this.lastAttemptAt >= this.reprobeMs) return false;
+    this.skippedCalls++;
+    return true;
+  }
+
+  /**
    * A call got through. Silent unless that is news - which it is exactly once, on the way
    * back up, and then the line carries the two numbers a person actually wants: how long the
    * host was gone and how much traffic it swallowed while it was.
@@ -322,10 +383,15 @@ export class EsphomeTextDriver implements LightDriver {
     if (this.failingSince === null) return;
     const downFor = humanMs(Date.now() - this.failingSince);
     const n = this.failedCalls;
+    const skipped = this.skippedCalls;
     this.failingSince = null;
     this.failedCalls = 0;
+    this.skippedCalls = 0;
     this.configErrorLogged = false;
-    this.log(`[esphome-driver] ${stamp()} ${this.host} BACK after ${downFor} and ${n} failed ${n === 1 ? 'call' : 'calls'}`);
+    // The skipped count belongs on this line and nowhere else. It is the only number that
+    // says how much traffic the skip window absorbed, and printing it per call is the flood.
+    const skips = skipped > 0 ? ` (${skipped} skipped while it was down)` : '';
+    this.log(`[esphome-driver] ${stamp()} ${this.host} BACK after ${downFor} and ${n} failed ${n === 1 ? 'call' : 'calls'}${skips}`);
   }
 
   /** A call failed. Only the first one after a success is worth a line. */

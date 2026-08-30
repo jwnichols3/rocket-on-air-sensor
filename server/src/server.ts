@@ -366,14 +366,12 @@ async function doWrite(
   }
   // The device can hold any string. Only a row this server knows is evidence of anything.
   deps.store.setConfirmed(deps.store.getTable().has(confirmed) ? confirmed : UNKNOWN_ID);
-  // D-42's version nudge, on the path that already writes to the device. A no-op unless
-  // the version moved, and never a reason for the write to fail - the write already
-  // succeeded, and a device that missed the nudge re-pulls on its own interval.
-  try {
-    await deps.driver.setTableVersion?.(deps.store.getTable().version);
-  } catch (err) {
-    log(`[onair] version nudge failed: ${errorMessage(err)}`);
-  }
+  // D-42's VERSION NUDGE IS NOT ON THIS PATH ANY MORE (#68). It used to sit here, and
+  // against an unreachable host it was 2 seconds of the measured 6.4 a write paid - a third
+  // of the cost, for something its own docstring calls advisory. It still reaches the device
+  // on the two paths that own it: `applyConfig` nudges the moment the table changes, and the
+  // supervisor re-nudges on its tick if that one did not land. A table edit is not lost by
+  // this, only delayed - at worst by one supervisor poll.
 }
 
 type EnqueueWrite = (run: () => Promise<void>) => Promise<void>;

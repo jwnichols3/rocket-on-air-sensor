@@ -145,6 +145,14 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
     }
 
     if (next !== o.store.get().confirmed) o.onChange(o.store.setConfirmed(next));
+
+    // D-42's version nudge lives here rather than on the write path (#68). The driver
+    // caches the last version it sent, so on a healthy panel this is a no-op that touches
+    // no socket; on a panel that missed `applyConfig`'s nudge it is the retry, which is the
+    // whole reason the write path used to carry one.
+    if (o.driver.setTableVersion) {
+      await bestEffort('setTableVersion', () => o.driver.setTableVersion!(o.store.getTable().version), undefined);
+    }
   }
 
   function schedule(): void {

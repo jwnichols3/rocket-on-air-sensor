@@ -337,7 +337,10 @@ test('a nudge that did not get through is retried on the next one', async (t) =>
   const d = await fakeDevice();
   t.after(() => d.close());
   d.status = 503; // the device is up but not answering this
-  const driver = driverFor(d);
+  // reprobeMs: 0 turns #68's skip window off. This test is about the nudge not caching a
+  // version it failed to send, which is a different property; with the window on, the
+  // second call would be skipped and the test would be measuring the breaker instead.
+  const driver = driverFor(d, { reprobeMs: 0 });
   await driver.setTableVersion(6);
   assert.deepEqual(d.versionPosts, [], 'nothing was recorded');
   d.status = null;
@@ -387,7 +390,10 @@ test('coming back is the other edge, and it carries how long and how much was lo
   const d = await fakeDevice();
   t.after(() => d.close());
   const lines: string[] = [];
-  const driver = driverFor(d, { retries: 0, log: (l: string) => lines.push(l) });
+  // reprobeMs: 0: this test is about the failure log's EDGES, and it walks a host down and
+  // back on consecutive calls. #68's skip window would swallow the recovering call. The
+  // window's own recovery behaviour is tested in write-latency.test.ts.
+  const driver = driverFor(d, { retries: 0, reprobeMs: 0, log: (l: string) => lines.push(l) });
 
   d.status = 503; // up, but answering nothing useful
   await driver.set('on-air');

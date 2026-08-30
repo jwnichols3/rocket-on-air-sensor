@@ -30,14 +30,17 @@ import { setTimeout as sleep } from 'node:timers/promises';
  * count - that is the part of the old assertions worth keeping.
  */
 export async function waitFor(
-  condition: () => boolean,
+  condition: () => boolean | Promise<boolean>,
   message: string | (() => string),
   timeoutMs = 2000,
   stepMs = 5,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    if (condition()) return;
+    // AWAITED. An async predicate returns a Promise, and a Promise is truthy, so a bare
+    // `if (condition())` would return on the first tick and pass everything. That is a
+    // silently-green test, which is worse than the flake this helper replaced.
+    if (await condition()) return;
     if (Date.now() >= deadline) {
       throw new Error(
         `waitFor timed out after ${timeoutMs}ms: ${typeof message === 'function' ? message() : message}`,

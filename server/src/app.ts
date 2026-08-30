@@ -46,6 +46,8 @@ export interface AppOptions {
 export interface App {
   port: number;
   store: StateStore;
+  /** Writes and supervisor ticks waiting on the shared queue. See #68. */
+  writeQueueDepth: () => number;
   config: () => OnAirConfig;
   sessions: SessionStore;
   close: () => Promise<void>;
@@ -193,10 +195,17 @@ export async function createApp(opts: AppOptions): Promise<App> {
   // One write queue, shared by the HTTP routes and the supervisor, so a supervisor
   // re-assert can never race a POST through the driver.
   let writeChain: Promise<void> = Promise.resolve();
+  // HOW MANY WRITES ARE WAITING. The defect in #68 is a queue that grows without bound while
+  // the panel is away, and wall-clock timings are a proxy for it that a loaded machine ruins.
+  // This is the thing itself, so a test can assert it.
+  let queued = 0;
   const enqueueWrite = (run: () => Promise<void>): Promise<void> => {
+    queued++;
     const next = writeChain.then(run);
     writeChain = next.catch(() => {});
-    return next;
+    return next.finally(() => {
+      queued--;
+    });
   };
 
   const hub = createSseHub();
@@ -350,6 +359,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
       return boundPort;
     },
     store,
+    writeQueueDepth: () => queued,
     config: () => config,
     sessions,
     close: async () => {

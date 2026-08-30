@@ -3,6 +3,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
+import { waitFor } from './wait-for.js';
 import { createApp, type AppOptions } from '../src/app.js';
 import type { LightDriver } from '../src/driver.js';
 import { defaultConfig, type OnAirConfig } from '../src/config-store.js';
@@ -292,12 +293,29 @@ class NudgeDriver implements LightDriver {
   }
 }
 
-test('a state write nudges the device with the current table version', async (t) => {
+test('a state write does NOT nudge (#68)', async (t) => {
   const driver = new NudgeDriver();
-  const h = await boot(t, { driver });
+  // The supervisor is parked, so the ONLY thing that could nudge here is the write. No
+  // timing in this assertion: a wall-clock threshold on a machine at load average 200 is
+  // the flake #89 just removed, and the structural claim is the stronger one anyway.
+  const h = await boot(t, { driver, supervise: { pollMs: 1_000_000 } });
   driver.versions.length = 0; // boot re-apply already wrote one
   await fetch(`${h.base}/state/on-air`, { method: 'POST' });
-  assert.deepEqual(driver.versions, [1], 'the nudge rides along with the state write');
+  // It used to ride along here, and against an unreachable host it was 2 seconds of the
+  // measured 6.4 a write paid - a third of the cost, for something its own docstring calls
+  // advisory and that the device re-pulls on its own interval regardless.
+  assert.deepEqual(driver.versions, [], 'the write must not pay for the nudge');
+});
+
+test('the nudge is not dropped, only moved: the supervisor carries it (#68)', async (t) => {
+  // Deliberate, and the coupling is load-bearing: EsphomeTextDriver returns without touching
+  // a socket when the version has not moved, and does NOT cache a version it failed to send.
+  // A supervisor that deduped on its own side would send a failed nudge exactly once and
+  // leave the device on an old table with the server believing it had been told.
+  const driver = new NudgeDriver();
+  const h = await boot(t, { driver, supervise: { pollMs: 5, reassertMs: 1_000_000 } });
+  await waitFor(() => driver.versions.length >= 3, () => JSON.stringify(driver.versions));
+  assert.equal(h.app.store.getTable().version, 1);
 });
 
 test('a table edit nudges immediately, without waiting for the next state write', async (t) => {
@@ -345,11 +363,19 @@ test('a nudge that throws is logged and does not fail the write', async (t) => {
     }
   }
   const lines: string[] = [];
-  const h = await boot(t, { driver: new ThrowingNudge(), log: (l: string) => lines.push(l) });
+  const h = await boot(t, {
+    driver: new ThrowingNudge(),
+    log: (l: string) => lines.push(l),
+    supervise: { pollMs: 5, reassertMs: 1_000_000 },
+  });
   const res = await fetch(`${h.base}/state/on-air`, { method: 'POST' });
-  // The write ALREADY SUCCEEDED by the time the nudge runs. Reporting a failure here
-  // would tell the caller to retry a write that landed.
+  // The write never touches the nudge at all now (#68), so it cannot be failed by one. The
+  // point the original test made still stands and is stronger: a nudge failure is not a
+  // write failure, and telling the caller to retry a write that landed would be worse.
   assert.equal(res.status, 200);
   assert.equal((await json(res)).state, 'on-air');
-  assert.equal(lines.some((l) => l.includes('version nudge failed')), true, lines.join('\n'));
+  await waitFor(
+    () => lines.some((l) => l.includes('setTableVersion') && l.includes('device fell over')),
+    () => lines.join('\n'),
+  );
 });
