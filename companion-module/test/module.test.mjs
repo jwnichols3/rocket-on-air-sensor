@@ -1,4 +1,4 @@
-// Tests for the on-air Companion module (#44).
+// Tests for the on-air Companion module (#44, rebuilt for #72-#76).
 //
 // The module class is exercised DIRECTLY, with the small part of the Companion host surface
 // it touches stubbed out. That is deliberate: `@companion-module/base`'s runEntrypoint wants
@@ -8,16 +8,19 @@
 //
 // What this covers that the live install cannot cover repeatably: preset regeneration when
 // tableVersion moves, which on the real server would mean editing Rocket's live state table
-// for the sake of a test.
+// for the sake of a test - and every failure path in #72-#76, which on the real server would
+// mean unplugging the panel and killing the daemon mid-meeting.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
+import { InstanceStatus } from '@companion-module/base'
 import { startFakeServer } from './fake-server.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+const SRC = join(HERE, '..', 'src', 'index.js')
 
 // Load the module source with runEntrypoint stubbed, and hand back the class.
 //
@@ -28,7 +31,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 let cached
 async function loadInstanceClass() {
 	if (cached) return cached
-	const src = readFileSync(join(HERE, '..', 'src', 'index.js'), 'utf8')
+	const src = readFileSync(SRC, 'utf8')
 	const patched = src.replace(
 		/runEntrypoint\(OnAirInstance, \[\]\)/,
 		'export { OnAirInstance }',
@@ -52,7 +55,7 @@ function makeInstance(OnAir, port, passphrase) {
 	// module's OWN methods are the ones under test - which is the point. Everything the module
 	// calls on the host is stubbed below as an own property.
 	const inst = Object.create(OnAir.prototype)
-	const seen = { presets: {}, actions: {}, feedbacks: {}, variables: {}, status: [], logs: [] }
+	const seen = { presets: {}, actions: {}, feedbacks: {}, variables: {}, status: [], logs: [], repaints: [] }
 
 	inst.setPresetDefinitions = (p) => (seen.presets = p)
 	inst.setActionDefinitions = (a) => (seen.actions = a)
@@ -61,13 +64,25 @@ function makeInstance(OnAir, port, passphrase) {
 	inst.setVariableValues = (v) => Object.assign(seen.variables, v)
 	inst.updateStatus = (s, m) => seen.status.push([s, m])
 	inst.log = (level, msg) => seen.logs.push(`${level}: ${msg}`)
-	inst.checkFeedbacks = () => {}
+	// RECORDED, not swallowed. A no-op stub means every assertion about feedbacks is made by
+	// calling the callback by hand - so the code that asks Companion to REDRAW could be
+	// deleted entirely and the suite would stay green.
+	inst.checkFeedbacks = (...ids) => seen.repaints.push(ids)
 	inst.parseVariablesInString = async (s) => s
 
 	return { inst, seen, config: { host: '127.0.0.1', port: String(port), passphrase } }
 }
 
 const settle = (ms = 250) => new Promise((r) => setTimeout(r, ms))
+
+/// The seed rows the fake server ships, including the reserved row the contract guarantees.
+const SEED = [
+	{ id: 'available', label: 'AVAILABLE', color: '#ffffff', bgcolor: '#0b6e2e', busy: false, order: 0 },
+	{ id: 'on-air', label: 'ON AIR', color: '#ffffff', bgcolor: '#c1121f', busy: true, order: 1 },
+	{ id: 'unknown', label: 'NO DATA', color: '#ff00ff', bgcolor: '#1a1a1a', busy: true, order: 99 },
+]
+
+const UTILITY_PRESETS = ['light', 'pin', 'refresh', 'unpin']
 
 test('generates one preset per row, from the server table', async () => {
 	const OnAir = await loadInstanceClass()
@@ -78,14 +93,22 @@ test('generates one preset per row, from the server table', async () => {
 	await inst.init(config)
 	await settle()
 
-	assert.deepEqual(Object.keys(seen.presets).sort(), ['refresh', 'state_available', 'state_on-air'])
+	assert.deepEqual(
+		Object.keys(seen.presets).sort(),
+		[...UTILITY_PRESETS, 'state_available', 'state_on-air', 'state_unknown'].sort(),
+	)
 
 	// The caption is `label`. There is no `row.text` - looking for one returns undefined, which
 	// is exactly the mistake the ticket warns about.
 	assert.equal(seen.presets['state_on-air'].style.text, 'ON AIR')
-	// Colours copy across verbatim (D-31, D-42). #c1121f -> packed.
-	assert.equal(seen.presets['state_on-air'].style.bgcolor, 0xc1121f)
-	assert.equal(seen.presets['state_on-air'].style.color, 0xffffff)
+	// Colours copy across verbatim (D-31, D-42), on the LIT style. #c1121f -> packed.
+	const lit = seen.presets['state_on-air'].feedbacks.find((f) => f.feedbackId === 'state_is')
+	assert.equal(lit.style.bgcolor, 0xc1121f)
+	assert.equal(lit.style.color, 0xffffff)
+	// And the button at rest is DIMMER than that, or the feedback changes nothing and a deck
+	// of five buttons looks identical whichever row is current.
+	assert.notEqual(seen.presets['state_on-air'].style.bgcolor, lit.style.bgcolor)
+	assert.ok(seen.presets['state_on-air'].style.bgcolor < lit.style.bgcolor)
 
 	await inst.destroy()
 	await fake.close()
@@ -107,6 +130,7 @@ test('preset ids are stable across a table edit, and index never appears', async
 	fake.editTable([
 		{ id: 'on-air', label: 'LIVE NOW', color: '#ffffff', bgcolor: '#c1121f', busy: true, order: 0 },
 		{ id: 'available', label: 'FREE', color: '#ffffff', bgcolor: '#0b6e2e', busy: false, order: 1 },
+		{ id: 'unknown', label: 'NO DATA', color: '#ff00ff', bgcolor: '#1a1a1a', busy: true, order: 99 },
 	])
 	await settle(600)
 
@@ -130,19 +154,21 @@ test('presets regenerate when tableVersion moves, with no restart', async () => 
 
 	await inst.init(config)
 	await settle()
-	assert.equal(Object.keys(seen.presets).length, 3)
+	assert.equal(Object.keys(seen.presets).length, 3 + UTILITY_PRESETS.length)
 
 	// A row the server adds later must arrive on its own - this is the whole point of
 	// generating presets rather than hand-listing them.
 	fake.editTable([
-		{ id: 'available', label: 'AVAILABLE', color: '#ffffff', bgcolor: '#0b6e2e', busy: false, order: 0 },
-		{ id: 'on-air', label: 'ON AIR', color: '#ffffff', bgcolor: '#c1121f', busy: true, order: 1 },
+		...SEED,
 		{ id: 'recording', label: 'RECORDING', color: '#ffffff', bgcolor: '#6a0dad', busy: true, order: 2 },
 	])
 	await settle(600)
 
 	assert.ok(seen.presets['state_recording'], 'the new row should have generated a preset')
-	assert.equal(seen.presets['state_recording'].style.bgcolor, 0x6a0dad)
+	assert.equal(
+		seen.presets['state_recording'].feedbacks.find((f) => f.feedbackId === 'state_is').style.bgcolor,
+		0x6a0dad,
+	)
 	assert.equal(seen.variables.table_version, fake.version)
 
 	await inst.destroy()
@@ -161,8 +187,8 @@ test('the action sets state by row id, and tags itself as companion', async () =
 	await seen.actions.set_state.callback({ options: { state: 'on-air' } })
 	await settle(200)
 
-	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion' })
-	assert.equal(seen.variables.state, 'on-air', 'and the stream carries the change back')
+	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion', hold: null })
+	assert.equal(seen.variables.state, 'on-air', 'and the change comes straight back')
 	assert.equal(seen.variables.busy, 'yes')
 
 	await inst.destroy()
@@ -329,10 +355,11 @@ test('the two thresholds are CONFIGURATION, and are not chained', async () => {
 	await fake.close()
 })
 
-test('BREAKING: `stale` is gone from the variables and the feedbacks, with no alias', async () => {
+test('BREAKING: `stale` is gone from the variables, the feedbacks and the fixture', async () => {
 	// Not renamed and not aliased. A variable that silently resolves to nothing on a stream
 	// deck is worse than one that is loudly absent, and an alias beside the real thing is a
-	// decoy the next layout keys on (D-83).
+	// decoy the next layout keys on (D-83). #72 found the last copy of it hiding in the fake
+	// server, which is the fixture every other test in this file trusts.
 	const OnAir = await loadInstanceClass()
 	const fake = startFakeServer()
 	const port = await fake.listen()
@@ -345,6 +372,7 @@ test('BREAKING: `stale` is gone from the variables and the feedbacks, with no al
 	assert.equal('stale' in seen.feedbacks, false)
 	assert.equal(inst.buildVariables().some((v) => v.variableId === 'stale'), false)
 	assert.equal(seen.variables.connection !== undefined, true, 'and it is replaced, not just removed')
+	assert.equal('stale' in fake.status(), false, 'the fixture must not carry it either')
 
 	await inst.destroy()
 	await fake.close()
@@ -378,7 +406,793 @@ test('no passphrase is a config problem, and nothing is attempted', async () => 
 	await settle(200)
 
 	assert.ok(seen.status.some(([, m]) => /passphrase required/.test(String(m))))
-	assert.equal(fake.writes.length, 0)
+	// EVERY request, not just writes: `writes` only records POST /state, so a module that
+	// happily polled /status without a passphrase would have passed this.
+	assert.deepEqual(fake.requests, [], `expected no requests at all, got ${fake.requests.join(', ')}`)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+// ---------------------------------------------------------------------------------------
+// #72 - the poll is the correctness path, the stream is the fast path.
+
+test('#72 a cold read: the state is published from the poll, with no stream at all', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	fake.setEventsAvailable(false)
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle(300)
+
+	assert.equal(seen.variables.state, 'available', 'the poll alone must produce a correct state')
+	assert.equal(seen.variables.connection, 'ok')
+	assert.equal(seen.feedbacks.no_data.callback({}), false)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#72 the poll keeps the state fresh while the stream is down', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	fake.setEventsAvailable(false)
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, poll_ms: '200' })
+	await settle(200)
+
+	// Move the server's state by a route the module is not watching, so only the poll can
+	// find it. `writes` stays empty: this change did not come from the module.
+	const before = fake.writes.length
+	fake.editTable(SEED)
+	await new Promise((r) => setTimeout(r, 50))
+	await fetch(`http://127.0.0.1:${port}/state/on-air?source=human:elsewhere`, {
+		method: 'POST',
+		headers: { Authorization: 'Bearer test-pass' },
+	})
+	await settle(600)
+
+	assert.equal(seen.variables.state, 'on-air', 'the backstop poll must have found it')
+	assert.equal(fake.writes.length, before + 1, 'and the module wrote nothing itself')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#72 a stream that is open but SILENT is reconnected by the watchdog', async () => {
+	// The failure the server's 15 s keep-alive exists to expose, and the one the module used
+	// to sit through forever: the socket is open, nothing is coming, and no error ever fires.
+	// The threshold is configuration, so the test uses a short one rather than waiting 45 s.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, stream_watchdog_ms: '300', poll_ms: '30000' })
+	await settle(300)
+	const first = fake.eventsConnections
+	assert.equal(first, 1, 'one connection to begin with')
+
+	// The fake server says nothing further unless asked, which is exactly the fault.
+	await settle(2500)
+
+	assert.ok(
+		fake.eventsConnections > first,
+		`the watchdog must reconnect; connections stayed at ${fake.eventsConnections}`,
+	)
+	assert.ok(
+		seen.logs.some((l) => /stream silent/.test(l)),
+		'and it must say why',
+	)
+	assert.equal(seen.variables.state, 'available', 'and republish a correct state after reconnecting')
+	assert.equal(seen.variables.connection, 'ok')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#72 the instance status tracks the module\'s own three conditions', async () => {
+	// Before this, Ok was set once when the stream connected and never revisited: the
+	// connection light stayed green while the deck was showing NO DATA.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, poll_ms: '30000' })
+	await settle(300)
+	assert.equal(seen.status.at(-1)[0], InstanceStatus.Ok)
+
+	inst.lastContactAt = Date.now() - 61_000
+	inst.tick()
+	assert.equal(seen.status.at(-1)[0], InstanceStatus.UnknownWarning)
+	assert.match(String(seen.status.at(-1)[1]), /not refreshing/)
+
+	inst.lastContactAt = Date.now() - 1_801_000
+	inst.tick()
+	assert.equal(seen.status.at(-1)[0], InstanceStatus.ConnectionFailure)
+	assert.match(String(seen.status.at(-1)[1]), /no data/)
+
+	inst.lastContactAt = Date.now()
+	inst.tick()
+	assert.equal(seen.status.at(-1)[0], InstanceStatus.Ok, 'and it recovers without operator action')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+// ---------------------------------------------------------------------------------------
+// #73 - `hold` is first-class, and a press that drops a pin says so.
+
+test('#73 set_state maps leave / pin / release onto the contract\'s hold parameter', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
+	await settle(150)
+	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion', hold: null })
+
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'pin' } })
+	await settle(150)
+	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion', hold: '1' })
+
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'release' } })
+	await settle(150)
+	assert.deepEqual(fake.writes.at(-1), { id: 'on-air', source: 'companion', hold: '0' })
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#73 release_hold clears the pin without moving the light, read back from the server', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'pin' } })
+	await settle(150)
+	assert.equal(fake.hold, 'on-air')
+	assert.equal(seen.variables.hold, 'on-air')
+	assert.equal(seen.variables.hold_label, 'ON AIR')
+
+	await seen.actions.release_hold.callback({})
+	await settle(150)
+
+	// Read the SERVER back, not the request: the criterion is that the pin is actually gone.
+	assert.equal(fake.hold, null, 'the pin must be released on the server')
+	assert.equal(fake.status().state, 'on-air', 'and releasing must not move the state')
+	assert.equal(seen.variables.hold, '')
+	assert.equal(seen.variables.hold_label, '')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#73 pin_current_state pins whatever is showing', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	await seen.actions.pin_current_state.callback({})
+	await settle(150)
+
+	assert.deepEqual(fake.writes.at(-1), { id: 'available', source: 'companion', hold: '1' })
+	assert.equal(fake.hold, 'available')
+	assert.equal(seen.feedbacks.held.callback({}), true)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#73 held_to_this_state is true only for the pinned row', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	assert.equal(seen.feedbacks.held.callback({}), false, 'nothing is pinned to start with')
+
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'pin' } })
+	await settle(150)
+
+	assert.equal(seen.feedbacks.held_to_this_state.callback({ options: { state: 'on-air' } }), true)
+	for (const row of SEED.filter((r) => r.id !== 'on-air')) {
+		assert.equal(
+			seen.feedbacks.held_to_this_state.callback({ options: { state: row.id } }),
+			false,
+			`${row.id} is not the pinned row`,
+		)
+	}
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#73 THE REGRESSION: a press that releases someone else\'s pin must not be silent', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	// A human pinned `available` from somewhere else - the menu bar, the admin console.
+	await seen.actions.set_state.callback({ options: { state: 'available', hold: 'pin' } })
+	await settle(150)
+	assert.equal(fake.hold, 'available')
+
+	// Now an ordinary state button is pressed. The server WILL drop the pin: a human write
+	// naming another state releases it, and `?source=companion` is a human. That rule is
+	// correct; the module going quiet about it was the defect.
+	const before = seen.logs.length
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
+	await settle(150)
+
+	const warned = seen.logs.slice(before).find((l) => /releases the hold on "available"/.test(l))
+	assert.ok(warned, `expected a warning naming the released hold, got ${JSON.stringify(seen.logs.slice(before))}`)
+	assert.equal(fake.hold, null, 'and the release really did happen')
+	assert.equal(seen.variables.hold, '', 'which the variable reports at once')
+	assert.equal(seen.feedbacks.held.callback({}), false)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#73 hold and hold_label are empty when nothing is pinned', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	assert.equal(seen.variables.hold, '')
+	assert.equal(seen.variables.hold_label, '')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+// ---------------------------------------------------------------------------------------
+// #74 - `confirmed` is evidence about the light, and it gets two feedbacks because it
+// describes two different faults.
+
+test('#74 confirmed unknown is "not confirming", not "disagrees"', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	fake.setConfirmed('unknown')
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	assert.equal(seen.feedbacks.light_not_confirming.callback({}), true)
+	assert.equal(seen.feedbacks.light_disagrees.callback({}), false)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#74 a light holding another row is "disagrees", not "not confirming"', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	fake.setConfirmed('available')
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	await seen.actions.set_state.callback({ options: { state: 'on-air' } })
+	await settle(150)
+
+	assert.equal(seen.variables.state, 'on-air')
+	assert.equal(seen.variables.confirmed, 'available')
+	assert.equal(seen.feedbacks.light_disagrees.callback({}), true)
+	assert.equal(seen.feedbacks.light_not_confirming.callback({}), false)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#74 an agreeing light lights neither feedback', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	assert.equal(seen.variables.state, seen.variables.confirmed)
+	assert.equal(seen.feedbacks.light_not_confirming.callback({}), false)
+	assert.equal(seen.feedbacks.light_disagrees.callback({}), false)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#74 a write publishes from the RESPONSE, with no stream event delivered', async () => {
+	// The server answers a write with the full status body, after the write and after the
+	// light attempt. With the stream unavailable and the poll parked far away, the only place
+	// these values can have come from is that response.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	fake.setEventsAvailable(false)
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, poll_ms: '60000' })
+	await settle(300)
+	assert.equal(seen.variables.state, 'available')
+
+	fake.setConfirmed('unknown')
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'pin' } })
+	await settle(150)
+
+	assert.equal(seen.variables.state, 'on-air')
+	assert.equal(seen.variables.confirmed, 'unknown', 'confirmed came from the write response')
+	assert.equal(seen.variables.hold, 'on-air', 'and so did hold')
+	assert.equal(seen.variables.source, 'human:companion', 'and so did source')
+	assert.equal(seen.feedbacks.light_not_confirming.callback({}), true)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#74 the four "something is off" feedbacks have four distinct default styles', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	const family = ['connection_lost', 'no_data', 'light_not_confirming', 'light_disagrees']
+	const styles = family.map((id) => {
+		const s = seen.feedbacks[id].defaultStyle
+		assert.ok(s, `${id} needs a default style`)
+		return `${s.color}/${s.bgcolor}`
+	})
+	assert.equal(new Set(styles).size, family.length, `four faults need four looks, got ${styles.join(' ')}`)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+// ---------------------------------------------------------------------------------------
+// #75 - the generated presets carry the marks, and the reserved row's look is the owner's.
+
+test('#75 every generated state preset carries the connection marks, marks last', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	for (const row of SEED) {
+		const preset = seen.presets[`state_${row.id}`]
+		assert.ok(preset, `${row.id} must have a preset`)
+		const ids = preset.feedbacks.map((f) => f.feedbackId)
+		assert.ok(ids.includes('state_is'), `${row.id} keeps its state feedback`)
+		// The three #75 names, in #75's order. Later feedbacks win in Companion, so the marks
+		// must sit after the row's own colours - a deck that goes quiet during an outage is
+		// the defect this closes.
+		assert.deepEqual(
+			ids.filter((id) => ['state_is', 'connection_lost', 'no_data'].includes(id)),
+			['state_is', 'connection_lost', 'no_data'],
+			`${row.id}: marks must come after the state, in order`,
+		)
+		assert.equal(ids.at(-1), 'no_data', `${row.id}: nothing may paint over NO DATA`)
+	}
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#75 the reserved row\'s label and colours come from the table, not from a literal', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	// The owner relabels and recolours the reserved row, which section 1 explicitly allows.
+	fake.editTable([
+		SEED[0],
+		SEED[1],
+		{ id: 'unknown', label: 'SERVER GONE', color: '#00ff00', bgcolor: '#123456', busy: true, order: 99 },
+	])
+	await settle(600)
+
+	inst.lastContactAt = Date.now() - 1_801_000
+	inst.publishVariables()
+
+	assert.equal(inst.view().label, 'SERVER GONE', 'view() must read the row')
+	assert.equal(seen.variables.label, 'SERVER GONE')
+	assert.equal(seen.feedbacks.no_data.defaultStyle.color, 0x00ff00)
+	assert.equal(seen.feedbacks.no_data.defaultStyle.bgcolor, 0x123456)
+
+	const mark = seen.presets['state_on-air'].feedbacks.find((f) => f.feedbackId === 'no_data')
+	assert.equal(mark.style.color, 0x00ff00, 'and so must the mark on every generated preset')
+	assert.equal(mark.style.bgcolor, 0x123456)
+	assert.equal(mark.style.text, 'SERVER GONE')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#75 no hardcoded reserved-row presentation, and no v1 label residue, in the source', async () => {
+	const src = readFileSync(SRC, 'utf8')
+	assert.equal(/255,\s*0,\s*255/.test(src), false, 'the magenta literal must be gone')
+	assert.equal(/\bs\.label\b/.test(src), false, 'presentation left the state payload in D-42')
+})
+
+// ---------------------------------------------------------------------------------------
+// #76 - a slow write is not a failed write.
+
+test('#76 the default write timeout clears the measured worst case from #68', async () => {
+	const OnAir = await loadInstanceClass()
+	const inst = Object.create(OnAir.prototype)
+	const field = inst.getConfigFields().find((f) => f.id === 'write_timeout_ms')
+	assert.ok(field, 'the timeout must be configuration, not a constant')
+	// #68 measured 6.4 s on POST /state/{id} and 13.2 s on PUT /state, both SUCCEEDING,
+	// against a panel that was powered off.
+	assert.ok(Number(field.default) >= 13_200, `default ${field.default} must clear #68's 13.2 s`)
+	const help = inst.getConfigFields().find((f) => f.id === 'write-intro')
+	assert.match(String(help.value), /13\.2 s/, 'and the field must say where the number comes from')
+})
+
+test('#76 a write slower than the old 5 s ceiling completes and is NOT a failure', async () => {
+	// The proportions of #68, scaled so the suite does not spend half a minute asleep: the
+	// server answers well past the timeout that used to be hardcoded, and inside the one
+	// configured here. Before this ticket the action aborted, logged a failure, and dropped
+	// the whole instance to ConnectionFailure - while the state was live on the server.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, write_timeout_ms: '6000', poll_ms: '30000' })
+	await settle(300)
+	const statusesBefore = seen.status.length
+
+	fake.setWriteDelay(1500)
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
+
+	assert.equal(seen.variables.state, 'on-air', 'the action must wait for the answer and publish it')
+	assert.equal(
+		seen.status.slice(statusesBefore).some(([s]) => s === InstanceStatus.ConnectionFailure),
+		false,
+		'a slow write is not a connection failure',
+	)
+	assert.equal(seen.logs.some((l) => /^error: set state/.test(l)), false, 'and it is not an error')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#76 a write that runs out of time is an UNKNOWN outcome, and the module recovers', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, write_timeout_ms: '1000', poll_ms: '30000' })
+	await settle(300)
+	const statusesBefore = seen.status.length
+
+	fake.setWriteDelay(2500)
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
+
+	const note = seen.logs.find((l) => /no answer within 1000 ms/.test(l))
+	assert.ok(note, `expected an unknown-outcome note, got ${JSON.stringify(seen.logs.slice(-3))}`)
+	assert.match(note, /^warn:/, 'unknown is a warning, not an error')
+	assert.match(note, /may still have\s+succeeded/, 'and it must say so - #68 measured two that did')
+	assert.equal(
+		seen.status.slice(statusesBefore).some(([s]) => s === InstanceStatus.ConnectionFailure),
+		false,
+		'and it must not drop the instance',
+	)
+	assert.equal(seen.logs.filter((l) => /set state "on-air"/.test(l)).length, 1, 'and it must not retry')
+
+	// The server did take the write. The next poll settles it, with no operator action.
+	assert.equal(fake.status().state, 'on-air')
+	assert.equal(await inst.poll(), true)
+	assert.equal(seen.variables.state, 'on-air')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+// ---------------------------------------------------------------------------------------
+// What the adversarial review found. Each of these fails against the code as it was.
+
+test('REGRESSION: releasing a pin must not move the light off a busy state', async () => {
+	// THE FALSE OFF, and the contract's own worked example (section 3, PIN RULE, bullet 1).
+	// Rocket pins `interruptible` (calm). A call starts and the detector escalates to `on-air`
+	// - the carve-out allows it and the pin SURVIVES, so now state !== hold. Mid-call he
+	// presses UNPIN.
+	//
+	// Writing the HELD row there drives the lamp from ON AIR to INTERRUPTIBLE while the camera
+	// is live. That is the exact failure this whole system exists to prevent, reachable with
+	// one press of a shipped preset.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	// Pin the calm row, then let something else escalate to the busy one.
+	await seen.actions.set_state.callback({ options: { state: 'available', hold: 'pin' } })
+	await settle(150)
+	fake.setState('on-air')
+	await settle(150)
+
+	assert.equal(fake.status().state, 'on-air', 'mid-call: the busy row is live')
+	assert.equal(fake.hold, 'available', 'and the calm row is still pinned')
+	assert.equal(seen.variables.busy, 'yes')
+
+	await seen.actions.release_hold.callback({})
+	await settle(200)
+
+	assert.equal(fake.hold, null, 'the pin is released')
+	assert.equal(fake.status().state, 'on-air', 'AND THE LIGHT DOES NOT MOVE')
+	assert.equal(fake.status().busy, true, 'it is still busy - no false OFF')
+	assert.equal(seen.variables.busy, 'yes')
+	assert.equal(fake.writes.at(-1).id, 'on-air', 'it writes the CURRENT row, not the held one')
+	assert.equal(fake.writes.at(-1).hold, '0')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('release_hold and pin refuse to write when the module has given the state up', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, poll_ms: '30000' })
+	await settle()
+	await seen.actions.set_state.callback({ options: { state: 'available', hold: 'pin' } })
+	await settle(150)
+
+	const before = fake.writes.length
+	inst.lastContactAt = Date.now() - 1_801_000
+
+	await seen.actions.release_hold.callback({})
+	await seen.actions.pin_current_state.callback({})
+	await settle(150)
+
+	// Pinning here would freeze every renderer on the reserved row; releasing would write a
+	// state nobody has confirmed in half an hour.
+	assert.equal(fake.writes.length, before, 'no state may be written on half-hour-old evidence')
+	assert.ok(seen.logs.some((l) => /refusing to pin/.test(l)))
+	assert.ok(seen.logs.some((l) => /refusing to write/.test(l)))
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('a row the module has no entry for draws the RESERVED appearance, never nothing', async () => {
+	// Contract section 6: "It must never silently drop it - a state that degrades to nothing
+	// looks exactly like a calm one."
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, poll_ms: '30000' })
+	await settle()
+
+	// A state id that is not in the table this module holds.
+	inst.current = { ...inst.current, state: 'invented-tomorrow', busy: true }
+	inst.publishVariables()
+
+	assert.equal(seen.variables.label, 'NO DATA', 'the reserved row lends its appearance')
+	assert.notEqual(seen.variables.label, '', 'and it is never blank')
+	assert.equal(seen.variables.state, 'invented-tomorrow', 'while the id itself is reported honestly')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('configUpdated forgets the previous server and republishes at once', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	// Start against a wrong passphrase, so a fault is latched on the connection light.
+	await inst.init({ ...config, passphrase: 'wrong', poll_ms: '30000' })
+	await settle(300)
+	assert.ok(seen.status.some(([s]) => String(s).toLowerCase().includes('auth')))
+
+	// Now fix it. The fault must clear rather than sticking on a suppressed duplicate.
+	await inst.configUpdated({ ...config, passphrase: 'test-pass', poll_ms: '30000' })
+	await settle(300)
+
+	assert.equal(seen.status.at(-1)[0], InstanceStatus.Ok, `stale fault stuck: ${JSON.stringify(seen.status.at(-1))}`)
+	assert.equal(seen.variables.state, 'available')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('repointed at an unreachable host, it does not report the OLD server\'s state as current', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, poll_ms: '30000' })
+	await settle()
+	assert.equal(seen.variables.connection, 'ok')
+	assert.equal(seen.variables.state, 'available')
+
+	// A port nothing is listening on. Carrying the old box's state across would show one
+	// server's answer as though the new one had given it, with every threshold reading healthy.
+	await inst.configUpdated({ ...config, port: '1', poll_ms: '30000' })
+	await settle(300)
+
+	assert.equal(seen.variables.connection, 'no data', 'it must fail CLOSED, not inherit')
+	assert.equal(seen.variables.busy, 'yes', 'and land conspicuous, never calm')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('the module asks Companion to REDRAW, it does not just hold correct values', async () => {
+	// Every other feedback assertion in this file calls the callback by hand. Without this,
+	// deleting every checkFeedbacks() call would leave the suite green and the deck frozen.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, poll_ms: '30000' })
+	await settle()
+	assert.ok(seen.repaints.length > 0, 'a status must trigger a repaint')
+	assert.ok(seen.repaints.some((ids) => ids.includes('state_is')))
+
+	// And a threshold crossing, which no payload announces.
+	seen.repaints.length = 0
+	inst.lastContactAt = Date.now() - 61_000
+	inst.tick()
+	assert.ok(seen.repaints.length > 0, 'crossing a threshold must repaint too')
+	assert.ok(seen.repaints.some((ids) => ids.includes('connection_lost')))
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('tick() alone carries the display across both thresholds', async () => {
+	// The threshold tests elsewhere call publishVariables() by hand, which proves view() and
+	// not the timer that has to call it.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, poll_ms: '30000' })
+	await settle()
+
+	inst.lastContactAt = Date.now() - 61_000
+	inst.tick()
+	assert.equal(seen.variables.connection, 'not refreshing')
+
+	inst.lastContactAt = Date.now() - 1_801_000
+	inst.tick()
+	assert.equal(seen.variables.connection, 'no data')
+	assert.equal(seen.variables.busy, 'yes')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#72 a stream that is QUIET BUT ALIVE is left alone', async () => {
+	// The other half of the watchdog, and the one that matters for not thrashing a healthy
+	// server: the real hub sends a keep-alive every 15 s precisely so a client can tell the
+	// difference between a silent stream and a dead one.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, stream_watchdog_ms: '1200', poll_ms: '30000' })
+	await settle(300)
+	fake.startKeepAlive(300)
+	const first = fake.eventsConnections
+
+	await settle(2500)
+
+	assert.equal(fake.eventsConnections, first, 'a keep-alive must satisfy the watchdog')
+	assert.equal(seen.logs.some((l) => /stream silent/.test(l)), false)
+	assert.equal(seen.variables.connection, 'ok')
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#76 a write slower than the OLD 5 s ceiling still completes and is not a failure', async () => {
+	// Above the 5000 that used to be hardcoded, so this exercises the actual regression rather
+	// than a scaled-down analogue of it. #68 measured 6.4 s and 13.2 s, both succeeding.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init({ ...config, write_timeout_ms: '15000', poll_ms: '30000' })
+	await settle(300)
+	const statusesBefore = seen.status.length
+
+	fake.setWriteDelay(6500)
+	await seen.actions.set_state.callback({ options: { state: 'on-air', hold: 'leave' } })
+
+	assert.equal(seen.variables.state, 'on-air', 'a 6.5 s write is a write')
+	assert.equal(
+		seen.status.slice(statusesBefore).some(([s]) => s === InstanceStatus.ConnectionFailure),
+		false,
+	)
+	assert.equal(seen.logs.some((l) => /^error: set state/.test(l)), false)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('button captions carry real line breaks, not a literal backslash-n', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	// `parseEscapeCharacters` in @companion-module/base is documented as applying to action
+	// and feedback OPTION values, not to preset button text - so a literal \n here draws as
+	// the two characters. A real newline is a line break under any reading.
+	const captions = [
+		seen.presets.refresh.style.text,
+		seen.presets.light.style.text,
+		...seen.presets.light.feedbacks.map((f) => f.style.text),
+		seen.presets['state_on-air'].feedbacks.find((f) => f.feedbackId === 'held_to_this_state').style.text,
+	]
+	for (const c of captions) {
+		assert.equal(/\\n/.test(c), false, `literal backslash-n in ${JSON.stringify(c)}`)
+		assert.ok(c.includes('\n'), `expected a real newline in ${JSON.stringify(c)}`)
+	}
 
 	await inst.destroy()
 	await fake.close()

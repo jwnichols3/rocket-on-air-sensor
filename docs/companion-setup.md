@@ -16,34 +16,30 @@ the server's own table. Drag them onto a Stream Deck and they already carry the 
 caption and the right colours, because both come from `GET /config/states`. Add a state on
 the server and its button appears - no Companion restart, no re-wiring.
 
-## Build and install
+## Build and package
 
 ```sh
-npm run build --workspace companion-module
+npm run package --workspace companion-module
 ```
 
-That produces `companion-module/dist/`, which is the module: one bundled `main.js`, a
-`package.json`, and `companion/manifest.json`.
-
-Package it and install it. **Both of these details matter and neither is obvious:**
-
-```sh
-cd companion-module
-rm -rf /tmp/onair-stage && mkdir -p /tmp/onair-stage
-cp -R dist /tmp/onair-stage/rocket-onair
-COPYFILE_DISABLE=1 tar -czf /tmp/rocket-onair.tgz -C /tmp/onair-stage rocket-onair
-```
+That bundles `companion-module/dist/` and writes the sideload tarball to
+`companion-module/pkg/rocket-onair-<version>.tgz`. **Use this rather than running `tar`
+yourself.** Two details break the import, neither of them looks like a packaging problem, and
+both were measured rather than guessed - the script sets them and then checks the tarball to
+prove it:
 
 - **`COPYFILE_DISABLE=1` is required on macOS.** Without it `tar` writes AppleDouble
   `._*` entries, and the first of them is `._.` - a file with ONE path component. Companion
   extracts with `strip: 1` and no ignore filter, so that name strips to nothing and the
-  install dies with `EISDIR` pointing at the module directory. Measured, not guessed.
+  install dies with `EISDIR` pointing at the module directory.
 - **The tarball needs a real top-level directory** (`rocket-onair`), not `.`, and it must
   contain the directory entries. Companion finds the manifest by taking the first
   DIRECTORY entry as the prefix to trim; with no directory entries it never finds
   `companion/manifest.json` and reports "Doesn't look like a valid module".
 
-Then in Companion: **Modules -> Import custom module**, and choose the `.tgz`.
+## Install it in Companion
+
+**Modules -> Import custom module**, and choose the `.tgz`.
 
 Importing custom modules is only permitted from the local machine, so do it from a browser
 on the Companion host, or over an SSH tunnel:
@@ -52,15 +48,29 @@ on the Companion host, or over an SSH tunnel:
 ssh -f -N -L 18000:127.0.0.1:8000 john@<companion-host>
 ```
 
+Then open `http://127.0.0.1:18000` and import there.
+
+**Upgrading an existing install** is the same import: Companion replaces the module in place
+and restarts the connection. Buttons already on a surface keep working - preset ids are keyed
+on the immutable row `id` (D-31), so nothing on the deck is re-bound. What you gain after an
+upgrade are the new actions and feedbacks; **buttons placed before the upgrade do not
+retroactively gain the new connection marks**, because a placed button is a one-time copy of
+the preset. Re-drag a state preset if you want the marks on an old button.
+
 ## Configure the connection
 
 Add a connection of type **rocket-onair** and set:
 
-| Field | Value |
-|---|---|
-| Host | the on-air server, e.g. `rocket-studio-m1.local` |
-| Port | `8484` |
-| Passphrase | from `~/.onair/config.json`, under `auth.passphrase` |
+| Field | Default | Value |
+|---|---|---|
+| Host | `localhost` | the on-air server, e.g. `rocket-studio-m1.local` |
+| Port | `8484` | |
+| Passphrase | - | from `~/.onair/config.json`, under `auth.passphrase` |
+| Say "not refreshing" after | `60000` ms | see **Losing the server** |
+| Give the state up after | `1800000` ms | see **Losing the server** |
+| Poll `GET /status` every | `1000` ms | the contract's cadence (range 250..60000) |
+| Reconnect a silent stream after | `45000` ms | three of the server's 15 s keep-alives |
+| Give a write up after | `20000` ms | see **Slow writes are not failed writes** |
 
 **The passphrase is required, not optional.** This module holds a state table, and
 `docs/api-contract.md` is explicit that a table-holder reads the gated endpoints rather than
@@ -73,27 +83,86 @@ The easiest place to read the passphrase is the admin console at `http://<host>:
 
 ## What you get
 
-**Presets**, under the category **States** - one per row, captioned with the row's `label`
-and coloured with its `color` on `bgcolor`, verbatim. Plus a **Refresh table** utility button.
+**Presets**, under **States** - one per row, captioned with the row's `label` and coloured
+with its `color` on `bgcolor`, verbatim. Each one ships with the connection marks already
+attached, so a deck straight out of the box meets the client contract without hand-wiring.
+
+Under **Utility**: **Pin**, **Unpin**, **Light health** and **Refresh table**.
 
 **Actions**
 
 | Action | What it does |
 |---|---|
-| Set state | `POST /state/{id}?source=companion`. The dropdown is the live table; a custom value is allowed |
+| Set state | `POST /state/{id}?source=companion`. The dropdown is the live table; a custom value is allowed. The **Hold** option is `leave` (default), `pin` (`&hold=1`) or `release` (`&hold=0`) |
+| Pin the current state (hold) | pins whatever is showing |
+| Release the hold | writes the **current** row with `&hold=0`, so the pin goes and the light does not move |
 | Refresh the state table now | re-reads `GET /config/states` |
 
 **Feedbacks**
 
-| Feedback | True when |
-|---|---|
-| State is | the light is showing that state |
-| Busy | the current row is busy. This is the server's own flag, not a colour test - THE BUSY RULE (D-32) is what it means |
-| Not refreshing | the server has not answered for longer than the configured window. The state shown is the last one it reported, not a current reading |
-| No data | the server has been silent long enough that the module has given the state up entirely |
+| Feedback | True when | Default look |
+|---|---|---|
+| State is | the light is showing that state | white on red |
+| Busy | the current row is busy. The server's own flag, not a colour test - THE BUSY RULE (D-32) is what it means | white on red |
+| Not refreshing | the server has not answered for longer than the configured window. The state shown is the last one it reported | **black on amber** |
+| No data | the server has been silent long enough that the module has given the state up | **the reserved row's own colours**, as you set them |
+| Light not confirming | `confirmed` reads `unknown`: the panel is unreachable or frozen. The server admitting ignorance, not a claim the light is wrong | **white on navy** |
+| Light disagrees | the light acknowledges a row the server did not ask for | **black on white** |
+| A hold is in force | any row is pinned | black on pale blue |
+| Held to this state | the hold pins the row this button sets | black on pale blue |
 
-**Variables**: `state`, `label`, `busy`, `confirmed`, `hold`, `source`, `connection`,
-`seconds_since_contact`, `age_seconds`, `table_version`.
+The middle four are the "something is off" family and they have **four deliberately distinct
+looks**. An operator who cannot tell them apart at a glance has four feedbacks that mean one
+thing - and they have four different fixes: wait, restart the server, check the panel's power,
+check who else is writing to the panel.
+
+**Variables**: `state`, `label`, `busy`, `confirmed`, `hold`, `hold_label`, `source`,
+`connection`, `seconds_since_contact`, `age_seconds`, `table_version`.
+
+## Holds, and the press that used to drop one in silence
+
+A **hold** pins the state (contract section 3). Only a `human:` source may set or clear one,
+and this module writes `?source=companion`, which the server normalises to `human:companion`.
+
+That has a consequence worth stating plainly: **a plain state press releases a pin.** Section
+3's PIN RULE says a human write naming a state other than the held one clears the hold, and a
+thumb on a Stream Deck key IS a human. The rule is right. What was wrong, until #73, was that
+the module did it without a word.
+
+Now it logs the release by name before it happens:
+
+```
+set state "on-air" releases the hold on "available" - a human write naming another state
+clears the pin (contract section 3). Use the Hold option if that was not intended.
+```
+
+Calling Companion presses `auto:` to dodge the rule was considered and rejected: it would make
+`source` lie about who wrote, and `source` is wire contract precisely because the detector is
+external (D-30).
+
+**Reading the pin on the surface:** put **Held to this state** on your state buttons (the
+generated presets already carry it - a pinned row's caption gains a `PIN` line) or **A hold
+is in force** on the Pin/Unpin pair.
+
+## Slow writes are not failed writes
+
+A state write drives the physical light before it answers. Issue #68 measured, against a panel
+that was powered off, `POST /state/{id}` blocking for **6.4 s** and `PUT /state` for
+**13.2 s** - and **both writes succeeded**. The module's old 5 s ceiling turned those into a
+red instance and a "set state failed" log while the state was live on the server.
+
+The default is now **20 s**, which clears the measured worst case with margin, and it is a
+config field for anyone on a slower link. A write that runs out of time is reported as an
+**unknown outcome**, not a failure:
+
+```
+set state "on-air": no answer within 20000 ms. The write may still have succeeded - the
+next poll will say. Not retrying: the server latches.
+```
+
+It does not retry. The write may well have landed - both of #68's did - and a second write
+against a latching server buys nothing. Section 7 of the contract: clients that care check
+`confirmed`, not the status code.
 
 ## ⚠️ BREAKING CHANGE: `stale` is gone
 
@@ -125,8 +194,8 @@ the second is not counted from the first.
 
 | Setting | Default | What happens |
 |---|---|---|
-| Say "not refreshing" after | 60000 ms | The last known state is still shown. `Not refreshing` goes true. |
-| Give the state up after | 1800000 ms | `state` becomes `unknown`, `label` becomes `NO DATA`, `No data` goes true. |
+| Say "not refreshing" after | 60000 ms | The last known state is still shown. `Not refreshing` goes true. Companion's own connection light goes **amber**. |
+| Give the state up after | 1800000 ms | `state` becomes the reserved row, `No data` goes true, and the connection light goes **red**. |
 
 Thirty minutes is deliberate: a meeting runs about that long, so the state has to survive a
 server restart without the buttons going dark mid-call. One minute is also deliberate - the
@@ -137,10 +206,34 @@ honesty costs nothing and should arrive immediately.
 rather than a calm one. A stream deck going dark because the server died would be a false OFF
 on a physical control, which is the exact failure this product exists to prevent.
 
+**The reserved row's label and colours are yours.** Relabel `unknown` to `SERVER GONE` in the
+admin console and the Stream Deck says SERVER GONE, in the colours you picked. Nothing about
+that row's appearance is hardcoded in the module any more (#75).
+
+## Poll, stream and recovery
+
+**The poll is the correctness path; the stream is the fast path.** The module polls
+`GET /status` on the contract's cadence and holds an SSE connection to `GET /events` at the
+same time. The stream is why a Stream Deck reacts instantly; the poll is why the deck is
+right.
+
+Three things follow, and all three were missing before #72:
+
+- **A cold read on startup.** The deck shows the state as soon as the connection comes up,
+  rather than waiting for the server's next state change - which on a quiet afternoon could
+  be hours.
+- **A silent stream gets reconnected.** The server sends a keep-alive every 15 s "so a client
+  can detect a dead stream". A socket that is open and delivering nothing throws no error and
+  used to freeze the module until the OS gave up on it. The watchdog aborts and reconnects
+  after three missed keep-alives.
+- **Recovery needs no operator.** When the server comes back the poll finds it, the marks
+  clear, and the connection light goes green again. Nobody has to reload the instance.
+
 ## Things worth knowing
 
 - **Presets regenerate when the table changes.** The module watches `tableVersion` on the
-  status stream; when it moves it re-reads the table and re-publishes definitions. No restart.
+  status stream and on every poll; when it moves it re-reads the table and re-publishes
+  definitions. No restart.
 - **A placed button is a one-time copy in Companion 5.0.x.** It keeps the preset id it was
   created with, which is why preset ids are keyed on the immutable row id (D-31) and never on
   an index (D-34). A button survives rows being renamed or reordered.
@@ -151,6 +244,9 @@ on a physical control, which is the exact failure this product exists to prevent
   manifest declares `1.14.0`, which this Companion implements. Do not "fix" it to the base
   package's version - `2.1.3` asks for an API newer than Companion 5.0.3 has, and the module
   will not load.
+- **There are no panel night/wake buttons.** Tickets #85 and #86 would add them, and #85 is
+  explicitly not to be built without Rocket's yes - the module never addresses the panel
+  directly, so it needs a server relay first.
 
 ---
 
@@ -213,3 +309,9 @@ Add the internal feedback **Variable: Check value**, with:
 
 The fallback hard-codes two states. It cannot show you `interruptible` or `recording`, it
 does not know a row's colours, and every state you add on the server needs hand-wiring here.
+
+It is also **not a renderer that meets the client contract**, and cannot be made into one. It
+holds no clock of its own, so it cannot mark the display as no longer refreshing at one minute
+and give the state up at thirty; it reads `intended` off a socket and shows whatever arrived
+last, forever. A `generic-websocket` button on a dead server is calm and confident, which is
+the exact failure mode section 3 exists to prevent. Use it to get going, not to go on air.

@@ -43,3 +43,4 @@ server/public/admin/index.html
 .playwright-mcp/
 companion-module/test/.instance.generated.mjs
 companion-module/dist/
+companion-module/pkg/

@@ -4117,3 +4117,223 @@ else (state, light control, API) lives on the receiver.
   **The typecheck caught what the test run did not.** The new test passed under `tsx`, which
   strips types, and `tsc --noEmit` rejected the `setInterval` stub cast. Running a test is not
   the same as running the gate.
+
+- **D-119 (2026-08-29)** **The Companion module polls, and the poll is the correctness path
+  while the stream is only the speed path.**
+
+  The module had no `GET /status` call anywhere in it. Its whole knowledge of the world came
+  from the SSE stream, which the contract is explicit is "an optimisation, never a delivery
+  guarantee" - so the one renderer in this system that was not implementing section 3's client
+  contract was the one on the physical control surface.
+
+  Three faults, all measured in the source before any change:
+
+  - **A half-open stream was never detected.** The `/events` fetch carried only an abort
+    signal and `reader.read()` had no watchdog, so a network partition left the module
+    escalating its display correctly and then **never reconnecting** - the OS socket timeout
+    was the only thing that would ever end it. The 15 s keep-alive the server sends precisely
+    "so a client can detect a dead stream" was consumed as a timestamp and nothing else.
+  - **No cold read.** The module had no state at all until the server's next state change. On
+    a quiet afternoon a Stream Deck came up blank against a perfectly healthy server.
+  - **Companion's own connection light lied.** `updateStatus(Ok)` was set when the stream
+    connected and never revisited. The light stayed green while the deck showed NO DATA.
+
+  All three now go through one shape: two transports, **one `ingest()`**, which is the only
+  writer of `current` and `lastContactAt`. The poll and the stream therefore cannot disagree
+  about which is authoritative, and adding the poll could not introduce a class of bug where
+  a stale poll overwrites a fresh event.
+
+  The watchdog **aborts and lets the existing retry path run**, rather than reconnecting from
+  the stream's error handler. D-98 already paid for that lesson on `/display`: `onerror` fires
+  instantly against a downed server, so reconnecting inside it is a tight loop against a box
+  that is already struggling. It also keeps its own clock, `lastStreamAt`, separate from
+  `lastContactAt` - a healthy poll must not keep a dead stream alive, since noticing the dead
+  stream is the entire point.
+
+  Instance status now derives from the same `view()` every button reads: `Ok`, amber at
+  `not refreshing`, red at `no data`, with a bad config or a rejected passphrase outranking
+  all three because no threshold describes those.
+
+- **D-120 (2026-08-29)** **A Companion press stays `human:`, and the pin it drops is
+  announced rather than prevented.**
+
+  `hold` was a read-only variable and nothing else - no action, no feedback, no `?hold=`
+  parameter, in a module whose every press is `human:companion`. Under the PIN RULE a human
+  write naming a state other than the held one releases the hold, so **an ordinary state
+  button silently dropped Rocket's pin**, with `$(hold)` going empty afterwards as the only
+  trace.
+
+  **The obvious fix was rejected.** Sending `auto:companion` would make the pin rule stop
+  releasing, and it would do it by lying: a thumb on a physical key is a human. `source` is
+  wire contract (D-32) precisely because the detector is external and this is the only trace
+  it leaves - a module that misreports who wrote, to get a rule to behave differently,
+  corrupts the one field the system has no second source for. The rule is right. The silence
+  was the defect.
+
+  So: `set_state` gains a `leave` / `pin` / `release` option defaulting to `leave` (today's
+  behaviour, so no placed button changes under anyone), plus `pin_current_state`,
+  `release_hold`, the `held` and `held_to_this_state` feedbacks, `$(hold_label)`, and PIN /
+  UNPIN presets. When a press will drop a pin, the module logs it **by name** first.
+
+  **`release_hold` writes the CURRENT row, and that is load-bearing.** `POST /state/{id}`
+  always SETS the row named in the path - there is no clear-the-pin-only route - so the row
+  you name is the row the lamp goes to. Naming the HELD row looks like the conservative
+  choice and is the dangerous one: in the contract's own worked example the pin is calm
+  (`interruptible`) while the live state is busy (`on-air`, escalated under the carve-out),
+  so releasing by writing the held row drives the lamp OFF AIR while the camera is live.
+  Writing the current row is idempotent - it names the state already showing - so the pin
+  goes and nothing else moves. This was caught by the adversarial review (D-125), after the
+  first implementation shipped the false OFF and this decision described it as safe.
+
+  **What was deliberately left for Rocket.** #73 says whether a press should also *refuse* or
+  *confirm* when it is about to break a pin "is a UI question for Rocket". It was not decided
+  here. A Stream Deck press is one event with no room for a dialog, and a refusal would make
+  the deck stop doing the obvious thing; the log line and the `held` feedback make it visible,
+  which is the part the ticket required. **Open for Rocket.**
+
+- **D-121 (2026-08-29)** **`confirmed` gets two feedbacks, not one, and a write publishes from
+  its own response.**
+
+  Section 7 says it plainly - "clients that care check `confirmed`, not the status code" - and
+  the module keyed nothing off it. A Stream Deck could show ON AIR in full colour with the
+  physical lamp dark.
+
+  **Two feedbacks because they are two faults with two different fixes.** `confirmed:
+  "unknown"` is the server admitting it has no evidence: the panel is unreachable or frozen,
+  and the fix is at the panel. `confirmed` naming a different row is the device holding
+  something nobody asked for, and the fix is finding the second writer. Merging them would put
+  a dead panel and a supervisor re-assertion behind one lamp.
+
+  The module now also **publishes from the write's response body** instead of waiting for the
+  stream to echo it. The server answers a state write with the full status body *after* the
+  write and *after* the light attempt, so `confirmed`, `hold` and `source` are already in
+  hand. On a press that fails to reach the lamp this is the difference between the deck showing
+  the fault at once and showing it whenever the next event happens to arrive.
+
+  Driving the *state* feedback off `confirmed` was rejected: `state` is what the operator
+  asked for and `confirmed` is evidence about the device (D-93). A button that lit only once
+  the lamp acknowledged would go dark during every normal re-assertion gap, which reads as a
+  failed press.
+
+- **D-122 (2026-08-29)** **The generated presets carry the connection marks, and the reserved
+  row's appearance is the owner's.**
+
+  Every generated preset carried exactly one feedback, `state_is`. `connection_lost` and
+  `no_data` existed and were attached to nothing an operator drags out of the box - so the
+  **default configuration did not meet the client contract the module was rebuilt for.**
+  Section 3 condition 2 requires a visible connection-lost mark, and a shipped deck had none
+  until somebody hand-wired it.
+
+  Both marks now sit on every state preset, **after** the row's own colours, because later
+  feedbacks win: dark-because-dead must never be painted over. The pin badge sits between
+  them, so a pinned button still reads as its own state and gains a `PIN` line, but a pin can
+  never hide an outage.
+
+  And the reserved row's presentation is now **read from the table** rather than hardcoded. The
+  old `view()` returned a literal `'NO DATA'` and the `no_data` feedback defaulted to a magenta
+  literal that happened to match the seed `unknown` row rather than being derived from it.
+  Section 1 fixes only that the row exists, cannot be deleted, and is `busy: true`; its label
+  and colours are freely editable. An owner who relabels `unknown` to SERVER GONE now sees it
+  on the Stream Deck like everywhere else.
+
+  One line of v1 residue went with it: `label: row?.label ?? s.label ?? ''`. Presentation left
+  the state payload in D-42, so the fallback could never fire while reading as though labels
+  still travel with state.
+
+- **D-123 (2026-08-29)** **A write that runs out of time is an unknown outcome, not a failure,
+  and the ceiling clears the measured worst case.**
+
+  The write timeout was `AbortSignal.timeout(5000)`. Issue #68 measured, against a panel that
+  was powered off, `POST /state/{id}` blocking for **6.4 s** and `PUT /state` for **13.2 s** -
+  and **both writes succeeded**. So with the panel unplugged, a press aborted at 5 s, logged
+  `set state failed`, and dropped the whole instance to `ConnectionFailure`, while the state it
+  had asked for was live on the server and visible in the admin console. The button said the
+  write failed and the write did not fail.
+
+  20 s, as configuration. A timeout is now logged as a warning that says the write may have
+  landed and the next poll will settle it, and it **does not touch the instance status**.
+
+  **It does not retry.** The write may well have succeeded - both of #68's did - and a retry
+  against a server that latches is a second write for no reason.
+
+  Fixing #68 in the server instead was rejected as a dependency: #68 is real and worth doing,
+  but any panel on a slow or lossy link reproduces this, and a client whose timeout is shorter
+  than the server's own worst case is wrong on its own terms. The 5000 on `GET /config/states`
+  was left alone deliberately - it is a plain read of a JSON file and #68's numbers do not
+  implicate it.
+
+- **D-124 (2026-08-29)** **Night mode was not built, and that is the decision.**
+
+  #85 (`POST /device/night`) and #86 (the Stream Deck buttons) are the only tickets in the
+  Companion track that depend on anything, and #85 says in its own text: *"This is the only
+  part of night mode that reaches the wire, and it may not be worth it... Do not build this
+  without Rocket saying yes."* It is also blocked by #79, which is unbuilt.
+
+  Building the module half without the server relay would put a button on a Stream Deck that
+  drives nothing, and teaching the module the panel's address instead would put a second device
+  registry in a system that deliberately has exactly one - and would need the panel's basic-auth
+  credential, which D-17 keeps separate from the passphrase and D-79 refuses to disclose.
+
+  So the module ships with no night surface at all, and `docs/companion-setup.md` says so
+  rather than leaving its absence to be discovered. **Open for Rocket:** whether the relay is
+  worth an endpoint, a driver method, a status field and a module feedback, given that the
+  cheaper answer - the panel-local Night bar in #81 - costs none of them. The case for is that
+  the CrowPanel has no working touch (the GT911 sits in reset behind the PCA9557), so there is
+  no way to darken it from the room it is in.
+
+- **D-125 (2026-08-29)** **The rebuilt Companion module was reviewed adversarially by five
+  independent lenses, and the review found a false OFF that the module's own comment and
+  D-120 both described as safe.**
+
+  Five review agents (contract compliance, async lifecycle, ticket coverage, test quality,
+  Companion 1.14 semantics) raised 31 findings; each went to two skeptics told to refute it
+  and to default to refuted when uncertain. Four survived both. **The gate was not treated as
+  the verdict** - several refuted findings were fixed anyway, on evidence, and one confirmed
+  suggestion was implemented differently from what the reviewer proposed.
+
+  **The critical, and it was reproduced rather than argued.** `release_hold` wrote
+  `POST /state/<held>?hold=0`. `POST /state/{id}` always sets the row named in the path, so
+  whenever `state !== hold` the press moved the light. That divergence is not an edge: the
+  PIN RULE's carve-out creates it deliberately. Pin `interruptible` (busy false), let the
+  detector escalate to `on-air` (busy true, pin survives), press UNPIN mid-call - and the lamp
+  went to INTERRUPTIBLE while the camera was live. Two lenses found it independently; one
+  drove the real `StateStore` and captured `driver.set('interruptible')` as the third call.
+  **The fix is to write the current row**, which is idempotent. The regression test was run
+  against the old code first and fails on the line `AND THE LIGHT DOES NOT MOVE`.
+
+  **What the skeptics refuted and was fixed anyway**, because a written contract clause or a
+  measurement outranks a vote:
+
+  - **A row the module has no entry for rendered as an empty label.** Section 6 is explicit:
+    a renderer handed an unknown `id` "must draw the `unknown` appearance... it must never
+    silently drop it - a state that degrades to nothing looks exactly like a calm one." An
+    empty caption *is* that silent drop.
+  - **`state_is` was a visual no-op.** The generated preset's base style and its `state_is`
+    style were the same two colours, so a deck of five buttons looked identical whichever row
+    was current - while the comment claimed the row was "dimmed when it is not the current
+    state". The base is dimmed now, so the feedback has something to be brighter than.
+  - **Overlapping polls could ingest out of order.** The write timeout is several poll
+    intervals long, so two polls could be in flight and the second answer first - the first
+    then overwriting fresh state with stale state. On a system whose cardinal sin is a false
+    OFF, that is not a race worth leaving open.
+  - **Literal `\n` in button captions.** `parseEscapeCharacters` in `@companion-module/base`
+    is documented as applying to action and feedback *option values*, not to preset button
+    text, so `PIN\\nAVAILABLE` would draw the two characters. Real newlines now, including in
+    the `REFRESH\\nTABLE` preset that shipped that way in #44.
+
+  **What was measured and NOT fixed.** A reviewer asked whether returning from `fetch()`
+  without consuming `res.body` leaks sockets on the 401 and non-ok paths. Measured: 150
+  unconsumed 503 responses, peak two sockets, byte-identical to the same run with an explicit
+  `body.cancel()`. undici drains them itself. No code was added for a leak that does not
+  happen.
+
+  **The review mutated the working tree while it ran.** The agents were given the default tool
+  set rather than a read-only one, and the test-quality lens injected 400 ms delays into the
+  fixture and wrote seven probe scripts into `companion-module/test/` to run real mutation
+  experiments. It cleaned up after itself and the module source was never touched, but that
+  was luck rather than design: **a review fleet should be read-only**, and the next one will be.
+  Its rigour is not in question - the probes are what reproduced the critical.
+
+  Four of the 67 agents died on an unrelated API error. A dead skeptic returns null and the
+  surviving vote decided those findings, which is a second reason the gate was not taken as
+  final.
