@@ -75,7 +75,11 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
   function goingDark(): void {
     if (darkSince !== null) return;
     darkSince = Date.now();
-    log(`[supervisor] ${stamp()} ${host} ASLEEP: the glass is dark on schedule, confirmed is unknown until it wakes`);
+    // NOT "on schedule". Since #91 the glass can also be dark because somebody pressed a
+    // button, and the supervisor cannot tell the two apart - it sees one boolean. A line
+    // that named the schedule would be wrong half the time, about the half a person is most
+    // likely to be reading it for.
+    log(`[supervisor] ${stamp()} ${host} ASLEEP: the glass is dark, confirmed is unknown until it wakes`);
   }
 
   /** The glass came back. Silent unless that is news. */

@@ -1125,6 +1125,60 @@ static void test_night() {
   in.enabled = false;
   CHECK(!onair::night_should_darken(in));
 
+  // ------------------------------------------------ the manual sleep (Companion, #91)
+
+  begin("a MANUAL sleep darkens the panel outside the window");
+  in = night_ok(12 * 60);            // the middle of the afternoon
+  CHECK_MSG(!onair::night_should_darken(in), "sanity: the schedule alone would not darken here");
+  in.manual = true;
+  CHECK(onair::night_should_darken(in));
+
+  begin("a manual sleep needs neither the schedule enabled nor a clock");
+  in = night_ok(12 * 60);
+  in.manual = true;
+  in.enabled = false;
+  CHECK_MSG(onair::night_should_darken(in), "it is not the schedule, so the schedule switch is not its gate");
+  in = night_ok(12 * 60);
+  in.manual = true;
+  in.clock_valid = false;
+  CHECK_MSG(onair::night_should_darken(in), "it acts on a press, not on a guess about the time");
+
+  begin("A MANUAL SLEEP STILL REFUSES MID-CALL - a press does not outrank the invariant");
+  in = night_ok(12 * 60);
+  in.manual = true;
+  in.busy = true;
+  CHECK_MSG(!onair::night_should_darken(in), "a busy row must never be dark, however it was asked");
+  // And at night too, where the schedule would also have refused - both gates, one answer.
+  in = night_ok(2 * 60);
+  in.manual = true;
+  in.busy = true;
+  CHECK(!onair::night_should_darken(in));
+
+  begin("a manual sleep refuses when the panel cannot say what is happening");
+  in = night_ok(12 * 60);
+  in.manual = true;
+  in.real_row = false;
+  CHECK_MSG(!onair::night_should_darken(in), "dark plus unknown is indistinguishable from unplugged");
+  in = night_ok(12 * 60);
+  in.manual = true;
+  in.heard_from_server = false;
+  CHECK(!onair::night_should_darken(in));
+
+  begin("a manual sleep IGNORES the woken latch - the row moving is not a change of mind");
+  in = night_ok(2 * 60);
+  in.manual = true;
+  in.woken = true;
+  CHECK_MSG(onair::night_should_darken(in), "woken wakes the SCHEDULE; a person's press outlives it");
+
+  begin("moving the two shared refusals to the top did not change the schedule's answers");
+  // The reorder is only safe if every scheduled case reads exactly as it did before, so
+  // walk the whole day at the shipped 23:00-07:00 with a manual sleep explicitly off.
+  for (uint16_t m = 0; m < 1440; m += 13) {
+    in = night_ok(m);
+    CHECK_MSG(onair::night_should_darken(in) == onair::in_night_window(m, 23 * 60, 7 * 60),
+              "the schedule's verdict moved at some minute of the day");
+  }
+
   begin("the operator at the page beats the schedule, both ways");
   onair::held().bench_level = onair::BENCH_NONE;
   onair::held().night_dark = true;

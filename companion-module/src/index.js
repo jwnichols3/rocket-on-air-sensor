@@ -703,6 +703,27 @@ class OnAirInstance extends InstanceBase {
 					await this.setState(id)
 				},
 			},
+			panel_sleep: {
+				name: 'Panel: sleep (darken the glass)',
+				description:
+					'Asks the panel to turn its glass off now, independently of the nightly schedule. ' +
+					'The panel REFUSES while the current row is busy, so this does nothing during a ' +
+					'call - and a call starting while it is asleep lights it. It also clears itself at ' +
+					'the panel\'s scheduled wake time. Watch $(confirmed_reason) or the "Panel asleep ' +
+					'on schedule" feedback for what actually happened.',
+				options: [],
+				callback: async () => {
+					await this.panelSleep(true)
+				},
+			},
+			panel_wake: {
+				name: 'Panel: wake (light the glass)',
+				description: 'Asks the panel to turn its glass back on. Always allowed - waking is never refused.',
+				options: [],
+				callback: async () => {
+					await this.panelSleep(false)
+				},
+			},
 			refresh_table: {
 				name: 'Refresh the state table now',
 				options: [],
@@ -716,6 +737,65 @@ class OnAirInstance extends InstanceBase {
 	stateChoices() {
 		const choices = this.states.map((r) => ({ id: r.id, label: `${r.label} (${r.id})` }))
 		return choices.length ? choices : [{ id: '', label: '(no table yet)' }]
+	}
+
+	/**
+	 * Darken or light the panel's glass (#91).
+	 *
+	 * NOT A STATE WRITE, and the distinction is the whole of it: `state`, `source` and
+	 * `updatedAt` are untouched. The light goes on holding whatever row it was asserting; it
+	 * simply stops showing it. So there is nothing to `ingest()` from the response and no
+	 * variable to publish here - what changed shows up as `confirmedReason` on the next poll.
+	 *
+	 * `delivered:false` is a real outcome and not an exception. It means the server could not
+	 * reach the panel, which is the same thing `confirmed: unknown` says about a state write,
+	 * and it is logged rather than raised for the same reason (D-123): the operator wants to
+	 * know, and the instance is not broken.
+	 */
+	async panelSleep(on) {
+		const what = on ? 'sleep' : 'wake'
+		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
+		try {
+			const res = await fetch(`${this.base()}/panel/${what}`, {
+				method: 'POST',
+				headers: this.headers(),
+				signal: AbortSignal.timeout(timeout),
+			})
+			if (this.stopping) return
+			if (res.ok) {
+				let delivered = null
+				try {
+					delivered = (await res.json())?.delivered ?? null
+				} catch {
+					/* a 200 with an unreadable body; the poll will settle it */
+				}
+				if (delivered === false) {
+					this.log('warn', `panel ${what}: the server could not reach the panel. Nothing changed on the glass.`)
+				}
+				// A SUCCESSFUL SLEEP IS NOT A DARK PANEL. The panel refuses while the row is
+				// busy, so the honest thing to report is that we asked. The answer arrives as
+				// confirmedReason on the next poll, which is where the feedback reads it.
+				void this.poll()
+				return
+			}
+			let detail = `${res.status}`
+			try {
+				const body = await res.json()
+				if (body?.error) detail = body.error
+			} catch {
+				/* no JSON body; the status alone is what we have */
+			}
+			// 501 is the one worth recognising: an older server, or one wired to a driver that
+			// models no device. Nothing the operator can fix from the deck, but "not supported"
+			// beats a bare number.
+			this.log('error', `panel ${what} failed: ${detail}`)
+		} catch (err) {
+			if (err.name === 'TimeoutError') {
+				this.log('warn', `panel ${what}: no answer within ${timeout} ms. It may still have landed.`)
+				return
+			}
+			this.log('error', `panel ${what} failed: ${err.message}`)
+		}
 	}
 
 	async setState(id) {
@@ -975,6 +1055,40 @@ class OnAirInstance extends InstanceBase {
 					},
 				],
 			}
+		}
+
+		// TWO BUTTONS AND NOT ONE TOGGLE (#91). A toggle has to know which way it is pointing,
+		// and this one cannot: the panel refuses a sleep while the row is busy, so "asked to
+		// sleep" and "is asleep" come apart exactly when it matters. Two buttons each do one
+		// unambiguous thing, and the sleep button wears the asleep feedback so it reports the
+		// panel's answer rather than the press.
+		presets.panel_sleep = {
+			type: 'button',
+			category: 'Utility',
+			name: 'Panel sleep',
+			style: { text: 'PANEL\nSLEEP', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(40, 40, 40) },
+			steps: [{ down: [{ actionId: 'panel_sleep', options: {} }], up: [] }],
+			feedbacks: [
+				{
+					feedbackId: 'panel_asleep',
+					options: {},
+					style: {
+						text: 'PANEL\nASLEEP',
+						size: '14',
+						color: combineRgb(120, 120, 130),
+						bgcolor: combineRgb(0, 0, 0),
+					},
+				},
+			],
+		}
+
+		presets.panel_wake = {
+			type: 'button',
+			category: 'Utility',
+			name: 'Panel wake',
+			style: { text: 'PANEL\nWAKE', size: '14', color: combineRgb(0, 0, 0), bgcolor: combineRgb(200, 200, 205) },
+			steps: [{ down: [{ actionId: 'panel_wake', options: {} }], up: [] }],
+			feedbacks: [],
 		}
 
 		presets.refresh = {

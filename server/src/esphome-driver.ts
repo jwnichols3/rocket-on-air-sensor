@@ -12,6 +12,8 @@ export interface EsphomeDriverOptions {
   reprobeMs?: number;
   /** The ESPHome text_sensor NAME carrying the night verdict. Default `Night` (#82). */
   nightEntity?: string;
+  /** The ESPHome switch NAME for the manual sleep. Default `PanelSleep` (#91). */
+  sleepEntity?: string;
   /** The ESPHome text NAME, not its object_id. Must match the YAML `name:`. */
   entity?: string;
   /** The ESPHome text NAME carrying the table version (D-42's nudge). */
@@ -110,6 +112,7 @@ export class EsphomeTextDriver implements LightDriver {
   private readonly entity: string;
   private readonly versionEntity: string;
   private readonly nightEntity: string;
+  private readonly sleepEntity: string;
   private readonly headers: Record<string, string>;
   private readonly timeoutMs: number;
   private readonly retries: number;
@@ -175,6 +178,7 @@ export class EsphomeTextDriver implements LightDriver {
     this.entity = encodeURIComponent(opts.entity ?? 'PresenceKey');
     this.versionEntity = encodeURIComponent(opts.versionEntity ?? 'TableVersion');
     this.nightEntity = encodeURIComponent(opts.nightEntity ?? 'Night');
+    this.sleepEntity = encodeURIComponent(opts.sleepEntity ?? 'PanelSleep');
     this.timeoutMs = opts.timeoutMs ?? 2000;
     this.retries = opts.retries ?? 1;
     this.retryGapMs = opts.retryGapMs ?? 400;
@@ -403,6 +407,34 @@ export class EsphomeTextDriver implements LightDriver {
       this.unreachable(err);
       return null;
     }
+  }
+
+  /**
+   * Drive the panel's manual sleep switch (#91).
+   *
+   * UNGATED, like `set()` and for the same reason (D-132): this is the server CHANGING
+   * something rather than learning something, and a skipped command is an operator pressing
+   * a button that does nothing. It gets the full retry ladder for the same reason.
+   *
+   * The switch is idempotent at the device, so a repeat costs a round trip and nothing else.
+   */
+  async setPanelSleep(on: boolean): Promise<boolean> {
+    const url = `${this.base}/switch/${this.sleepEntity}/${on ? 'turn_on' : 'turn_off'}`;
+    const ok = await this.attempt(
+      async () => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: this.headers,
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+        if (res.status === 404) throw new DriverConfigError(`404 ${url} - firmware predates the manual sleep`);
+        if (!res.ok) throw new Error(`POST ${res.status}`);
+        await res.arrayBuffer();
+        return true;
+      },
+      false,
+    );
+    return ok === true;
   }
 
   /** The panel's own words for its night verdict - "dark", "lit (daytime)" - or null. */

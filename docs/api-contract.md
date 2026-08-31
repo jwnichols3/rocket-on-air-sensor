@@ -427,6 +427,51 @@ that a table edit made while the panel is unreachable reaches it at worst one su
 later than it used to, instead of waiting for the next state write. Nothing on this API's
 surface changes.
 
+## 5b. Darkening the panel - `POST /panel/sleep`, `POST /panel/wake`
+
+Added 2026-08-30 (#91, D-133). Gated by the passphrase, like every other write to the light.
+
+```
+POST /panel/sleep   ->  200 {"ok":true,"delivered":true,"asked":"sleep"}
+POST /panel/wake    ->  200 {"ok":true,"delivered":true,"asked":"wake"}
+```
+
+**The SCHEDULE is not on this API; the OVERRIDE is.** The panel darkens itself on a nightly
+schedule, and the times, the enable switch and the brightness are device-local settings on the
+panel's own page - they appear nowhere here, and that is D-111's rule, unchanged. What these
+two routes carry is the manual override, and the reason it earned wire surface where the
+schedule did not is simply that the thing pressing it is a button in another room.
+
+**`delivered` is not "the glass went dark".** It says only that the command reached the
+device. It is the same shape as `confirmed`, for the same reason: an unreachable panel is
+answered `200` with `delivered:false` rather than a `5xx`, because a `5xx` tells a caller to
+retry a command that may well have landed.
+
+**To learn what actually happened, read `confirmedReason`** on the next `GET /status`. A panel
+that is dark - by the schedule or by this route, they are the same darkness - reports
+`confirmed: "unknown"` with `confirmedReason: "asleep"`. See section 2.
+
+### The three ways a manual sleep ends
+
+A client that presses sleep should not assume the panel is now asleep, and should not assume
+it stays that way:
+
+1. **`POST /panel/wake`.**
+2. **The scheduled wake time.** A manual sleep is cleared when the panel's clock reaches its
+   configured wake minute, so it can never survive into a working day because nobody pressed
+   wake. A panel that has never had a clock cannot do this, and keeps the sleep until woken.
+3. **A busy row.** This one is not negotiable and is not configurable. **The panel refuses to
+   darken while the current row is busy, however it was asked** - so pressing sleep during a
+   call does nothing, and a call starting while the panel is asleep lights it. A dark panel
+   during a live call is a false OFF, which is the failure this whole system exists to
+   prevent (D-6, D-63).
+
+Because of (3), a sleep can be *pending* - asked for, and refused. `delivered:true` with the
+panel still lit is a correct and expected outcome, not an error.
+
+**Sleeping is not a state write.** `state`, `source` and `updatedAt` are untouched by these
+routes. The light still holds whatever row it was asserting; it is simply not showing it.
+
 ### Driving the ESP32 (measured, 2026-08-24)
 
 Not part of this API - this is the *server's* client relationship with the device - but

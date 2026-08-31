@@ -479,6 +479,21 @@ switch:
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
 
+  # SLEEP NOW, independent of the schedule. Driven from a Companion button by way of the
+  # server (POST /panel/sleep), or by hand over the device API.
+  #
+  # RESTORE_DEFAULT_OFF, and unlike NightMode that is not a free choice - it is the last
+  # trap-door. A manual sleep already ends three ways (an explicit wake, the scheduled wake
+  # time, a busy row), but every one of those needs something to still be running. A reboot
+  # is the case where nothing is: if this restored ON, a panel that crashed while asleep
+  # would come back dark with no clock yet and nothing due to clear it. Waking on boot costs
+  # one button press and cannot leave the glass wrong.
+  - platform: template
+    name: "PanelSleep"
+    id: panel_sleep
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
   # auto (on, the default) pulls and follows the server. custom (off) FREEZES the table
   # last pulled and stops pulling - the honest one bit of D-38's custom mode, which is
   # the answer to "the server changed and I do not want to follow it right now". It is
@@ -782,6 +797,24 @@ interval:
                           v.shape != onair::Shape::NO_CONFIG &&
                           v.shape != onair::Shape::UNKNOWN_KEY;
             ni.heard_from_server = id(last_contact_ms) != 0;
+            ni.manual = id(panel_sleep).state;
+
+            // A MANUAL SLEEP EXPIRES AT THE SCHEDULED WAKE TIME, so it can never survive
+            // into a working day just because nobody pressed Wake. An EDGE on the minute and
+            // not a level test: the panel is asleep across that minute, the tick runs every
+            // 50ms, and a level test would re-clear the switch every tick for a whole minute
+            // - which would also stomp a sleep pressed deliberately AT 07:00.
+            //
+            // It needs a clock, so a panel that has never heard SNTP keeps a manual sleep
+            // until somebody wakes it. That is the honest failure: the alternative is
+            // guessing the time, which D-110 already refused for the same reason.
+            if (ni.clock_valid && onair::held().night_last_min != ni.now_min) {
+              onair::held().night_last_min = ni.now_min;
+              if (ni.now_min == ni.wake_min && id(panel_sleep).state) {
+                ESP_LOGI("onair", "night: manual sleep expired at the scheduled wake time");
+                id(panel_sleep).turn_off();
+              }
+            }
 
             // WAKE ON A STATE CHANGE, THEN STAY AWAKE UNTIL MORNING.
             //
@@ -806,7 +839,8 @@ interval:
             bool dark = onair::night_should_darken(ni);
             if (dark != onair::held().night_dark) {
               onair::held().night_dark = dark;
-              ESP_LOGI("onair", "night: screen %s", dark ? "off" : "on");
+              ESP_LOGI("onair", "night: screen %s%s", dark ? "off" : "on",
+                       dark && ni.manual ? " (manual)" : "");
             }
           }
 
@@ -995,6 +1029,11 @@ text_sensor:
     lambda: |-
       if (onair::held().night_dark)
         return {"dark"};
+      // A manual sleep that is ARMED BUT REFUSED. Without this the panel says "lit
+      // (daytime)" after somebody presses Sleep during a call, which is true and useless -
+      // it gives no hint the sleep is pending and will take effect the moment the call ends.
+      if (id(panel_sleep).state)
+        return {"lit (sleep pending - busy or no data)"};
       if (!id(night_mode).state)
         return {"lit (schedule off)"};
       auto t = id(wall_clock).now();

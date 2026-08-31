@@ -82,7 +82,7 @@ const SEED = [
 	{ id: 'unknown', label: 'NO DATA', color: '#ff00ff', bgcolor: '#1a1a1a', busy: true, order: 99 },
 ]
 
-const UTILITY_PRESETS = ['light', 'refresh']
+const UTILITY_PRESETS = ['light', 'panel_sleep', 'panel_wake', 'refresh']
 
 test('generates one preset per row, from the server table', async () => {
 	const OnAir = await loadInstanceClass()
@@ -1093,4 +1093,78 @@ test('button captions carry real line breaks, not a literal backslash-n', async 
 
 	await inst.destroy()
 	await fake.close()
+})
+
+// ---------------------------------------------------------------------------------------
+// #91 - a button that darkens the panel, and one that lights it again.
+
+test('#91 sleep and wake POST to /panel/*, and are NOT state writes', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	const writesBefore = fake.writes.length
+
+	await seen.actions.panel_sleep.callback({ options: {} })
+	await settle(150)
+	await seen.actions.panel_wake.callback({ options: {} })
+	await settle(150)
+
+	const panelCalls = fake.requests.filter((r) => r.includes('/panel/'))
+	assert.deepEqual(panelCalls, ['POST /panel/sleep', 'POST /panel/wake'])
+	assert.equal(fake.panelAsleep, false, 'the wake did not land on the fixture')
+	// SLEEPING IS NOT A STATE WRITE. The light goes on holding whatever row it was
+	// asserting; it simply stops showing it. A sleep that moved the state would be a
+	// button that changes what the room is told, which is the opposite of the intent.
+	assert.equal(fake.writes.length, writesBefore, 'darkening the glass wrote a state')
+})
+
+test('#91 the sleep preset wears the asleep feedback, so it reports the ANSWER not the press', async () => {
+	// The panel refuses a sleep while the row is busy, so "asked to sleep" and "is asleep"
+	// come apart exactly when it matters. A button that lit up on the press would be lying
+	// during a call - the one time anybody is looking at it.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	const sleep = seen.presets.panel_sleep
+	assert.ok(sleep, 'no panel sleep preset')
+	assert.deepEqual(sleep.steps[0].down, [{ actionId: 'panel_sleep', options: {} }])
+	assert.ok(
+		sleep.feedbacks.some((f) => f.feedbackId === 'panel_asleep'),
+		'the sleep button does not report whether the panel actually went dark',
+	)
+	// And wake carries none: waking is never refused, so there is nothing to report.
+	assert.deepEqual(seen.presets.panel_wake.feedbacks, [])
+})
+
+test('#91 a server that cannot darken a panel is logged, not raised', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	fake.setPanelSleepStatus(501)
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	const before = seen.status.slice()
+
+	await seen.actions.panel_sleep.callback({ options: {} })
+	await settle(150)
+
+	// An older server, or one wired to a driver that models no device. Nothing the operator
+	// can fix from the deck, and it does not make the CONNECTION broken - the state surface
+	// is still working perfectly. D-123's rule, applied to a different route.
+	assert.ok(
+		seen.logs.some((l) => /^error: panel sleep failed/.test(l)),
+		JSON.stringify(seen.logs),
+	)
+	assert.deepEqual(seen.status, before, 'a 501 on an optional route changed the instance status')
 })

@@ -374,7 +374,10 @@ test('supervisor: a whole night is TWO log lines, not one per tick (#82)', async
   assert.match(asleep(lines)[0]!, ISO);
   assert.match(asleep(lines)[0]!, /10\.42\.14\.239/);
   // NOT an error line and it must not read like one. A panel dark at 2am is healthy.
-  assert.match(asleep(lines)[0]!, /dark on schedule/);
+  // Deliberately NOT "on schedule": since #91 the glass can be dark by a button press too,
+  // and the supervisor sees one boolean either way.
+  assert.match(asleep(lines)[0]!, /the glass is dark/);
+  assert.doesNotMatch(asleep(lines)[0]!, /on schedule/, 'the line claims a cause it cannot know');
   assert.doesNotMatch(asleep(lines)[0]!, /fail|error|unreachable/i);
 });
 

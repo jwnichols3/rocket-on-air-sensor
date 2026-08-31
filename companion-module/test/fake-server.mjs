@@ -38,6 +38,10 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 	const writes = []
 	const requests = []
 	let eventsConnections = 0
+	// #91. `null` is the healthy server; a number makes /panel/* answer that status instead,
+	// which is how an older server (501) is modelled.
+	let panelSleepStatus = null
+	let panelAsleep = false
 
 	const status = () => {
 		const row = states.find((r) => r.id === current)
@@ -69,6 +73,20 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 	const server = createServer((req, res) => {
 		const url = new URL(req.url, 'http://x')
 		requests.push(`${req.method} ${url.pathname}`)
+
+		if (url.pathname === '/panel/sleep' || url.pathname === '/panel/wake') {
+			if (!authed(req)) {
+				res.writeHead(401, { 'Content-Type': 'application/json' })
+				return res.end('{"error":"unauthorized"}')
+			}
+			if (panelSleepStatus !== null) {
+				res.writeHead(panelSleepStatus, { 'Content-Type': 'application/json' })
+				return res.end('{"error":"this light driver cannot darken a panel"}')
+			}
+			panelAsleep = url.pathname === '/panel/sleep'
+			res.writeHead(200, { 'Content-Type': 'application/json' })
+			return res.end(JSON.stringify({ ok: true, delivered: true, asked: panelAsleep ? 'sleep' : 'wake' }))
+		}
 
 		if (!authed(req)) {
 			res.writeHead(401, { 'Content-Type': 'application/json' })
@@ -170,6 +188,14 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 		/// Why `confirmed` is unknown, when the server knows (#82). `null` omits the field.
 		setConfirmedReason: (reason) => {
 			confirmedReason = reason
+		},
+		/// Make /panel/* answer a status other than 200 - 501 models a server too old to have
+		/// the route, or one wired to a driver that models no device.
+		setPanelSleepStatus: (status) => {
+			panelSleepStatus = status
+		},
+		get panelAsleep() {
+			return panelAsleep
 		},
 		setWriteDelay: (ms) => {
 			writeDelayMs = ms

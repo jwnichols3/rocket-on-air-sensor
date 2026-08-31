@@ -207,6 +207,23 @@ Two different fields, two different questions:
   two. And treat an **absent** reason as unexplained rather than as fine - reading absence as
   reassurance is a false OK, which fails the same way a false OFF does.
 
+## Darkening the panel
+
+`POST /panel/sleep` and `POST /panel/wake` turn the panel's glass off and on. Both answer
+`200 {"ok":true,"delivered":<bool>,"asked":"sleep"|"wake"}`.
+
+`delivered` says the command reached the device - **not** that the glass went dark. Read
+`confirmedReason` on the next `GET /status` for that; a dark panel reports `asleep`.
+
+Three things end a sleep, and the third will surprise you if you have not been told:
+`POST /panel/wake`, the panel's own scheduled wake time, and **any busy row**. The panel
+refuses to darken while the current row is busy, however it was asked - so a sleep pressed
+during a call does nothing, and a call starting while it is asleep lights it. `delivered:true`
+with the panel still lit is correct, not an error.
+
+The nightly schedule itself - when it sleeps, when it wakes, how dark - is configured on the
+panel and is not on this API.
+
 A write with a valid body **always succeeds** even when the light is dead. The light failure
 surfaces as `confirmed: "unknown"`, not as a status code. If you care about the glass, check
 `confirmed`; if you only care that the system recorded your intent, the response is enough.

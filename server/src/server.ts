@@ -70,6 +70,8 @@ const ROUTES: Record<string, string[]> = {
   '/state': ['PUT'],
   '/on': ['POST'],
   '/off': ['POST'],
+  '/panel/sleep': ['POST'],
+  '/panel/wake': ['POST'],
   '/message': ['PUT', 'DELETE'],
   '/events': ['GET'],
   '/display': ['GET'],
@@ -767,6 +769,40 @@ async function handle(
     // the human already said they were done.
     await enqueueWrite(() => doWrite(deps, id, source, log));
     broadcastAndSend(res, deps, hub, ws);
+    return;
+  }
+
+  // POST /panel/sleep | /panel/wake (#91) - the ONE piece of the night feature on the wire.
+  //
+  // The SCHEDULE stays device-local (D-111): its times and its enable switch live on the
+  // panel's own page and appear nowhere in this API. What is here is the manual OVERRIDE,
+  // because the thing asking for it is a Stream Deck button in another room, and a setting
+  // nobody can reach is not a setting.
+  //
+  // Through the write queue, like every other device write, so a sleep cannot overtake a
+  // state write that is already in flight.
+  if (path === '/panel/sleep' || path === '/panel/wake') {
+    const sleep = path === '/panel/sleep';
+    if (deps.driver.setPanelSleep === undefined) {
+      sendJson(res, 501, { error: 'this light driver cannot darken a panel' });
+      return;
+    }
+    let delivered = false;
+    await enqueueWrite(async () => {
+      try {
+        delivered = await deps.driver.setPanelSleep!(sleep);
+      } catch (err) {
+        log(`[onair] panel ${sleep ? 'sleep' : 'wake'} failed: ${errorMessage(err)}`);
+      }
+    });
+    // 200 EITHER WAY, and `delivered` carries the truth - the same shape as `confirmed` and
+    // for the same reason (contract section 7). A 5xx here would tell the caller to retry a
+    // command that may well have landed, and a Companion button that reports failure on a
+    // command the panel took is worse than one that says "asked, ask the status".
+    //
+    // `delivered` is NOT "the glass went dark". The panel refuses a sleep while the row is
+    // busy, and that answer arrives through `confirmedReason` on the next supervisor tick.
+    sendJson(res, 200, { ok: true, delivered, asked: sleep ? 'sleep' : 'wake' });
     return;
   }
 

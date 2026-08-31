@@ -4805,3 +4805,70 @@ else (state, light control, API) lives on the receiver.
   All three fixes are mutation-proven. Restoring the `failingSince` gate, gating `set()`, or
   removing the glass hold each turns a named test red, and the third one prints the failure in
   the only words that matter: `confirmed went positive at some point: ["unknown","on-air","unknown"]`.
+
+- **D-133 (2026-08-30)** **The night SCHEDULE stays device-local; the manual OVERRIDE goes on
+  the wire.** #91, built end to end - firmware, server, contract, module - and flashed to the
+  live panel.
+
+  **The ask was "a Companion button to darken the screen and another to wake it", and the
+  premise that it was already in the server was wrong.** The server had no night surface at
+  all; it only *read* the `Night` sensor to decide `confirmed`. Everything below had to be
+  built.
+
+  **What already existed and was not it.** The panel has a bench override that sets the
+  backlight to any level including 0 - but it **auto-releases after 120 seconds**, by design,
+  as a trap-door for a closed laptop, and it is driven from the panel's own page where the
+  server cannot reach it. A sleep is the same idea without the trap-door, plus a path from
+  another room.
+
+  **D-111 is narrowed rather than reversed, and the line is where the operator is.** The
+  schedule - times, enable, brightness - stays on the panel's own page and appears nowhere in
+  the API. The override is on the wire, for one reason: **the thing pressing it is a button in
+  another room, and a setting nobody can reach is not a setting.** The contract now says this
+  in as many words, next to #83's "the SETTING is not on the wire; the CONSEQUENCE is" - which
+  survives unchanged, because `confirmedReason` is still how you learn what happened.
+
+  **THE BUSY REFUSAL APPLIES TO A HUMAN PRESS, and that was not Rocket's call to make.** A dark
+  panel during a live call is a false OFF, which is the invariant the whole system exists to
+  protect (D-6, D-63). So `night_should_darken()` was restructured to put the two shared
+  refusals - busy, and "the panel cannot say what is happening" - **first**, gating the manual
+  path and the scheduled one alike. Verified on the real panel: with a sleep armed, a busy row
+  arriving lit the glass and the `Night` sensor read
+  `lit (sleep pending - busy or no data)`; the row going calm again put it back to `dark`.
+
+  A manual sleep otherwise ignores `woken`. A state change wakes the SCHEDULE - that is what
+  the latch is for - but a person who asked for the screen off has not changed their mind
+  because the row moved.
+
+  **Three ways it ends, and Rocket picked the middle one deliberately:** an explicit wake, the
+  **scheduled wake time**, or a busy row. The scheduled expiry is an EDGE on the minute rather
+  than a level test - a level test would re-clear the switch every tick for a whole minute, and
+  would also stomp a sleep pressed deliberately at 07:00. It needs a clock, so a panel that has
+  never heard SNTP keeps a manual sleep until somebody wakes it; that is the honest failure,
+  and the alternative is guessing the time, which D-110 already refused.
+
+  **`RESTORE_DEFAULT_OFF` on the switch is the fourth exit and the only one that survives a
+  crash.** The other three all need something to still be running. A reboot is the case where
+  nothing is, and a sleep that restored ON would bring a panel back dark with no clock yet and
+  nothing due to clear it.
+
+  **`delivered` is not "the glass went dark".** The route answers `200` with `delivered:false`
+  when the panel is unreachable rather than a `5xx`, because a `5xx` tells a caller to retry a
+  command that may well have landed. What actually happened arrives as `confirmedReason` on the
+  next tick - which means the `panel_asleep` feedback built for the schedule in D-131 lights for
+  a manual sleep too, with no extra work.
+
+  **Two buttons, not one toggle.** A toggle has to know which way it is pointing and this one
+  cannot: "asked to sleep" and "is asleep" come apart exactly when it matters, because the
+  panel refuses while busy. The sleep preset wears the `panel_asleep` feedback so it reports
+  the panel's answer rather than the press.
+
+  **The supervisor's ASLEEP line lost the words "on schedule".** Since this, the glass can be
+  dark for two reasons and the supervisor sees one boolean either way; a line naming the
+  schedule would be wrong about half of them.
+
+  **The flash checked the linked binary before shipping it**, which #87 established nobody had
+  ever done - `esphome upload` ships `build/firmware.ota.bin` and does not compile, so checking
+  codegen proves nothing. `strings` on the actual `.bin` found `PanelSleep` and both new log
+  strings. Then the marker: `GET /switch/PanelSleep` was **404 before and 200 after**, `Frames`
+  reset to 4, and it was re-checked for 120 seconds to clear #87's 60-second rollback window.

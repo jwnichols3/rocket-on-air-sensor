@@ -24,6 +24,16 @@ export interface LightDriver {
    */
   glassDark?(): Promise<boolean | null>;
   /**
+   * Ask the panel to darken its glass now, or to light it again. Resolves `true` when the
+   * command reached the device, `false` when it did not.
+   *
+   * A COMMAND, NOT A STATE. It says what the operator asked for; whether the glass actually
+   * went dark comes back through `glassDark()` on the supervisor's next tick, because the
+   * panel refuses a sleep while the row is busy and the server is not the place that
+   * decides that. Read the outcome from `confirmedReason`, never from this return value.
+   */
+  setPanelSleep?(on: boolean): Promise<boolean>;
+  /**
    * Tell the device which table version is current, so a device holding an older one
    * re-pulls at once instead of waiting out its 300s interval (D-42's version nudge).
    *

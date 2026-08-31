@@ -165,6 +165,10 @@ struct NightInput {
   /// A state change already woke the panel during this window, so it stays awake until the
   /// window ends.
   bool woken{false};
+  /// SOMEBODY PRESSED SLEEP. Not the schedule - a deliberate act, from the panel's page or
+  /// from a Companion button by way of the server. Ends on an explicit wake, at the
+  /// scheduled wake time, or the moment the row goes busy.
+  bool manual{false};
 };
 
 /// Inclusive of `sleep_min`, exclusive of `wake_min`. Equal endpoints are NEVER in the
@@ -179,18 +183,31 @@ inline bool in_night_window(uint16_t now_min, uint16_t sleep_min, uint16_t wake_
 }
 
 inline bool night_should_darken(const NightInput &in) {
-  if (!in.enabled)
-    return false;
-  // No clock, no schedule. D-110 drew `--:--` rather than 1970 for this same reason: a panel
-  // that has never been told the time must not act on a guess about what time it is.
-  if (!in.clock_valid)
-    return false;
+  // THE FIRST TWO GATE BOTH PATHS - the schedule's and the manual override's - which is the
+  // whole reason they moved to the top. A human pressing Sleep does not outrank the
+  // invariant, and the bench override next door already works exactly this way.
+
   // NEVER mid-call, and this is the one that is not negotiable (D-6, D-63, D-92).
   if (in.busy)
     return false;
   // A panel that cannot say what is happening must not ALSO be dark. Dark plus unknown is
   // indistinguishable from unplugged, and one of those is a fault worth noticing.
   if (!in.real_row || !in.heard_from_server)
+    return false;
+
+  // A MANUAL SLEEP is a deliberate act by somebody who can see the panel, so it needs
+  // neither the schedule enabled nor a clock: it is not acting on a guess about the time,
+  // it is acting on a press. It also ignores `woken` - a state change wakes the SCHEDULE,
+  // which is what that latch is for, but a person who asked for the screen off has not
+  // changed their mind because the row moved.
+  if (in.manual)
+    return true;
+
+  if (!in.enabled)
+    return false;
+  // No clock, no schedule. D-110 drew `--:--` rather than 1970 for this same reason: a panel
+  // that has never been told the time must not act on a guess about what time it is.
+  if (!in.clock_valid)
     return false;
   if (in.woken)
     return false;
@@ -348,6 +365,10 @@ struct Held {
   bool night_dark{false};
   bool night_woken{false};
   std::string night_key;
+  /// The last minute-of-day the night tick saw, so crossing the scheduled wake time is an
+  /// EDGE rather than a level. 0xFFFF is "no minute seen yet" - 0 is a real minute
+  /// (midnight) and using it as the sentinel would fire the edge once at boot.
+  uint16_t night_last_min{0xFFFF};
   /// The wall clock as the glass is drawing it, mirrored for the page for the same reason
   /// as `key` (#70). `clock` is the STRING - `--:--` when the panel has never been told the
   /// time - and is published whether or not it is on screen, so the page can tell "off" from
