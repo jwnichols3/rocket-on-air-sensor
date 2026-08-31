@@ -74,7 +74,7 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 		const url = new URL(req.url, 'http://x')
 		requests.push(`${req.method} ${url.pathname}`)
 
-		if (url.pathname === '/panel/sleep' || url.pathname === '/panel/wake') {
+		if (url.pathname === '/panel/sleep' || url.pathname === '/panel/wake' || url.pathname === '/panel/toggle') {
 			if (!authed(req)) {
 				res.writeHead(401, { 'Content-Type': 'application/json' })
 				return res.end('{"error":"unauthorized"}')
@@ -83,9 +83,20 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 				res.writeHead(panelSleepStatus, { 'Content-Type': 'application/json' })
 				return res.end('{"error":"this light driver cannot darken a panel"}')
 			}
-			panelAsleep = url.pathname === '/panel/sleep'
+			// The real server reads the glass and sends the opposite (#92). The fixture models
+			// that rather than echoing the request, because a fixture that just says yes cannot
+			// tell a toggle that flips from one that always sleeps.
+			const wasDark = panelAsleep
+			panelAsleep = url.pathname === '/panel/toggle' ? !panelAsleep : url.pathname === '/panel/sleep'
 			res.writeHead(200, { 'Content-Type': 'application/json' })
-			return res.end(JSON.stringify({ ok: true, delivered: true, asked: panelAsleep ? 'sleep' : 'wake' }))
+			return res.end(
+				JSON.stringify({
+					ok: true,
+					delivered: true,
+					asked: panelAsleep ? 'sleep' : 'wake',
+					wasDark: url.pathname === '/panel/toggle' ? wasDark : null,
+				}),
+			)
 		}
 
 		if (!authed(req)) {

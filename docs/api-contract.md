@@ -427,14 +427,23 @@ that a table edit made while the panel is unreachable reaches it at worst one su
 later than it used to, instead of waiting for the next state write. Nothing on this API's
 surface changes.
 
-## 5b. Darkening the panel - `POST /panel/sleep`, `POST /panel/wake`
+## 5b. Darkening the panel - `POST /panel/sleep`, `POST /panel/wake`, `POST /panel/toggle`
 
-Added 2026-08-30 (#91, D-133). Gated by the passphrase, like every other write to the light.
+Added 2026-08-30 (#91, D-133); the toggle 2026-08-30 (#92, D-134). Gated by the passphrase,
+like every other write to the light.
 
 ```
-POST /panel/sleep   ->  200 {"ok":true,"delivered":true,"asked":"sleep"}
-POST /panel/wake    ->  200 {"ok":true,"delivered":true,"asked":"wake"}
+POST /panel/sleep   ->  200 {"ok":true,"delivered":true,"asked":"sleep","wasDark":null}
+POST /panel/wake    ->  200 {"ok":true,"delivered":true,"asked":"wake","wasDark":null}
+POST /panel/toggle  ->  200 {"ok":true,"delivered":true,"asked":"wake","wasDark":true}
 ```
+
+**`asked` is the answer to what the toggle decided**, and it is why the field exists on all
+three. A caller that presses the toggle does not know in advance which command it will send;
+`asked` tells it, after the fact, which one it sent.
+
+**`wasDark` is the reading the toggle took, and it is `null` on the other two** - they never
+ask the glass anything, and reporting `false` there would be a measurement nobody made.
 
 **The SCHEDULE is not on this API; the OVERRIDE is.** The panel darkens itself on a nightly
 schedule, and the times, the enable switch and the brightness are device-local settings on the
@@ -468,6 +477,27 @@ it stays that way:
 
 Because of (3), a sleep can be *pending* - asked for, and refused. `delivered:true` with the
 panel still lit is a correct and expected outcome, not an error.
+
+### The toggle asks the glass; it does not remember (#92, D-134)
+
+`POST /panel/toggle` reads the panel's glass and sends the opposite: dark becomes wake, lit
+becomes sleep. It keeps no state between presses, and that is the whole design.
+
+A toggle that tracked its own presses would desynchronise on the first refusal in (3) above -
+press during a call, the panel stays lit, and the button now believes it is asleep, so the
+next press sends wake at a panel nobody ever darkened. Reading the glass makes a refused sleep
+a no-op that leaves the next press still meaning sleep.
+
+It also gets the *schedule* right without knowing anything about it. At 23:30 the glass is
+dark with the manual switch off; the toggle sends **wake**, which is what a human pointing at
+a dark panel means. A toggle that flipped the manual switch instead would send sleep, and
+nothing visible would happen.
+
+**When the glass cannot be read, the toggle assumes LIT and sends sleep.** That is the
+recoverable direction: the busy rule in (3) still lights the panel for a call, and one more
+press wakes it. Assuming dark would send wake at a panel already lit, which presents as a
+dead button. The fallback is the server's last published `confirmedReason` first, and only
+then this default.
 
 **Sleeping is not a state write.** `state`, `source` and `updatedAt` are untouched by these
 routes. The light still holds whatever row it was asserting; it is simply not showing it.

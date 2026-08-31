@@ -28,6 +28,11 @@ const SRC = join(HERE, '..', 'src', 'index.js')
 // data: URL cannot resolve the bare specifier `@companion-module/base`. The file is
 // generated, gitignored, and identical to src/index.js apart from the entrypoint line - so
 // the tests exercise the shipped source, not a copy of it.
+//
+// It is written into src/ RATHER THAN test/, so that the source's own relative imports -
+// `./icons.js` since #92 - resolve exactly where they do in the shipped module. Written
+// beside the tests it resolved them beside the tests, and the whole suite died on a missing
+// file that exists.
 let cached
 async function loadInstanceClass() {
 	if (cached) return cached
@@ -39,7 +44,7 @@ async function loadInstanceClass() {
 	if (!patched.includes('export { OnAirInstance }')) {
 		throw new Error('the entrypoint line moved - this loader needs updating')
 	}
-	const generated = join(HERE, '.instance.generated.mjs')
+	const generated = join(HERE, '..', 'src', '.instance.generated.mjs')
 	writeFileSync(generated, patched)
 	const mod = await import(pathToFileURL(generated).href)
 	cached = mod.OnAirInstance
@@ -82,7 +87,22 @@ const SEED = [
 	{ id: 'unknown', label: 'NO DATA', color: '#ff00ff', bgcolor: '#1a1a1a', busy: true, order: 99 },
 ]
 
-const UTILITY_PRESETS = ['light', 'panel_sleep', 'panel_wake', 'refresh']
+// #92 doubled the deck: every state row and every panel button now generates a GRAPHIC
+// preset and a WORDS one. `light` and `refresh` stay text-only - they are diagnostics, and a
+// diagnostic that needs a caption to be understood should have one.
+const UTILITY_PRESETS = [
+	'light',
+	'refresh',
+	'panel_sleep',
+	'panel_wake',
+	'panel_toggle',
+	'panel_sleep_words',
+	'panel_wake_words',
+	'panel_toggle_words',
+]
+
+/// Both presets a row generates.
+const rowPresets = (id) => [`state_${id}`, `state_${id}_words`]
 
 test('generates one preset per row, from the server table', async () => {
 	const OnAir = await loadInstanceClass()
@@ -95,12 +115,16 @@ test('generates one preset per row, from the server table', async () => {
 
 	assert.deepEqual(
 		Object.keys(seen.presets).sort(),
-		[...UTILITY_PRESETS, 'state_available', 'state_on-air', 'state_unknown'].sort(),
+		[...UTILITY_PRESETS, ...rowPresets('available'), ...rowPresets('on-air'), ...rowPresets('unknown')].sort(),
 	)
 
 	// The caption is `label`. There is no `row.text` - looking for one returns undefined, which
 	// is exactly the mistake the ticket warns about.
-	assert.equal(seen.presets['state_on-air'].style.text, 'ON AIR')
+	assert.equal(seen.presets['state_on-air_words'].style.text, 'ON AIR')
+	// And the GRAPHIC one carries no caption at all, because the picture is the whole message
+	// (#92). A blank caption with no `png64` beside it would be a blank button.
+	assert.equal(seen.presets['state_on-air'].style.text, '')
+	assert.ok(seen.presets['state_on-air'].style.png64, 'the graphic preset has no art on it')
 	// Colours copy across verbatim (D-31, D-42), on the LIT style. #c1121f -> packed.
 	const lit = seen.presets['state_on-air'].feedbacks.find((f) => f.feedbackId === 'state_is')
 	assert.equal(lit.style.bgcolor, 0xc1121f)
@@ -135,7 +159,7 @@ test('preset ids are stable across a table edit, and index never appears', async
 	await settle(600)
 
 	assert.deepEqual(Object.keys(seen.presets).sort(), before, 'ids must not move when rows do')
-	assert.equal(seen.presets['state_on-air'].style.text, 'LIVE NOW', 'but the caption follows the table')
+	assert.equal(seen.presets['state_on-air_words'].style.text, 'LIVE NOW', 'but the caption follows the table')
 
 	for (const [id, preset] of Object.entries(seen.presets)) {
 		const wire = JSON.stringify(preset)
@@ -154,7 +178,7 @@ test('presets regenerate when tableVersion moves, with no restart', async () => 
 
 	await inst.init(config)
 	await settle()
-	assert.equal(Object.keys(seen.presets).length, 3 + UTILITY_PRESETS.length)
+	assert.equal(Object.keys(seen.presets).length, 3 * 2 + UTILITY_PRESETS.length)
 
 	// A row the server adds later must arrive on its own - this is the whole point of
 	// generating presets rather than hand-listing them.
@@ -808,10 +832,18 @@ test('#75 the reserved row\'s label and colours come from the table, not from a 
 	assert.equal(seen.feedbacks.no_data.defaultStyle.color, 0x00ff00)
 	assert.equal(seen.feedbacks.no_data.defaultStyle.bgcolor, 0x123456)
 
-	const mark = seen.presets['state_on-air'].feedbacks.find((f) => f.feedbackId === 'no_data')
-	assert.equal(mark.style.color, 0x00ff00, 'and so must the mark on every generated preset')
-	assert.equal(mark.style.bgcolor, 0x123456)
-	assert.equal(mark.style.text, 'SERVER GONE')
+	for (const key of ['state_on-air', 'state_on-air_words']) {
+		const mark = seen.presets[key].feedbacks.find((f) => f.feedbackId === 'no_data')
+		assert.equal(mark.style.color, 0x00ff00, `and so must the mark on ${key}`)
+		assert.equal(mark.style.bgcolor, 0x123456)
+	}
+	// The WORDS preset says it in words; the GRAPHIC one says it in the reserved row's icon and
+	// blanks the caption. Both are the owner's relabelled row - one of them just draws it.
+	const words = seen.presets['state_on-air_words'].feedbacks.find((f) => f.feedbackId === 'no_data')
+	assert.equal(words.style.text, 'SERVER GONE')
+	const graphic = seen.presets['state_on-air'].feedbacks.find((f) => f.feedbackId === 'no_data')
+	assert.equal(graphic.style.text, '')
+	assert.ok(graphic.style.png64, 'the graphic no-data mark lost its art and drew nothing at all')
 
 	await inst.destroy()
 	await fake.close()
@@ -1167,4 +1199,160 @@ test('#91 a server that cannot darken a panel is logged, not raised', async () =
 		JSON.stringify(seen.logs),
 	)
 	assert.deepEqual(seen.status, before, 'a 501 on an optional route changed the instance status')
+})
+
+// ---------------------------------------------------------------------------------------
+// #92 - one button for both, and art that can actually be read.
+
+test('#92 the toggle POSTs to /panel/toggle and lets the SERVER decide the direction', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	const writesBefore = fake.writes.length
+
+	await seen.actions.panel_toggle.callback({ options: {} })
+	await settle(150)
+	assert.equal(fake.panelAsleep, true, 'the first press did not darken the panel')
+	await seen.actions.panel_toggle.callback({ options: {} })
+	await settle(150)
+	assert.equal(fake.panelAsleep, false, 'the second press did not wake it')
+
+	// ONE ROUTE, TWICE. The module never sends /panel/sleep or /panel/wake for a toggle press
+	// and never decides the direction itself: it has no fresh reading of the glass to decide
+	// from, and guessing from a poll that may be seconds old is how a toggle desynchronises.
+	assert.deepEqual(
+		fake.requests.filter((r) => r.includes('/panel/')),
+		['POST /panel/toggle', 'POST /panel/toggle'],
+	)
+	assert.equal(fake.writes.length, writesBefore, 'toggling the glass wrote a state')
+})
+
+test('#92 the toggle logs which way the server actually went', async () => {
+	// The one thing a toggle cannot show on its own face: it has no position. The server
+	// decided from a reading this module never saw, so a press that did the opposite of what
+	// the operator expected has to be explainable afterwards.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	await seen.actions.panel_toggle.callback({ options: {} })
+	await settle(150)
+
+	assert.ok(
+		seen.logs.some((l) => /panel toggle: the glass was lit, sent sleep/.test(l)),
+		`no direction in the log: ${JSON.stringify(seen.logs.slice(-4))}`,
+	)
+})
+
+test('#92 the toggle preset shows the panel, and changes what it offers when asleep', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	const t = seen.presets.panel_toggle
+	assert.ok(t, 'no toggle preset')
+	assert.deepEqual(t.steps[0].down, [{ actionId: 'panel_toggle', options: {} }])
+
+	const asleep = t.feedbacks.find((f) => f.feedbackId === 'panel_asleep')
+	assert.ok(asleep, 'the toggle does not report whether the panel is dark')
+	// The two faces must differ in BOTH channels. The background carries the state and the
+	// icon carries what the press will do; a feedback that changed only one of them would
+	// leave a button that either lies about the state or lies about the action.
+	assert.notEqual(asleep.style.bgcolor, t.style.bgcolor, 'the asleep face is the same colour')
+	assert.notEqual(asleep.style.png64, t.style.png64, 'the asleep face offers the same action')
+
+	// And the words version says it in words rather than going blank.
+	assert.equal(seen.presets.panel_toggle_words.style.text, 'PANEL\nSLEEP?')
+	assert.equal(
+		seen.presets.panel_toggle_words.feedbacks.find((f) => f.feedbackId === 'panel_asleep').style.text,
+		'PANEL\nWAKE?',
+	)
+	assert.equal(seen.presets.panel_toggle_words.style.png64, undefined, 'the words preset carries art')
+})
+
+test('#92 every generated button clears 4.5:1, on the resting face and the lit one', async () => {
+	// THE BUG THIS TICKET OPENED WITH. INTERRUPTIBLE is #1a1a1a ink on #e8a317, and the
+	// resting button dims that background to #3a2805 - where the owner's ink measures 1.23:1.
+	// Nothing noticed, because nothing was measuring: the row's colour was assumed to work
+	// everywhere it was pasted.
+	const lum = (packed) => {
+		const chan = (c) => {
+			const s = c / 255
+			return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+		}
+		return 0.2126 * chan((packed >> 16) & 255) + 0.7152 * chan((packed >> 8) & 255) + 0.0722 * chan(packed & 255)
+	}
+	const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05)
+
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	fake.editTable([
+		...SEED,
+		{ id: 'interruptible', label: 'INTERRUPTIBLE', color: '#1a1a1a', bgcolor: '#e8a317', busy: false, order: 2 },
+	])
+	await settle(600)
+
+	// The amber row must be present, or this test passes by testing nothing.
+	assert.ok(seen.presets['state_interruptible_words'], 'the amber row never arrived')
+
+	const faces = []
+	for (const [key, preset] of Object.entries(seen.presets)) {
+		faces.push([`${key} at rest`, preset.style.color, preset.style.bgcolor])
+		for (const f of preset.feedbacks ?? []) {
+			// A feedback style may override one channel and inherit the other, which is exactly
+			// where an unreadable pair can hide - so measure the pair as COMPOSED.
+			faces.push([
+				`${key} + ${f.feedbackId}`,
+				f.style?.color ?? preset.style.color,
+				f.style?.bgcolor ?? preset.style.bgcolor,
+			])
+		}
+	}
+
+	const bad = faces.filter(([, color, bg]) => ratio(color, bg) < 4.5)
+	assert.deepEqual(
+		bad.map(([what, c, b]) => `${what}: ${ratio(c, b).toFixed(2)}:1`),
+		[],
+		'a generated button cannot be read',
+	)
+	// The specific one, named, so this cannot pass by generating no amber button at all.
+	const rest = seen.presets['state_interruptible_words'].style
+	assert.ok(ratio(rest.color, rest.bgcolor) >= 4.5, 'INTERRUPTIBLE at rest is unreadable again')
+})
+
+test('#92 art is inked for the surface it lands on, including the amber fault mark', async () => {
+	// The art ships as a white-ink render and a black-ink one, and the module picks per
+	// background. Three different backgrounds appear on ONE state button - resting, lit, and
+	// the amber a `connection_lost` feedback paints over the top - and the amber one is the
+	// easy one to forget, because it is not in the table at all.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	const preset = seen.presets['state_on-air']
+	const lost = preset.feedbacks.find((f) => f.feedbackId === 'connection_lost')
+	assert.ok(lost.style.png64, 'the amber fault mark drops the art entirely')
+	// Amber is a LIGHT background and the resting red is a dark one, so these two must not be
+	// the same render. Equal here means one of them is unreadable.
+	assert.notEqual(lost.style.png64, preset.style.png64, 'the same ink was used on amber and on dark red')
 })

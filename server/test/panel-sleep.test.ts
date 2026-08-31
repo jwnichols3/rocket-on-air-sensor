@@ -31,6 +31,13 @@ async function fakePanel(t: TestContext) {
   let key = 'unknown';
   let sleeping = false;
   let reachable = true;
+  // The panel REFUSES a sleep while the current row is busy: the switch goes on, the glass
+  // stays lit. That is the firmware's rule (#91) and the reason #91 shipped two buttons
+  // instead of a toggle - so a toggle has to be tested against it, not around it.
+  let refuse = false;
+  // Dark with the manual switch OFF: the nightly schedule, which is device-local (D-111) and
+  // which the server can only ever learn about by reading the glass.
+  let scheduled = false;
   const switchCalls: string[] = [];
   const server: Server = createServer((req, res) => {
     if (!reachable) return; // accept, never answer
@@ -47,8 +54,9 @@ async function fakePanel(t: TestContext) {
       return;
     }
     if (u.pathname === '/text_sensor/Night') {
+      const dark = scheduled || (sleeping && !refuse);
       res.writeHead(200, { 'content-type': 'application/json' })
-        .end(JSON.stringify({ state: sleeping ? 'dark' : 'lit (daytime)' }));
+        .end(JSON.stringify({ state: dark ? 'dark' : refuse ? 'lit (sleep pending - busy or no data)' : 'lit (daytime)' }));
       return;
     }
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ state: key, value: 7 }));
@@ -67,6 +75,12 @@ async function fakePanel(t: TestContext) {
     isSleeping: () => sleeping,
     goAway: () => {
       reachable = false;
+    },
+    refuseSleep: (on: boolean) => {
+      refuse = on;
+    },
+    goDarkOnSchedule: (on: boolean) => {
+      scheduled = on;
     },
   };
 }
@@ -94,12 +108,12 @@ test('#91 POST /panel/sleep and /panel/wake drive the panel switch', async (t) =
 
   const slept = await post(h.base, '/panel/sleep');
   assert.equal(slept.status, 200);
-  assert.deepEqual(await slept.json(), { ok: true, delivered: true, asked: 'sleep' });
+  assert.deepEqual(await slept.json(), { ok: true, delivered: true, asked: 'sleep', wasDark: null });
   assert.equal(panel.isSleeping(), true);
 
   const woke = await post(h.base, '/panel/wake');
   assert.equal(woke.status, 200);
-  assert.deepEqual(await woke.json(), { ok: true, delivered: true, asked: 'wake' });
+  assert.deepEqual(await woke.json(), { ok: true, delivered: true, asked: 'wake', wasDark: null });
   assert.equal(panel.isSleeping(), false);
 
   assert.deepEqual(panel.switchCalls, ['/switch/PanelSleep/turn_on', '/switch/PanelSleep/turn_off']);
@@ -144,7 +158,9 @@ test('#91 an unreachable panel is 200 with delivered:false, never a 5xx', async 
   // button reporting failure on a command the panel took is worse than one that says
   // "asked - now read the status". Same shape as `confirmed`, same reason (section 7).
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { ok: true, delivered: false, asked: 'sleep' });
+  // `wasDark` is null and not false: /panel/sleep never asked the glass anything. Only the
+  // toggle reads it, and reporting `false` here would be a reading nobody took.
+  assert.deepEqual(await res.json(), { ok: true, delivered: false, asked: 'sleep', wasDark: null });
 });
 
 test('#91 a driver that cannot darken a panel says so, rather than pretending', async (t) => {
@@ -181,4 +197,105 @@ test('#91 the routes are gated and are POST-only', async (t) => {
   const wrongMethod = await fetch(`${h.base}/panel/sleep?passphrase=${DEFAULT_PASSPHRASE}`, { headers: REMOTE });
   assert.equal(wrongMethod.status, 405);
   assert.equal(panel.switchCalls.length, 0, 'a GET reached the device');
+});
+
+// #92: one button that does both.
+//
+// #91 argued against a toggle and the argument was sound for the toggle it had in mind - one
+// that remembers its own presses. The panel refuses a sleep while the row is busy, so a
+// press-counting toggle desynchronises on the first refusal and stays wrong until somebody
+// notices. This toggle READS THE GLASS every time and flips what it finds, which is a
+// different mechanism with a different failure mode, and these tests are that distinction.
+
+test('#92 the toggle reads the glass and flips it, both ways', async (t) => {
+  const panel = await fakePanel(t);
+  const h = await boot(t, new EsphomeTextDriver({ host: panel.host, timeoutMs: 500, log: () => {} }));
+
+  const first = await post(h.base, '/panel/toggle');
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), { ok: true, delivered: true, asked: 'sleep', wasDark: false });
+  assert.equal(panel.isSleeping(), true);
+
+  const second = await post(h.base, '/panel/toggle');
+  assert.deepEqual(await second.json(), { ok: true, delivered: true, asked: 'wake', wasDark: true });
+  assert.equal(panel.isSleeping(), false);
+
+  assert.deepEqual(panel.switchCalls, ['/switch/PanelSleep/turn_on', '/switch/PanelSleep/turn_off']);
+});
+
+test('#92 a REFUSED sleep does not desynchronise the toggle', async (t) => {
+  // The exact failure #91 predicted, aimed at the design that has an answer for it. The
+  // press lands on the switch, the busy rule keeps the glass lit, and the NEXT press must
+  // still mean sleep - because the glass is still lit and that is the only thing consulted.
+  // A toggle that counted presses would send wake here, at a panel nobody ever darkened.
+  const panel = await fakePanel(t);
+  const h = await boot(t, new EsphomeTextDriver({ host: panel.host, timeoutMs: 500, log: () => {} }));
+  panel.refuseSleep(true);
+
+  assert.deepEqual(await (await post(h.base, '/panel/toggle')).json(), {
+    ok: true,
+    delivered: true,
+    asked: 'sleep',
+    wasDark: false,
+  });
+  const again = await post(h.base, '/panel/toggle');
+  assert.deepEqual(await again.json(), { ok: true, delivered: true, asked: 'sleep', wasDark: false });
+  assert.deepEqual(panel.switchCalls, ['/switch/PanelSleep/turn_on', '/switch/PanelSleep/turn_on']);
+});
+
+test('#92 pressing it at a panel dark on its own schedule wakes the panel', async (t) => {
+  // 23:30. The glass is dark, the MANUAL switch is off, and a human pointing at a dark panel
+  // and pressing a button means "light that up". A toggle that flipped the manual switch
+  // would send sleep and nothing visible would happen - the exact button that teaches an
+  // operator the deck is broken.
+  const panel = await fakePanel(t);
+  const h = await boot(t, new EsphomeTextDriver({ host: panel.host, timeoutMs: 500, log: () => {} }));
+  panel.goDarkOnSchedule(true);
+  assert.equal(panel.isSleeping(), false, 'the manual switch must be off for this test to mean anything');
+
+  const res = await post(h.base, '/panel/toggle');
+  assert.deepEqual(await res.json(), { ok: true, delivered: true, asked: 'wake', wasDark: true });
+  assert.deepEqual(panel.switchCalls, ['/switch/PanelSleep/turn_off']);
+});
+
+test('#92 a panel that cannot be read is assumed lit, and the press is a sleep', async (t) => {
+  // `glassDark()` returns null when it cannot tell. Guessing LIT sends sleep, which is the
+  // recoverable direction: the busy rule still lights the panel for a call, and one more
+  // press wakes it. Guessing DARK would send wake at a panel already lit, which looks like
+  // a dead button.
+  const panel = await fakePanel(t);
+  const h = await boot(t, new EsphomeTextDriver({ host: panel.host, timeoutMs: 120, retries: 0, log: () => {} }));
+  panel.goAway();
+
+  const res = await post(h.base, '/panel/toggle');
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, delivered: false, asked: 'sleep', wasDark: false });
+});
+
+test('#92 the toggle is gated and POST-only, like its two siblings', async (t) => {
+  const panel = await fakePanel(t);
+  const h = await boot(t, new EsphomeTextDriver({ host: panel.host, timeoutMs: 500, log: () => {} }));
+
+  const anon = await post(h.base, '/panel/toggle', REMOTE);
+  assert.equal(anon.status, 401);
+  assert.equal(panel.switchCalls.length, 0, 'an unauthenticated request reached the device');
+
+  const wrongMethod = await fetch(`${h.base}/panel/toggle?passphrase=${DEFAULT_PASSPHRASE}`, { headers: REMOTE });
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(panel.switchCalls.length, 0, 'a GET reached the device');
+});
+
+test('#92 a driver that cannot darken a panel refuses the toggle too', async (t) => {
+  class NoSleep implements LightDriver {
+    async set(id: string): Promise<string> {
+      return id;
+    }
+    async read(): Promise<string> {
+      return UNKNOWN_ID;
+    }
+  }
+  const h = await boot(t, new NoSleep());
+  const res = await post(h.base, '/panel/toggle');
+  assert.equal(res.status, 501);
+  assert.match(((await res.json()) as { error: string }).error, /cannot darken/);
 });

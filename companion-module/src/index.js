@@ -32,6 +32,8 @@ import {
 	runEntrypoint,
 } from '@companion-module/base'
 
+import { ICONS } from './icons.js'
+
 /// The reserved row (contract section 1). It always exists in a real table and its `busy` is
 /// always true; this is what the module falls back to before the first table pull, which is
 /// the only moment there is no row to read. See reservedRow().
@@ -45,6 +47,51 @@ function dim(packed) {
 	const g = ((packed >> 8) & 255) >> 2
 	const b = (packed & 255) >> 2
 	return combineRgb(r, g, b)
+}
+
+/// WCAG relative luminance of a packed colour.
+function luminance(packed) {
+	const chan = (c) => {
+		const s = c / 255
+		return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+	}
+	return 0.2126 * chan((packed >> 16) & 255) + 0.7152 * chan((packed >> 8) & 255) + 0.0722 * chan(packed & 255)
+}
+
+/// WCAG contrast ratio. 1 is invisible, 21 is black on white, 4.5 is the AA floor for text.
+function contrast(a, b) {
+	const la = luminance(a)
+	const lb = luminance(b)
+	return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
+/**
+ * The caption colour that can actually be read on `bgcolor` (#92).
+ *
+ * THE TABLE'S COLOURS ARE STILL USED VERBATIM (D-31, D-42) - `preferred` wins whenever it
+ * clears AA, and on the LIT button it always does, because the owner chose those two colours
+ * for each other. This exists for the button at REST, whose background is `dim()` of the
+ * owner's colour and is therefore a colour the owner never picked ink for.
+ *
+ * INTERRUPTIBLE is the case that forced it: #1a1a1a on amber quartered to #3a2805 measures
+ * 1.23:1. Not "a bit dim" - invisible. Nothing in the module noticed, because nothing was
+ * measuring; the row's own colour was simply assumed to work everywhere it was pasted.
+ */
+function readableInk(preferred, bgcolor) {
+	if (contrast(preferred, bgcolor) >= 4.5) return preferred
+	const white = combineRgb(255, 255, 255)
+	const black = combineRgb(0, 0, 0)
+	return contrast(white, bgcolor) >= contrast(black, bgcolor) ? white : black
+}
+
+/// The art for `name`, inked for whatever `bgcolor` it is about to be drawn on. Undefined when
+/// there is no icon for that name, which a caller must treat as "no picture", not as an error.
+function icon(name, bgcolor) {
+	const art = ICONS[name]
+	if (!art) return undefined
+	const white = combineRgb(255, 255, 255)
+	const black = combineRgb(0, 0, 0)
+	return contrast(white, bgcolor) >= contrast(black, bgcolor) ? art.light : art.dark
 }
 
 /// #rrggbb -> Companion's packed integer. The table's colours are used verbatim (D-31, D-42).
@@ -724,6 +771,18 @@ class OnAirInstance extends InstanceBase {
 					await this.panelSleep(false)
 				},
 			},
+			panel_toggle: {
+				name: 'Panel: sleep/wake toggle',
+				description:
+					'One button for both. The SERVER reads the panel\'s glass and sends the opposite - ' +
+					'dark wakes, lit sleeps - so this button keeps no memory of its own presses and cannot ' +
+					'drift out of step with the panel. A sleep refused by a busy row leaves the next press ' +
+					'still meaning sleep, and a panel already dark on its nightly schedule wakes.',
+				options: [],
+				callback: async () => {
+					await this.panelSleep('toggle')
+				},
+			},
 			refresh_table: {
 				name: 'Refresh the state table now',
 				options: [],
@@ -752,8 +811,11 @@ class OnAirInstance extends InstanceBase {
 	 * and it is logged rather than raised for the same reason (D-123): the operator wants to
 	 * know, and the instance is not broken.
 	 */
-	async panelSleep(on) {
-		const what = on ? 'sleep' : 'wake'
+	async panelSleep(command) {
+		// `true`/`false` from the two one-way buttons, `'toggle'` from the one-button form. The
+		// booleans are kept rather than replaced with strings so #91's two actions read the same
+		// as they always did at their call sites.
+		const what = command === 'toggle' ? 'toggle' : command ? 'sleep' : 'wake'
 		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
 		try {
 			const res = await fetch(`${this.base()}/panel/${what}`, {
@@ -764,13 +826,22 @@ class OnAirInstance extends InstanceBase {
 			if (this.stopping) return
 			if (res.ok) {
 				let delivered = null
+				let asked = null
 				try {
-					delivered = (await res.json())?.delivered ?? null
+					const body = await res.json()
+					delivered = body?.delivered ?? null
+					asked = body?.asked ?? null
 				} catch {
 					/* a 200 with an unreadable body; the poll will settle it */
 				}
 				if (delivered === false) {
 					this.log('warn', `panel ${what}: the server could not reach the panel. Nothing changed on the glass.`)
+				} else if (what === 'toggle' && asked) {
+					// WHICH WAY IT WENT IS THE ONE THING A TOGGLE CANNOT SHOW ON ITS OWN FACE. The
+					// server decided, from a reading this module never saw; logging its answer is
+					// what makes a press that did the opposite of what the operator expected
+					// explainable afterwards instead of a mystery.
+					this.log('info', `panel toggle: the glass was ${asked === 'sleep' ? 'lit' : 'dark'}, sent ${asked}`)
 				}
 				// A SUCCESSFUL SLEEP IS NOT A DARK PANEL. The panel refuses while the row is
 				// busy, so the honest thing to report is that we asked. The answer arrives as
@@ -973,9 +1044,67 @@ class OnAirInstance extends InstanceBase {
 
 	buildPresets() {
 		const presets = {}
+		const white = combineRgb(255, 255, 255)
+		const black = combineRgb(0, 0, 0)
+		// The amber a `connection_lost` feedback paints over ANY state button. It is a third
+		// background the art has to survive, and it is not in the table - so the icon is re-inked
+		// for it explicitly. Left out, white art sits on amber at 2.1:1 exactly when the operator
+		// most needs to read which state has gone stale.
+		const AMBER = combineRgb(232, 163, 23)
+
 		for (const row of this.states) {
-			const color = rgb(row.color, combineRgb(255, 255, 255))
-			const bgcolor = rgb(row.bgcolor, combineRgb(0, 0, 0))
+			const lit = rgb(row.bgcolor, black)
+			const rest = dim(lit)
+			const owner = rgb(row.color, white)
+			// TWO INKS, NOT ONE. The owner's colour on the owner's background; a measured one on
+			// the dimmed background the owner never chose ink for. See readableInk().
+			const litInk = readableInk(owner, lit)
+			const restInk = readableInk(owner, rest)
+			const reserved = this.reservedRow()
+			const reservedBg = rgb(reserved.bgcolor, black)
+
+			// A ROW WITH NO ART FALLS BACK TO ITS WORDS. The table is the owner's and they can add
+			// rows; a row this module has no icon for would otherwise generate a blank button, which
+			// is the silent-drop failure contract section 6 forbids for state ids and which is no
+			// better here. `icon()` returning undefined leaves `png64` unset, so the caption has to
+			// carry it.
+			const art = ICONS[row.id] !== undefined
+			const caption = art ? '' : row.label
+
+			const stateFeedbacks = (withArt) => [
+				{
+					feedbackId: 'state_is',
+					options: { state: row.id },
+					// Lit in the row's OWN colours, dimmed when it is not the current state, so a deck
+					// of buttons reads as one indicator rather than five.
+					style: {
+						color: litInk,
+						bgcolor: lit,
+						...(withArt ? { png64: icon(row.id, lit) } : {}),
+					},
+				},
+				{
+					feedbackId: 'connection_lost',
+					options: {},
+					style: {
+						color: readableInk(black, AMBER),
+						bgcolor: AMBER,
+						...(withArt ? { png64: icon(row.id, AMBER) } : {}),
+					},
+				},
+				{
+					feedbackId: 'no_data',
+					options: {},
+					style: {
+						text: withArt && ICONS[reserved.id] !== undefined ? '' : reserved.label,
+						size: 'auto',
+						color: readableInk(rgb(reserved.color, white), reservedBg),
+						bgcolor: reservedBg,
+						...(withArt ? { png64: icon(reserved.id, reservedBg) } : {}),
+					},
+				},
+			]
+
 			// STABLE ID, keyed on the row id and nothing else. Row ids are immutable (D-31) and
 			// index never appears (D-34), so a preset keeps its identity across a table edit -
 			// which is what makes 5.1's live-linked preset references work when they land.
@@ -986,39 +1115,35 @@ class OnAirInstance extends InstanceBase {
 				// AT REST the row is dimmed; `state_is` lights it in full. The button therefore
 				// SAYS something by changing, which is the whole job of a state indicator.
 				style: {
-					text: row.label, // the caption field is `label`; there is no `row.text`
+					text: caption,
 					size: 'auto',
-					color,
-					bgcolor: dim(bgcolor),
+					color: restInk,
+					bgcolor: rest,
+					png64: icon(row.id, rest),
 				},
 				steps: [{ down: [{ actionId: 'set_state', options: { state: row.id } }], up: [] }],
 				// ORDER IS THE PRIORITY (D-122, #75). Later feedbacks win, so the state's own
 				// colours are laid down first and the two connection marks last:
 				// dark-because-dead must never be painted over by anything.
-				feedbacks: [
-					{
-						feedbackId: 'state_is',
-						options: { state: row.id },
-						// Lit in the row's OWN colours, dimmed when it is not the current state, so a
-						// deck of buttons reads as one indicator rather than five.
-						style: { color, bgcolor },
-					},
-					{
-						feedbackId: 'connection_lost',
-						options: {},
-						style: { color: combineRgb(0, 0, 0), bgcolor: combineRgb(232, 163, 23) },
-					},
-					{
-						feedbackId: 'no_data',
-						options: {},
-						style: {
-							text: this.reservedRow().label,
-							size: 'auto',
-							color: rgb(this.reservedRow().color, combineRgb(255, 255, 255)),
-							bgcolor: rgb(this.reservedRow().bgcolor, combineRgb(0, 0, 0)),
-						},
-					},
-				],
+				feedbacks: stateFeedbacks(true),
+			}
+
+			// THE SAME BUTTON IN WORDS. Not a lesser version - an icon is faster to read once you
+			// know it and useless before that, and which of those an operator is depends on the
+			// operator. Both sets are generated from the same row, wear the same feedbacks and
+			// write the same state, so a deck can mix them freely.
+			presets[`state_${row.id}_words`] = {
+				type: 'button',
+				category: 'States (words)',
+				name: `${row.label} (words)`,
+				style: {
+					text: row.label, // the caption field is `label`; there is no `row.text`
+					size: 'auto',
+					color: restInk,
+					bgcolor: rest,
+				},
+				steps: [{ down: [{ actionId: 'set_state', options: { state: row.id } }], up: [] }],
+				feedbacks: stateFeedbacks(false),
 			}
 		}
 
@@ -1057,39 +1182,84 @@ class OnAirInstance extends InstanceBase {
 			}
 		}
 
-		// TWO BUTTONS AND NOT ONE TOGGLE (#91). A toggle has to know which way it is pointing,
-		// and this one cannot: the panel refuses a sleep while the row is busy, so "asked to
-		// sleep" and "is asleep" come apart exactly when it matters. Two buttons each do one
-		// unambiguous thing, and the sleep button wears the asleep feedback so it reports the
-		// panel's answer rather than the press.
-		presets.panel_sleep = {
-			type: 'button',
-			category: 'Utility',
-			name: 'Panel sleep',
-			style: { text: 'PANEL\nSLEEP', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(40, 40, 40) },
-			steps: [{ down: [{ actionId: 'panel_sleep', options: {} }], up: [] }],
-			feedbacks: [
-				{
-					feedbackId: 'panel_asleep',
-					options: {},
-					style: {
-						text: 'PANEL\nASLEEP',
-						size: '14',
-						color: combineRgb(120, 120, 130),
-						bgcolor: combineRgb(0, 0, 0),
+		// THE PANEL BUTTONS. #91 shipped two, and they stay: a one-way button is the thing you
+		// want on a wall when you know which way you mean. #92 adds the toggle beside them
+		// because a deck has finite buttons and the common case is one press either way.
+		const SLEEP_BG = combineRgb(40, 40, 40)
+		const ASLEEP_BG = combineRgb(0, 0, 0)
+		const WAKE_BG = combineRgb(200, 200, 205)
+
+		const panel = (key, category, withArt) => {
+			const word = (text, bg) => ({
+				text: withArt ? '' : text,
+				size: '14',
+				color: readableInk(combineRgb(255, 255, 255), bg),
+				bgcolor: bg,
+			})
+			const art = (name, bg) => (withArt ? { png64: icon(name, bg) } : {})
+
+			presets[`panel_sleep${key}`] = {
+				type: 'button',
+				category,
+				name: 'Panel sleep',
+				style: { ...word('PANEL\nSLEEP', SLEEP_BG), ...art('sleep', SLEEP_BG) },
+				steps: [{ down: [{ actionId: 'panel_sleep', options: {} }], up: [] }],
+				// It wears the asleep feedback so it reports the panel's ANSWER rather than the
+				// press: the panel refuses a sleep while the row is busy, and a button that lit up
+				// on the press would be lying during a call - the one time anybody is looking.
+				feedbacks: [
+					{
+						feedbackId: 'panel_asleep',
+						options: {},
+						style: {
+							text: withArt ? '' : 'PANEL\nASLEEP',
+							size: '14',
+							color: combineRgb(120, 120, 130),
+							bgcolor: ASLEEP_BG,
+							...art('sleep', ASLEEP_BG),
+						},
 					},
-				},
-			],
+				],
+			}
+
+			presets[`panel_wake${key}`] = {
+				type: 'button',
+				category,
+				name: 'Panel wake',
+				style: { ...word('PANEL\nWAKE', WAKE_BG), ...art('wake', WAKE_BG) },
+				steps: [{ down: [{ actionId: 'panel_wake', options: {} }], up: [] }],
+				feedbacks: [],
+			}
+
+			// THE TOGGLE SHOWS THE PANEL, AND THE AFFORDANCE FALLS OUT OF THAT. At rest it wears
+			// the moon on dark: the glass is lit, press to darken it. Asleep it goes to the sun on
+			// a bright ground: the glass is dark, press to light it. The background carries the
+			// STATE and the icon carries WHAT THE PRESS WILL DO, which is the one thing a toggle
+			// cannot say by its position - it has none.
+			presets[`panel_toggle${key}`] = {
+				type: 'button',
+				category,
+				name: 'Panel sleep/wake toggle',
+				style: { ...word('PANEL\nSLEEP?', SLEEP_BG), ...art('sleep', SLEEP_BG) },
+				steps: [{ down: [{ actionId: 'panel_toggle', options: {} }], up: [] }],
+				feedbacks: [
+					{
+						feedbackId: 'panel_asleep',
+						options: {},
+						style: {
+							text: withArt ? '' : 'PANEL\nWAKE?',
+							size: '14',
+							color: readableInk(combineRgb(255, 255, 255), WAKE_BG),
+							bgcolor: WAKE_BG,
+							...art('wake', WAKE_BG),
+						},
+					},
+				],
+			}
 		}
 
-		presets.panel_wake = {
-			type: 'button',
-			category: 'Utility',
-			name: 'Panel wake',
-			style: { text: 'PANEL\nWAKE', size: '14', color: combineRgb(0, 0, 0), bgcolor: combineRgb(200, 200, 205) },
-			steps: [{ down: [{ actionId: 'panel_wake', options: {} }], up: [] }],
-			feedbacks: [],
-		}
+		panel('', 'Panel', true)
+		panel('_words', 'Panel (words)', false)
 
 		presets.refresh = {
 			type: 'button',

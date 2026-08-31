@@ -41,6 +41,6 @@ server/public/admin/index.html
 # after which this copy is dead and can be deleted.
 /public/admin/
 .playwright-mcp/
-companion-module/test/.instance.generated.mjs
+companion-module/src/.instance.generated.mjs
 companion-module/dist/
 companion-module/pkg/

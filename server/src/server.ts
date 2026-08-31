@@ -72,6 +72,7 @@ const ROUTES: Record<string, string[]> = {
   '/off': ['POST'],
   '/panel/sleep': ['POST'],
   '/panel/wake': ['POST'],
+  '/panel/toggle': ['POST'],
   '/message': ['PUT', 'DELETE'],
   '/events': ['GET'],
   '/display': ['GET'],
@@ -781,12 +782,37 @@ async function handle(
   //
   // Through the write queue, like every other device write, so a sleep cannot overtake a
   // state write that is already in flight.
-  if (path === '/panel/sleep' || path === '/panel/wake') {
-    const sleep = path === '/panel/sleep';
+  if (path === '/panel/sleep' || path === '/panel/wake' || path === '/panel/toggle') {
     if (deps.driver.setPanelSleep === undefined) {
       sendJson(res, 501, { error: 'this light driver cannot darken a panel' });
       return;
     }
+
+    // THE TOGGLE ASKS THE GLASS, IT DOES NOT REMEMBER (#92).
+    //
+    // #91 shipped two buttons and no toggle, on the grounds that "asked to sleep" and "is
+    // asleep" come apart - the panel refuses a sleep while the row is busy. That reasoning
+    // was about a toggle that tracks its own PRESSES, and it still holds. This one does not:
+    // it reads the panel every time and flips whatever it finds, so a refused sleep leaves
+    // the next press still meaning "sleep" rather than desynchronising the button forever.
+    //
+    // It also gets the NIGHT SCHEDULE right for free. At 23:30 the glass is dark with the
+    // manual switch off; pressing this sends WAKE, which is what a human pointing at a dark
+    // panel means. A toggle that flipped the manual SWITCH instead would send sleep, and
+    // nothing visible would happen.
+    let wasDark: boolean | null = null;
+    if (path === '/panel/toggle') {
+      wasDark = deps.driver.glassDark ? await deps.driver.glassDark() : null;
+      // `glassDark()` returns null when it cannot tell - unreachable, or inside the skip
+      // window a dead panel arms (D-132). Fall back to the supervisor's last published
+      // verdict, which already holds the last real reading through a blip, and to "lit" if
+      // even that says nothing. Guessing lit means the press sends SLEEP, which is the
+      // recoverable direction: the busy rule still lights the panel for a call, and the next
+      // press wakes it.
+      if (wasDark === null) wasDark = deps.store.get().confirmedReason === 'asleep';
+    }
+    const sleep = path === '/panel/toggle' ? !wasDark : path === '/panel/sleep';
+
     let delivered = false;
     await enqueueWrite(async () => {
       try {
@@ -802,7 +828,7 @@ async function handle(
     //
     // `delivered` is NOT "the glass went dark". The panel refuses a sleep while the row is
     // busy, and that answer arrives through `confirmedReason` on the next supervisor tick.
-    sendJson(res, 200, { ok: true, delivered, asked: sleep ? 'sleep' : 'wake' });
+    sendJson(res, 200, { ok: true, delivered, asked: sleep ? 'sleep' : 'wake', wasDark });
     return;
   }
 

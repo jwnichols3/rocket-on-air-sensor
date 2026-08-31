@@ -221,6 +221,13 @@ refuses to darken while the current row is busy, however it was asked - so a sle
 during a call does nothing, and a call starting while it is asleep lights it. `delivered:true`
 with the panel still lit is correct, not an error.
 
+`POST /panel/toggle` is the one-button form: it reads the glass and sends the opposite. It
+answers with `asked` set to whichever command it chose and `wasDark` set to the reading it
+took. It keeps no memory between presses, so a sleep refused by a busy row leaves the next
+press still meaning sleep - and a panel already dark on its schedule wakes, which is what
+pressing a button at a dark panel means. If it cannot read the glass it assumes lit and
+sends sleep.
+
 The nightly schedule itself - when it sleeps, when it wakes, how dark - is configured on the
 panel and is not on this API.
 

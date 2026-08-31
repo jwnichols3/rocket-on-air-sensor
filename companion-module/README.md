@@ -7,20 +7,25 @@ rebuilt against the v2 client contract by
 [#73](https://github.com/jwnichols3/rocket-on-air-sensor/issues/73),
 [#74](https://github.com/jwnichols3/rocket-on-air-sensor/issues/74),
 [#75](https://github.com/jwnichols3/rocket-on-air-sensor/issues/75) and
-[#76](https://github.com/jwnichols3/rocket-on-air-sensor/issues/76).
+[#76](https://github.com/jwnichols3/rocket-on-air-sensor/issues/76). Given wordless button art,
+a measured contrast rule and a sleep/wake toggle by
+[#92](https://github.com/jwnichols3/rocket-on-air-sensor/issues/92).
 
 Setup and packaging: `docs/companion-setup.md`. This file is the developer view.
 
 ```sh
 npm run build   --workspace companion-module   # bundle to dist/
 npm run package --workspace companion-module   # build, then pkg/rocket-onair-<v>.tgz
-npm run test    --workspace companion-module   # 38 tests, no Companion needed
+npm run test    --workspace companion-module   # 49 tests, no Companion needed
+npm run icons   --workspace companion-module   # redraw src/icons.js from tools/icons/icons.mjs
 ```
 
 ## Layout
 
 ```
 src/index.js            the module
+src/icons.js            GENERATED button art, base64 PNG (npm run icons)
+tools/icons/            the art: a rasteriser, the shapes, and the generator
 companion/manifest.json what Companion reads to load it
 build.mjs               esbuild -> dist/, the shape Companion installs
 package.mjs             dist/ -> pkg/*.tgz, the shape Companion IMPORTS
@@ -45,6 +50,28 @@ Two transports feed **one** ingest path:
 
 `ingest()` is the only writer of `current` and `lastContactAt`, so the two transports cannot
 disagree about which of them is authoritative.
+
+## The buttons (#92)
+
+Every state row and every panel button generates **two** presets: a graphic one in `States` /
+`Panel`, and a words-only one in `States (words)` / `Panel (words)`. They are the same button -
+same action, same feedbacks, same colours - so a deck can mix them freely.
+
+**The art is generated, not pasted.** `tools/icons/icons.mjs` holds the shapes as code;
+`npm run icons` rasterises them and writes `src/icons.js`. Each icon ships twice, white-ink and
+black-ink, and the module picks between them at runtime by measuring contrast against the
+button's actual background. That matters because one state button has **three** backgrounds -
+resting, lit, and the amber a `connection_lost` feedback paints over the top - and because the
+table's colours belong to the owner, who can change them from the admin console at any time.
+
+**Contrast is measured, never assumed.** `readableInk()` keeps the row's own colour whenever it
+clears WCAG AA on the background in question, and substitutes white or black when it does not.
+It exists because INTERRUPTIBLE's `#1a1a1a` on amber-quartered-to-`#3a2805` measured **1.23:1**
+on the resting button and had been shipping that way: the row's ink was chosen by the owner for
+the row's own background, and nothing had ever checked it against the dimmed one.
+
+A row this module has **no icon for falls back to its words**, rather than generating a blank
+button. The table is the owner's and they can add rows.
 
 ## Three things that cost real time to find
 

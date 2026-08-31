@@ -193,6 +193,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-49** the pin refuses and the held state stands | **Retired** by D-126, along with `judgeWrite()`, the `409` settle-back and the `human:hold` source value. Read its closing line - *"the pin is what the system falls back TO, not merely a veto"* - as a description of the refusal path, not of an invariant: D-126 deletes the refusal, and the false ON that sentence guards against goes with it. |
 > | **D-120** a Companion press stays `human:`, and the pin it drops is announced | **Retired** by D-126. No press can drop a pin, so the `leave`/`pin`/`release` option, `pin_current_state`, `release_hold`, the two hold feedbacks, `$(hold)`/`$(hold_label)` and the PIN/UNPIN presets all go. Its load-bearing half survives as a general rule: `POST /state/{id}` always SETS the row named in the path. Module `0.2.0` -> `0.3.0`; buttons already placed on a deck are orphaned. |
 > | **D-118** *"`409` is three different things and only one carries a status body"* | **Inverted** by D-126. There are four `409`s now, none of them a write refusal and **none carrying a status body**: an unset `/on`/`/off` shortcut row, a stale config `version`, a config save that failed for a reason other than disk-full, and a rebind that rolled back. Every one means a person must change something. D-118's other two corrections (the 16 KB `400`, the `403` rows) stand; its `holdFromQuery` note describes a function that no longer exists. |
+> | **D-133** *"Two buttons, not one toggle"* | **Amended** by D-134. The reasoning was sound about a toggle that remembers its own PRESSES, and that toggle is still not built. `POST /panel/toggle` reads the glass on every press and holds no state, so the objection - that "asked to sleep" and "is asleep" come apart - does not reach it. Both one-way buttons survive unchanged. |
 > | Every decision that **enumerates `hold` as a wire field** - D-30, D-32, D-35, D-36, D-48, D-51, D-52, D-63, D-75, D-91, D-121, D-122 | **Read them without it.** The bodies are left alone on purpose - a decision is a record of what was decided, not a description of today - but `hold` is off the wire, out of the state object and out of the persisted file since D-126, so every list of payload fields, every "factory reset clears the hold", and D-51's *"`/display` needs `message` and `hold`"* is one item shorter - D-52 had already taken the HELD badge off that page. Nothing else in any of them moves. |
 
 - **D-1 (2026-08-05)** Receiver is a Raspberry Pi hosting a REST API; the work Mac runs
@@ -4872,3 +4873,79 @@ else (state, light control, API) lives on the receiver.
   codegen proves nothing. `strings` on the actual `.bin` found `PanelSleep` and both new log
   strings. Then the marker: `GET /switch/PanelSleep` was **404 before and 200 after**, `Frames`
   reset to 4, and it was re-checked for 120 seconds to clear #87's 60-second rollback window.
+
+- **D-134 (2026-08-30)** **A sleep/wake toggle that asks the glass rather than remembering.**
+  #92. Rocket asked for one button that darkens the panel and lights it again, having read
+  D-133 and its "two buttons, not one toggle".
+
+  **D-133's argument was right and does not reach this.** It was about a toggle that tracks its
+  own presses, and that toggle really is broken here: the panel refuses a sleep while the row is
+  busy, so the first refused press leaves the button believing the panel is asleep, and the next
+  press sends WAKE at a panel nobody ever darkened. Nothing ever corrects it.
+
+  **So the toggle keeps no state.** `POST /panel/toggle` calls `glassDark()` and sends the
+  opposite. A refused sleep leaves the glass lit, so the next press still means sleep - the
+  desynchronisation has nowhere to accumulate.
+
+  **It gets the SCHEDULE right without knowing the schedule exists**, which is the part worth
+  keeping. At 23:30 the glass is dark with the manual switch off; the toggle sends wake, which
+  is what a human pointing at a dark panel means. A toggle that flipped the manual SWITCH -
+  the obvious implementation, and the one that keeps D-111's schedule/override split cleanest -
+  would send sleep, and nothing visible would happen.
+
+  **Where it lives is the decision.** This is server-side, not module-side, and deliberately:
+  the module has no fresh reading of the glass - only a poll that may be seconds old - and the
+  server is one hop from the device. A module-side toggle would be the press-counting one
+  wearing a disguise.
+
+  **Unreadable glass is assumed LIT**, after falling back to the last published
+  `confirmedReason`. That sends sleep, which is recoverable: the busy rule still lights the
+  panel for a call, and one more press wakes it. Assuming dark would send wake at a lit panel,
+  which presents as a dead button. Both directions are mutation-proven by named tests.
+
+  `wasDark` is on the response and is `null` for `/panel/sleep` and `/panel/wake` - they never
+  ask the glass anything, and reporting `false` there would be a measurement nobody took.
+
+- **D-135 (2026-08-30)** **Wordless button art, and contrast that is measured rather than
+  assumed.** #92. Rocket asked for graphics on the deck buttons, chosen by running six
+  variations past a judge, and for a full set of word-only buttons beside them.
+
+  **THE INTERRUPT BUTTON WAS UNREADABLE AND HAD BEEN SHIPPING THAT WAY.** Rocket reported it;
+  the measurement is **1.23:1**. The row's ink `#1a1a1a` was chosen by the owner for the row's
+  own amber `#e8a317`, where it is fine - but the button AT REST dims that background by `>>2`
+  to `#3a2805`, a colour nobody ever chose ink for. `readableInk()` now keeps the owner's colour
+  whenever it clears AA on the background in question and substitutes white or black when it
+  does not, so D-31/D-42's "colours verbatim" survives everywhere it was ever true. A test
+  measures **every** generated face - base styles and feedback overrides as composed - and
+  fails the build below 4.5:1.
+
+  **The art is generated from code, not pasted in as base64.** `tools/icons/` is a small
+  rasteriser and a file of shapes; `npm run icons` writes `src/icons.js`. That is what makes it
+  answerable: the ink is chosen by contrast against a background that comes from a table the
+  owner can edit from the admin console at any time. Each icon ships twice - white ink and black
+  ink - and the module picks at runtime, so one state button gets the right art on all THREE of
+  its backgrounds: resting, lit, and the amber a `connection_lost` feedback paints over the top.
+
+  **Six variations, judged blind, and the judging changed the result.** Six design languages
+  (signals, broadcast, doors, geometric abstraction, human figures, public signage), each drawn
+  and rendered onto the real button colours at true 72-pixel size, then scored by three judges
+  with different lenses. Public signage won 7.87 to 5.83, unanimously. More usefully, all three
+  independently found the same defect - `recording` was a ring with a dot and `unknown` a broken
+  ring, two circular silhouettes adjacent on the deck differing only in detail a 72-pixel glance
+  loses. Recording became the solid dot the transport symbol actually is; unknown left the
+  circle entirely for a square that never closes.
+
+  **The judges were overruled once, on purpose.** All three said the amber caution triangle for
+  INTERRUPTIBLE reads "fault" rather than "you may interrupt". They are right. Four
+  alternatives were drawn and looked at on the real amber: a knocking fist (an unreadable blob
+  at 72), a half-lit disc (crisp, but ON AIR is a disc, so the confusable pair became the one
+  pair that must never be confused), a door standing ajar (crisp, and the best semantic fit)
+  and pause bars (says "paused"). **The door lost on which way it fails.** Misread, a door ajar
+  says "come in, it is fine"; misread, a triangle says "careful". The cardinal sin here is a
+  false OFF (D-6, D-63), so the icon that errs toward caution wins over the better picture.
+
+  **Every row and every panel button generates TWO presets**, graphic and words, in parallel
+  categories. Not a fallback - an icon is faster to read once you know it and useless before
+  that, and which of those an operator is depends on the operator. A row this module has no
+  icon for falls back to its words rather than generating a blank button, because the table is
+  the owner's and they can add rows.
