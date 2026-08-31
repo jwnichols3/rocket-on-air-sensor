@@ -94,6 +94,10 @@ connection page then fixes the dropdown.
 After step 2 the version list shows the new version, and the plug icon - "in use by a
 connection" - is **still on the old one**. Nothing has changed on the deck.
 
+Companion says so itself, in the log, and it is worth knowing the phrasing: an import logs
+`Installed connection module rocket-onair v0.6.0` and then
+**`Controller: Reloading 0 instances`**. Zero. The module is on disk and nothing is running it.
+
 `Connections` -> click the connection -> **Module Version** -> pencil -> pick the new version
 -> **Save**. The connection restarts on the new build.
 
@@ -128,8 +132,12 @@ Good markers, cheapest first:
 registers no new variable, and looking for one would say "no change" about a perfectly good
 install. Actions surface as presets, so the preset count is the marker for those.
 
-The `Presets` tab often needs **two clicks** - the first lands before the panel renders. And
-`find` returns a ref for it that does not activate; click the coordinates instead.
+The `Presets` tab is at the top right of `Buttons`, beside `Pages` and `Recorder`. **It is a
+toggle, so do not click it twice on principle** - a blind double click lands on Presets and
+then goes straight back to Pages, which reads as the tab being broken. Click once, screenshot,
+and click again only if the panel did not switch. (A click DOES get eaten if the page is still
+painting the button grid, which is where "it needs two clicks" came from.) `find` returns a ref
+for the tab that does not activate; click the coordinates instead.
 
 Verify the value is *correct*, not merely present. A new field showing the wrong thing is a
 worse outcome than a missing one, because it looks like success.
@@ -138,10 +146,28 @@ And check the marker was **absent before**. A marker you only ever observe after
 proves the page renders, not that anything moved - which is the same vacuous-check failure as
 diffing two directories that both failed to extract.
 
-Then read `Log` (sidebar, not `/logs`). Filter mentally: this host runs many connections and
-one of them is usually failing about something unrelated. Look only for lines naming your
-connection. A `stream: fetch failed` at the moment the on-air server restarted is expected -
-that is the watchdog reconnecting - and is not a fault.
+Then read `Log` (sidebar, not `/logs`). **Turn `Info` on** - the toggles are top left and the
+page opens with `Warning` only. This matters: the module's own startup line is Info-level, and
+at the default filter you cannot see the new process start at all. What you want is the
+sequence, which is the cheapest end-to-end confirmation there is:
+
+```
+20:33:15 Instance/UserModulesManager: Installed connection module rocket-onair v0.6.0
+20:33:56 Instance/ProcessManager: Starting instance: On_Air
+20:33:56 Instance/Child/On_Air: Process started process 67198
+20:33:56 Instance/Connection/On_Air: state table v11, 5 rows      <- the MODULE talking
+```
+
+That last line is the module itself, on the new build, having reached the server.
+
+Filter mentally: this host runs many connections and one of them is usually failing about
+something unrelated. Look only for lines naming your connection. A `stream: fetch failed` at
+the moment the on-air server restarted is expected - that is the watchdog reconnecting - and is
+not a fault.
+
+**Check the tail is current before reading anything into a quiet log**: compare the last
+line's timestamp to the clock. `ptz-a` fails every ~77 s and is a usable heartbeat - if its
+last line is more than that old, the view has stopped updating and you are reading history.
 
 ## 5. Say what the humans have to do by hand
 
@@ -210,8 +236,6 @@ The loop must terminate in one of two ways, and "I read it and it seemed fine" i
 - **Marker used:** `$(On_Air:confirmed_reason)`, described *"Why confirmed is unknown (asleep /
   not-repainting / unreachable)"*. Healthy reading is **empty** while the panel is lit - the
   server omits the field unless it can name a reason. Variable count went 9 -> 10.
-- **`find` located the hidden file input first time** with the query in step 2. Worth keeping
-  verbatim.
 - **The log needed filtering.** `ptz-a` was failing every ~77s about an unrelated host and
   filled the page. The only On_Air line was a `stream: fetch failed` at the exact second the
   on-air daemon was restarted - expected. Step 4's filtering advice is from this.
@@ -262,3 +286,41 @@ The loop must terminate in one of two ways, and "I read it and it seemed fine" i
 - Loop outcome: **five edits.** Step 2 now explains itself, step 3 gained the two timing
   traps, and the marker table gained presets plus the rule that the marker must match what
   the version changed.
+
+## 2026-08-30 - 0.5.0 -> 0.6.0 (#92, button art and the sleep/wake toggle)
+
+- **Step 2's confirmation did its job, first time it was actually followed.** Checked
+  `/modules/connection/rocket-onair` after the upload, saw `0.6.0` at the top of the list with
+  **the plug icon still on `0.5.0`**, then loaded the connection page fresh - and the version
+  dropdown offered `v0.6.0` correctly. Last run's stale dropdown did not recur. One check, one
+  page load, and the ambiguity that cost a retry last time never appeared.
+- **Companion states the install-is-not-running trap in its own log**, which is new and useful:
+  `Installed connection module rocket-onair v0.6.0` is immediately followed by
+  `Controller: Reloading 0 instances`. Step 3 quotes it now.
+- **Marker used: the PRESET COUNT, 9 -> 18**, read off the `On_Air` row in `Buttons` ->
+  `Presets` before and after, plus four category headings that cannot exist in 0.5.0 -
+  `Panel`, `Panel (words)`, `States`, `States (words)`. 18 was PREDICTED before looking
+  (5 table rows x 2, plus 8 utility), which is worth doing: a count you compute first is a
+  test, and a count you read first is a description.
+- **`png64` takes RAW base64 with no `data:image/png;base64,` prefix**, and Companion renders
+  it in the preset previews in the web UI. Confirmed by eye at 72 px. Recorded because the next
+  version that touches art should not have to rediscover it.
+- **The `Presets` tab is a toggle.** Clicking it twice - which this file told me to do - opened
+  Presets and then closed it again, which looks exactly like a tab that does not work. Step 4
+  is corrected. The underlying truth is narrower: a click is eaten while the button grid is
+  still painting.
+- **The log's default filter hides the thing you most want.** `Warning` only is the default,
+  and `Instance/Connection/On_Air: state table v11, 5 rows` - the module's own first words on
+  the new build - is Info. Step 4 now says to turn Info on and quotes the four-line sequence.
+- **The staleness check nearly produced a false alarm, and was still worth running.** The tail
+  read 20:34:27 against a 20:35:35 clock, which looked stale until I noticed `ptz-a`'s 77 s
+  period made the next line due at 20:35:44. The check is now written with that heartbeat in
+  it, so the next run gets a threshold instead of a feeling.
+- **What a sideload does NOT verify, and this run did not:** the new ACTION was never pressed.
+  Pressing it needs a button placed on the deck, and the deck is Rocket's production surface -
+  not something to add to unasked. The action is covered by tests against a fake server and the
+  server route was exercised live by curl; the module-to-server hop for `panel_toggle`
+  specifically is verified by neither. Say so rather than implying the sideload proved it.
+- Loop outcome: **four edits.** One correction (the Presets tab is a toggle, and this file had
+  it wrong), two additions (the log filter and the `Reloading 0 instances` line), one prune
+  (the `find`-worked note, now redundant with step 2 carrying the query verbatim).
