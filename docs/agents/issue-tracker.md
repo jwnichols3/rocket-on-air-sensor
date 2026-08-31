@@ -31,13 +31,15 @@ GitHub's closing-keyword parser is a **regex, and it does not understand negatio
 of these closes the ticket on push:
 
 ```
-This does not close #87
-Not a fix for #87
-Does not resolve #87 - the mechanism is still armed
+This does not close #NNN
+Not a fix for #NNN
+Does not resolve #NNN - the mechanism is still armed
 ```
 
-Measured on 2026-08-31: `324c361`'s body contained the sentence *"This does not close #87"*,
-written to say the ticket must stay open, and the push closed it. The keywords are `close`,
+Measured on 2026-08-31: `324c361`'s body contained the sentence "This does not
+close" followed by issue 87's number, written to say the ticket must stay open, and the push
+closed it. `d2366c3`, the commit adding this very section, then closed it AGAIN by quoting
+that sentence. The keywords are `close`,
 `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, `resolved`, each followed
 by `#N`.
 
@@ -53,8 +55,14 @@ This leaves #87 open.
 Partial: see #87.
 ```
 
+**Quoting the phrase fires it too.** The commit that first documented this rule closed #87 a
+SECOND time, because the documentation quoted the sentence verbatim. Avoiding the phrase is not
+enough - any occurrence of a keyword next to `#N` counts, including inside quotes, code fences
+and examples. When writing about an incident like this, break the pair: write the number as
+`#&#8203;87`, or as "issue 87", or use a placeholder like `#NNN`.
+
 And after any push that mentions an issue you meant to leave open, check it:
-`gh issue view <n> --json state`.
+`gh issue view <n> --json state`. Do this even when the message was only ABOUT the hazard.
 
 ## When a skill says "publish to the issue tracker"
 
