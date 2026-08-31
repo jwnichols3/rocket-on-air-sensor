@@ -91,4 +91,39 @@ export const ICONS = {
 			c.line(36 + dx * 19, 36 + dy * 19, 36 + dx * 28, 36 + dy * 28, 7, p.ink)
 		}
 	},
+
+	// NEXT STATE. The near-universal rotate glyph: a ring with a bite taken out of it and an
+	// arrowhead on the leading end.
+	//
+	// The bite is 55 degrees wide because a THIN one is the failure here - a circle that not
+	// quite closes is `unknown`, sitting on the next key over, and two glyphs that differ only
+	// in how much of a ring is missing is the exact defect the judges found in the first pass
+	// of this set (D-135). The arrowhead is what carries the meaning; the gap only has to be
+	// wide enough that the head reads as travelling rather than as a nick in the outline.
+	cycle: (c, p) => {
+		const cx = 36
+		const cy = 36
+		const rOut = 29
+		const rIn = 20
+		const from = 12
+		const end = 317
+		c.arc(cx, cy, rOut, rIn, from, end, p.ink)
+		const a = (end * Math.PI) / 180
+		const ux = Math.cos(a)
+		const uy = Math.sin(a)
+		// The tangent in the direction of travel, which is where the head must point. `arc`
+		// sweeps clockwise on screen, so this is the radius turned a quarter turn the same way.
+		const tx = -uy
+		const ty = ux
+		const bx = cx + ((rOut + rIn) / 2) * ux
+		const by = cy + ((rOut + rIn) / 2) * uy
+		c.polygon(
+			[
+				[bx + tx * 15, by + ty * 15],
+				[bx - ux * 13, by - uy * 13],
+				[bx + ux * 13, by + uy * 13],
+			],
+			p.ink,
+		)
+	},
 }

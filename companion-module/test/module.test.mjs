@@ -99,6 +99,10 @@ const UTILITY_PRESETS = [
 	'panel_sleep_words',
 	'panel_wake_words',
 	'panel_toggle_words',
+	// #93. Not per-row - ONE key that walks all of them - so it lives here rather than in
+	// `rowPresets`, and it exists whenever the table has any row at all.
+	'state_cycle',
+	'state_cycle_words',
 ]
 
 /// Both presets a row generates.
@@ -1355,4 +1359,136 @@ test('#92 art is inked for the surface it lands on, including the amber fault ma
 	// Amber is a LIGHT background and the resting red is a dark one, so these two must not be
 	// the same render. Equal here means one of them is unreadable.
 	assert.notEqual(lost.style.png64, preset.style.png64, 'the same ink was used on amber and on dark red')
+})
+
+// ---- #93, one key for the whole table -------------------------------------------------
+
+test('#93 cycling POSTs to /cycle and lets the SERVER pick the successor', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	assert.equal(seen.variables.state, 'available')
+
+	await seen.actions.cycle_state.callback({ options: { ring: ['available', 'on-air'] } })
+	await settle(150)
+	assert.equal(seen.variables.state, 'on-air')
+	// AND IT WRAPS. Two rows is the smallest ring that can, and a modulo that is really a
+	// clamp passes the first press and fails here.
+	await seen.actions.cycle_state.callback({ options: { ring: ['available', 'on-air'] } })
+	await settle(150)
+	assert.equal(seen.variables.state, 'available')
+
+	// Never /state/{id}. The module is not allowed to name the row: it would have to read a
+	// status that may be a round trip behind to know which one.
+	assert.deepEqual(
+		fake.requests.filter((r) => r.startsWith('POST ')),
+		['POST /cycle', 'POST /cycle'],
+	)
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#93 three presses inside one round trip advance THREE stops, not one', async () => {
+	// The failure this whole design exists to prevent, and the only test that can see it. A
+	// module that computed the successor from its own `state` passes every single-press test
+	// and then does this wrong in the field - because the way a human uses a cycle button is
+	// to jab it until the right row comes up, and the status has not caught up in between.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	const ring = ['available', 'on-air', 'unknown']
+	// Fired together, deliberately not awaited in turn.
+	await Promise.all([
+		seen.actions.cycle_state.callback({ options: { ring } }),
+		seen.actions.cycle_state.callback({ options: { ring } }),
+		seen.actions.cycle_state.callback({ options: { ring } }),
+	])
+	await settle(200)
+	assert.equal(fake.status().state, 'available', 'three presses around a ring of three should return to the start')
+	assert.equal(fake.requests.filter((r) => r === 'POST /cycle').length, 3)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#93 the ring goes out in TABLE order, not the order the boxes were ticked', async () => {
+	// The picker hands back click order. Left alone, the cycle a deck walks would depend on
+	// how somebody filled in a form months ago rather than on the order the owner curates in
+	// the admin console - and two buttons built from the same rows would disagree.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	await seen.actions.cycle_state.callback({ options: { ring: ['unknown', 'available', 'on-air'] } })
+	await settle(150)
+	assert.deepEqual(fake.cycles, ['available,on-air,unknown'])
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#93 a cycle button with nothing ticked warns and writes nothing', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	const before = fake.requests.length
+
+	await seen.actions.cycle_state.callback({ options: { ring: [] } })
+	await settle(150)
+	assert.equal(fake.requests.length, before, 'an empty ring reached the server')
+	assert.ok(
+		seen.logs.some((l) => /^warn: cycle state: no states selected/.test(l)),
+		'an empty ring should say so rather than failing silently',
+	)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#93 the cycle preset wears the current row, so it can be pressed until the right one comes up', async () => {
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	const preset = seen.presets.state_cycle
+	assert.ok(preset, 'no cycle preset was generated')
+	// The default ring excludes the reserved row: NO DATA is the server admitting ignorance,
+	// not a state anyone chooses, and a cycle that stopped there would assert it on purpose.
+	assert.deepEqual(preset.steps[0].down[0].options.ring, ['available', 'on-air'])
+
+	// One `state_is` per row - INCLUDING the reserved one, which the ring leaves out. The
+	// button must be able to SHOW a state it will not write.
+	const shown = preset.feedbacks.filter((f) => f.feedbackId === 'state_is').map((f) => f.options.state)
+	assert.deepEqual(shown, ['available', 'on-air', 'unknown'])
+	assert.equal(preset.feedbacks.find((f) => f.options.state === 'on-air').style.bgcolor, 0xc1121f)
+	// And the words variant says which row in words, or the button is unreadable in the one
+	// mode chosen because icons are not.
+	assert.equal(
+		seen.presets.state_cycle_words.feedbacks.find((f) => f.options.state === 'on-air').style.text,
+		'ON AIR',
+	)
+
+	await inst.destroy()
+	await fake.close()
 })

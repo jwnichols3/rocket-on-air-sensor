@@ -390,6 +390,40 @@ rule when the first row is ON AIR.
 > `onAir`, `POST /available`, `POST /interruptible` and `POST /dnd` are **gone.** Use
 > `POST /state/{id}`.
 
+### `POST /cycle`
+
+**One deck key for the whole table.** Advances the current state one stop around a ring of
+rows and wraps at the end, so a Stream Deck can carry one key that is pressed repeatedly
+until the wanted row comes up, instead of one key per row.
+
+```
+POST /cycle?ring=available,on-air,interruptible,recording&source=companion
+```
+
+`?ring=` is a comma-separated list of row ids **in the order to walk them**. Omitted, it is
+every row the table has except `unknown`, in `order`. `?source=` is optional and lenient,
+exactly as on `POST /state/{id}`. The response is the full `GET /status` body, identical to
+every other state write.
+
+**The successor is computed by the server, inside the write queue, and this is the point of
+the route rather than an implementation detail.** A client that reads `state` and writes its
+own successor is correct for one press and wrong for two: the second press starts before the
+first one's answer arrives, reads the same `state`, and writes the same row. Three fast jabs
+would advance one stop. There is no way for a client to fix this on its own, which is why the
+ring travels and the arithmetic does not.
+
+Two boundaries, both deliberate:
+
+- **A current state the ring does not name goes to the first entry.** `unknown` at boot is the
+  ordinary case. An error here would leave the button dead exactly when it is most wanted.
+- **Ring entries this server does not have are dropped, not refused.** This softens §6's
+  never-accept-an-unknown-id rule, and only here: on a state write an id names the row to
+  assert, so a typo that resolved would be a false state; on this route it names a stop on a
+  route. A placed Companion button freezes its ring the day it is dragged onto the deck, so a
+  deleted row would otherwise brick every button naming it, forever. A ring with a missing
+  stop still cycles. **Only a ring with no valid entry at all is refused**, with
+  `400 {"error":"ring names no row this server has","validStates":[...]}`.
+
 ### `GET /config/states`
 
 The state table, for renderers and for Companion preset generation. **Passphrase-gated.**
@@ -469,14 +503,23 @@ it stays that way:
 2. **The scheduled wake time.** A manual sleep is cleared when the panel's clock reaches its
    configured wake minute, so it can never survive into a working day because nobody pressed
    wake. A panel that has never had a clock cannot do this, and keeps the sleep until woken.
-3. **A busy row.** This one is not negotiable and is not configurable. **The panel refuses to
-   darken while the current row is busy, however it was asked** - so pressing sleep during a
-   call does nothing, and a call starting while the panel is asleep lights it. A dark panel
-   during a live call is a false OFF, which is the failure this whole system exists to
-   prevent (D-6, D-63).
+3. **A human state CHANGE, if the panel is asleep when it arrives** (#93, D-137). A person
+   who darkened the glass and then pressed AVAILABLE means to see AVAILABLE. Three gates, and
+   all three are load-bearing: the write must be `human:` (an `auto:` heartbeat from the
+   detector must not end a manual sleep), it must CHANGE the row (a re-assert of the row
+   already held is not a decision), and the server must already believe the glass is dark
+   (waking unconditionally would put a second device write on every human press). The wake is
+   sent *after* the state write lands, so the panel comes back showing the new row rather than
+   flashing the old one.
 
-Because of (3), a sleep can be *pending* - asked for, and refused. `delivered:true` with the
-panel still lit is a correct and expected outcome, not an error.
+**A busy row is NOT one of the ways.** The panel refuses to *darken* while the current row is
+busy, however it was asked - a dark panel during a live call is a false OFF, the failure this
+whole system exists to prevent (D-6, D-63) - but the switch stays on. The sleep is *pending*,
+and it takes effect the moment the row stops being busy. So `delivered:true` with the panel
+still lit is a correct and expected outcome, not an error; and pressing sleep during a call
+darkens the panel later, when the call ends. The panel says so itself: its `Night` sensor
+reads `lit (sleep pending - busy or no data)`. Ending the call with a human state change is
+what clears it, by (3).
 
 ### The toggle asks the glass; it does not remember (#92, D-134)
 

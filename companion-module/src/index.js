@@ -750,6 +750,34 @@ class OnAirInstance extends InstanceBase {
 					await this.setState(id)
 				},
 			},
+			cycle_state: {
+				name: 'Cycle to the next state',
+				description:
+					'Walks the selected rows in table order and wraps, so one key replaces a row of ' +
+					'them: press until the state you want comes up. The SERVER decides which row is ' +
+					'next, from the ring this button sends - so three fast presses advance three ' +
+					'stops rather than all computing the same one from a status that has not caught ' +
+					'up yet. A state the ring does not name (NO DATA at boot) goes to the first entry.',
+				options: [
+					{
+						type: 'multidropdown',
+						id: 'ring',
+						label: 'States in the cycle',
+						// Everything but the reserved row. NO DATA is the server saying it does not
+						// know; it is not a state a person chooses, and a cycle that stops there
+						// would be asserting ignorance on purpose.
+						default: this.states.filter((r) => r.id !== RESERVED_ID).map((r) => r.id),
+						choices,
+					},
+				],
+				callback: async (event) => {
+					// SORTED BACK INTO TABLE ORDER. The picker hands back the order they were
+					// CLICKED, which would make the cycle depend on how somebody filled in a form
+					// months ago. The order that means something is the owner's, from the table.
+					const picked = new Set(Array.isArray(event.options.ring) ? event.options.ring : [])
+					await this.cycleState(this.states.map((r) => r.id).filter((id) => picked.has(id)))
+				},
+			},
 			panel_sleep: {
 				name: 'Panel: sleep (darken the glass)',
 				description:
@@ -879,10 +907,42 @@ class OnAirInstance extends InstanceBase {
 		// somebody's pin; there is no pin now, so LAST WRITE WINS is the whole rule - this write
 		// lands, and the detector's next one replaces it.
 		const params = new URLSearchParams({ source: 'companion' })
+		await this.postWrite(`/state/${encodeURIComponent(id)}?${params}`, `set state "${id}"`)
+	}
 
+	/**
+	 * ADVANCE ONE STOP AROUND A RING OF ROWS (#93).
+	 *
+	 * The ring goes ON THE WIRE and the SERVER decides which row is next, which is the whole
+	 * design and not an implementation detail. This module has `state` from a stream that is
+	 * usually fresh, so computing the successor here would pass every test - and then fail in
+	 * the field, because the way a human uses this button is three fast jabs to get two rows
+	 * along. All three land inside one round trip, all three read the same `state`, and all
+	 * three write the same successor. The server computes it inside its write queue, where each
+	 * press can see the one before it.
+	 */
+	async cycleState(ring) {
+		const ids = ring.filter((id) => typeof id === 'string' && id !== '')
+		if (!ids.length) {
+			this.log('warn', 'cycle state: no states selected on this button')
+			return
+		}
+		const params = new URLSearchParams({ source: 'companion', ring: ids.join(',') })
+		await this.postWrite(`/cycle?${params}`, `cycle state (${ids.join(' -> ')})`)
+	}
+
+	/**
+	 * The one POST both state buttons make. Shared rather than duplicated because everything
+	 * interesting about it is in the error handling - the 400 that lists the valid rows, and
+	 * the timeout that is an unknown outcome rather than a failure - and a second copy would
+	 * drift from this one exactly where it matters.
+	 *
+	 * `what` is the phrase for the log line, already naming what was attempted.
+	 */
+	async postWrite(path, what) {
 		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
 		try {
-			const res = await fetch(`${this.base()}/state/${encodeURIComponent(id)}?${params}`, {
+			const res = await fetch(`${this.base()}${path}`, {
 				method: 'POST',
 				headers: this.headers(),
 				signal: AbortSignal.timeout(timeout),
@@ -921,7 +981,7 @@ class OnAirInstance extends InstanceBase {
 			} catch {
 				/* no JSON body; the status alone is what we have */
 			}
-			this.log('error', `set state "${id}" failed: ${detail}`)
+			this.log('error', `${what} failed: ${detail}`)
 		} catch (err) {
 			// A TIMEOUT IS AN UNKNOWN OUTCOME, NOT A FAILURE (D-123, #76). Issue #68 measured
 			// two writes that blocked for 6.4 s and 13.2 s against a powered-off panel and
@@ -931,12 +991,12 @@ class OnAirInstance extends InstanceBase {
 			if (err.name === 'TimeoutError') {
 				this.log(
 					'warn',
-					`set state "${id}": no answer within ${timeout} ms. The write may still have ` +
+					`${what}: no answer within ${timeout} ms. The write may still have ` +
 						`succeeded - the next poll will say. Not retrying: the server latches.`,
 				)
 				return
 			}
-			this.log('error', `set state "${id}" failed: ${err.message}`)
+			this.log('error', `${what} failed: ${err.message}`)
 		}
 	}
 
@@ -1145,6 +1205,84 @@ class OnAirInstance extends InstanceBase {
 				steps: [{ down: [{ actionId: 'set_state', options: { state: row.id } }], up: [] }],
 				feedbacks: stateFeedbacks(false),
 			}
+		}
+
+		// ONE KEY FOR THE WHOLE TABLE (#93). Rocket's ask: a deck with two buttons instead of
+		// five - this one walks the rows, the panel toggle darkens the glass.
+		//
+		// IT WEARS THE CURRENT STATE, which is not decoration. A cycle button you cannot read is
+		// useless in the way that matters: the method of use is "press until the one I want comes
+		// up", and that needs the button to say which one is up. So it carries the same `state_is`
+		// feedback the row buttons carry, once per row, and looks exactly like whichever row is
+		// current. The cost is that it is indistinguishable from a plain state button at a glance;
+		// the operator knows which key they placed, and the alternative is a button that makes
+		// them look somewhere else to use it.
+		if (this.states.length) {
+			const ring = this.states.filter((r) => r.id !== RESERVED_ID).map((r) => r.id)
+			const CYCLE_BG = combineRgb(40, 40, 40)
+			const reserved = this.reservedRow()
+			const reservedBg = rgb(reserved.bgcolor, black)
+
+			const cycle = (key, category, withArt) => {
+				presets[`state_cycle${key}`] = {
+					type: 'button',
+					category,
+					name: 'Next state (cycle)',
+					// The resting face is only ever seen before the first status arrives. After that
+					// a `state_is` always matches, because `unknown` is a row too.
+					style: {
+						text: withArt ? '' : 'NEXT\nSTATE',
+						size: '14',
+						color: readableInk(white, CYCLE_BG),
+						bgcolor: CYCLE_BG,
+						...(withArt ? { png64: icon('cycle', CYCLE_BG) } : {}),
+					},
+					steps: [{ down: [{ actionId: 'cycle_state', options: { ring } }], up: [] }],
+					// SAME PRIORITY ORDER AS THE ROW BUTTONS (D-122): the rows first, the two
+					// connection marks last, so dark-because-dead is never painted over.
+					feedbacks: [
+						...this.states.map((row) => {
+							const lit = rgb(row.bgcolor, black)
+							return {
+								feedbackId: 'state_is',
+								options: { state: row.id },
+								style: {
+									text: withArt && ICONS[row.id] !== undefined ? '' : row.label,
+									size: 'auto',
+									color: readableInk(rgb(row.color, white), lit),
+									bgcolor: lit,
+									...(withArt ? { png64: icon(row.id, lit) } : {}),
+								},
+							}
+						}),
+						{
+							feedbackId: 'connection_lost',
+							options: {},
+							style: {
+								text: withArt ? '' : 'NO\nCONTACT',
+								size: '14',
+								color: readableInk(black, AMBER),
+								bgcolor: AMBER,
+								...(withArt ? { png64: icon('cycle', AMBER) } : {}),
+							},
+						},
+						{
+							feedbackId: 'no_data',
+							options: {},
+							style: {
+								text: withArt && ICONS[reserved.id] !== undefined ? '' : reserved.label,
+								size: 'auto',
+								color: readableInk(rgb(reserved.color, white), reservedBg),
+								bgcolor: reservedBg,
+								...(withArt ? { png64: icon(reserved.id, reservedBg) } : {}),
+							},
+						},
+					],
+				}
+			}
+
+			cycle('', 'States', true)
+			cycle('_words', 'States (words)', false)
 		}
 
 		if (this.states.length) {

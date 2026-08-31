@@ -36,6 +36,8 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 	let keepAlive = null
 	const clients = new Set()
 	const writes = []
+	/// The `ring` each /cycle press carried, so a test can assert the ORDER the module sent.
+	const cycles = []
 	const requests = []
 	let eventsConnections = 0
 	// #91. `null` is the healthy server; a number makes /panel/* answer that status instead,
@@ -127,6 +129,30 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 			return
 		}
 
+		// #93. Models the real route's DEFINING property and not just its shape: the successor
+		// is computed HERE, from the server's own `current`, one request at a time. A fixture
+		// that echoed back whatever the module asked for could not tell the shipped design from
+		// the broken one it was written to avoid.
+		if (req.method === 'POST' && url.pathname === '/cycle') {
+			const raw = url.searchParams.get('ring')
+			const ring = (raw === null || raw.trim() === '' ? states.map((r) => r.id).filter((id) => id !== 'unknown') : raw.split(','))
+				.map((x) => x.trim())
+				.filter((x) => x !== '' && states.some((r) => r.id === x))
+			if (!ring.length) {
+				res.writeHead(400, { 'Content-Type': 'application/json' })
+				return res.end(JSON.stringify({ error: 'ring names no row this server has', validStates: states.map((r) => r.id) }))
+			}
+			cycles.push(ring.join(','))
+			const at = ring.indexOf(current)
+			current = at === -1 ? ring[0] : ring[(at + 1) % ring.length]
+			writes.push({ id: current, source: url.searchParams.get('source') })
+			const rawSource = url.searchParams.get('source')
+			source = rawSource ? (/^(auto|human):/.test(rawSource) ? rawSource : `human:${rawSource}`) : 'human:anonymous'
+			broadcast()
+			res.writeHead(200, { 'Content-Type': 'application/json' })
+			return res.end(payload())
+		}
+
 		if (req.method === 'POST' && url.pathname.startsWith('/state/')) {
 			const id = decodeURIComponent(url.pathname.slice('/state/'.length))
 			writes.push({ id, source: url.searchParams.get('source') })
@@ -169,6 +195,7 @@ export function startFakeServer({ passphrase = 'test-pass' } = {}) {
 			return new Promise((r) => server.close(r))
 		},
 		writes,
+		cycles,
 		requests,
 		status,
 		/// The real SSE hub emits a `status` event every 15 s per connection, "so a client can

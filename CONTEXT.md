@@ -194,6 +194,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-120** a Companion press stays `human:`, and the pin it drops is announced | **Retired** by D-126. No press can drop a pin, so the `leave`/`pin`/`release` option, `pin_current_state`, `release_hold`, the two hold feedbacks, `$(hold)`/`$(hold_label)` and the PIN/UNPIN presets all go. Its load-bearing half survives as a general rule: `POST /state/{id}` always SETS the row named in the path. Module `0.2.0` -> `0.3.0`; buttons already placed on a deck are orphaned. |
 > | **D-118** *"`409` is three different things and only one carries a status body"* | **Inverted** by D-126. There are four `409`s now, none of them a write refusal and **none carrying a status body**: an unset `/on`/`/off` shortcut row, a stale config `version`, a config save that failed for a reason other than disk-full, and a rebind that rolled back. Every one means a person must change something. D-118's other two corrections (the 16 KB `400`, the `403` rows) stand; its `holdFromQuery` note describes a function that no longer exists. |
 > | **D-133** *"Two buttons, not one toggle"* | **Amended** by D-134. The reasoning was sound about a toggle that remembers its own PRESSES, and that toggle is still not built. `POST /panel/toggle` reads the glass on every press and holds no state, so the objection - that "asked to sleep" and "is asleep" come apart - does not reach it. Both one-way buttons survive unchanged. |
+> | **D-111 / D-133** the manual sleep is a deliberate act that only an explicit wake, the schedule, or a busy row ends | **Amended** by D-137, and one clause of it was **never true of the shipped firmware**. A busy row does not END a manual sleep, it SUPPRESSES it: `night_should_darken()` returns false while busy and the switch stays on, so the sleep is pending and lands the moment the call does. The firmware has always said so on its own `Night` sensor (`lit (sleep pending - busy or no data)`); the contract, the client guide and this log all said "ends". D-137 adds a third way that really does end it - a `human:` write that changes the row at a dark panel - and corrects the busy clause. |
 > | Every decision that **enumerates `hold` as a wire field** - D-30, D-32, D-35, D-36, D-48, D-51, D-52, D-63, D-75, D-91, D-121, D-122 | **Read them without it.** The bodies are left alone on purpose - a decision is a record of what was decided, not a description of today - but `hold` is off the wire, out of the state object and out of the persisted file since D-126, so every list of payload fields, every "factory reset clears the hold", and D-51's *"`/display` needs `message` and `hold`"* is one item shorter - D-52 had already taken the HELD badge off that page. Nothing else in any of them moves. |
 
 - **D-1 (2026-08-05)** Receiver is a Raspberry Pi hosting a REST API; the work Mac runs
@@ -4949,3 +4950,80 @@ else (state, light control, API) lives on the receiver.
   that, and which of those an operator is depends on the operator. A row this module has no
   icon for falls back to its words rather than generating a blank button, because the table is
   the owner's and they can add rows.
+
+- **D-136 (2026-08-30)** **One key walks the table, and the server does the walking.** #93.
+  Rocket asked for a Stream Deck with two keys instead of five: one that steps through the
+  states until the wanted one comes up, beside D-134's sleep/wake toggle.
+
+  **`POST /cycle?ring=a,b,c` - the ring travels, the arithmetic does not.** The obvious build
+  is a loop in the Companion module, which has `state` from a stream that is usually fresh.
+  It passes every test that presses once and is wrong the first time anybody presses twice:
+  the second press starts before the first one's answer arrives, reads the same `state` and
+  writes the same successor. Three fast jabs advance one stop, and the operator reports the
+  button as stuck. **Pressing quickly is not an edge case here, it is the method of use** -
+  "I can just push the button until I get to the state that I want". The server computes the
+  successor inside the write queue, where each press can see the one before it, and no client
+  can reproduce that from outside.
+
+  This is D-134's argument again with a sharper edge. There the module lacked a fresh reading
+  of the glass; here it has a fresh reading of the state and *still* cannot do the job, because
+  what it lacks is not information but serialisation.
+
+  **Which rows are in the ring is a property of the BUTTON**, not a flag on a row, so a deck
+  can hold a two-row ring for a quick flip and a four-row ring beside it. The module ships the
+  ring sorted back into TABLE order rather than the order the boxes were ticked: a cycle whose
+  sequence depended on how somebody filled in a form months ago would have two buttons built
+  from the same rows disagreeing about what comes next.
+
+  **Two boundaries drawn toward the button staying alive.** A current state the ring does not
+  name - `unknown` at boot - goes to the first entry rather than erroring. And a ring entry
+  this server does not have is DROPPED, not refused, which softens D-34's never-accept-an-
+  unknown-id rule in exactly one place: on a state write the id names the row to assert, so a
+  typo that resolved would be a false state, but here it names a stop on a route. A placed
+  Companion button freezes its options the day it is dragged onto a deck, so a 400 would brick
+  every button naming a deleted row, forever. Only a ring with nothing valid left is refused.
+
+  **The cycle button wears the current row**, carrying the same `state_is` feedbacks the row
+  buttons carry. Not decoration: "press until the right one comes up" needs the button to say
+  which one is up. The cost is that it is indistinguishable from a plain state button at a
+  glance, which is accepted - the operator knows which key they placed, and the alternative is
+  a button you have to look somewhere else to use. It gets a `cycle` icon for the resting face
+  only, since after the first status arrives a row feedback always matches.
+
+- **D-137 (2026-08-30)** **A person changing the row lights a panel they darkened by hand.**
+  #93. Rocket: *"if I go from on air and then I blank the screen, but then I hit the available
+  button it should wake the screen up and make available show up."* It did not.
+
+  **The panel is right not to do this itself, and the server is the place to disagree with
+  it.** The firmware's `woken` latch clears the SCHEDULE on a state change and deliberately
+  ignores a manual sleep - *"a person who asked for the screen off has not changed their mind
+  because the row moved"*. That is correct about the row moving BY ITSELF and wrong about a
+  hand on a button, and the panel cannot tell those apart: by the time a write reaches it, it
+  is a key in a text field. The server knows, because `source` records it (D-30, D-126).
+
+  **Three gates, each load-bearing.** `human:` only - the detector heartbeats by re-sending
+  state (D-6) and drops to AVAILABLE when a call ends, so waking on those would make a manual
+  sleep last until the next Zoom meeting. A CHANGE, not a write - the same heartbeat re-asserts
+  the held row several times a minute, which is the firmware's own reason for latching on a key
+  change rather than on every re-assert, arrived at here independently and for the same hazard.
+  And only when the server already believes the glass is dark - waking unconditionally is one
+  more device write on every human press, and #68 measured a write at 6.4s against a panel that
+  was not answering. The cost of that third gate is a race exactly one supervisor tick wide,
+  which is the right trade against doubling the latency of the path that matters most.
+
+  **This is `source` deciding a brightness, not an authority.** D-126 retired `source` as
+  authority and kept it as provenance; nothing here lets a `human:` write outrank an `auto:`
+  one. The state written is the state written either way. What differs is whether the glass
+  comes back on, which is a question about who is standing there.
+
+  **The wake is sent AFTER the state write lands**, so the panel comes back showing the new row
+  rather than flashing the old one - a lit panel showing a stale row is the one thing that is
+  never allowed, even for a moment (D-6, D-63).
+
+  **It also fixes a trap nobody had named.** Press sleep during a call and the panel refuses -
+  but the switch stays on and the sleep is PENDING, landing the moment the call ends. The
+  contract, the client guide and D-111 all said a busy row *ends* a manual sleep; the firmware
+  only ever said it *suppresses* one, on its own `Night` sensor, in the words `lit (sleep
+  pending - busy or no data)`. Ending that call by pressing AVAILABLE now clears it. Ending it
+  automatically still does not, which is the honest consequence of gate one and is documented
+  rather than papered over.

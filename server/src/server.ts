@@ -70,6 +70,7 @@ const ROUTES: Record<string, string[]> = {
   '/state': ['PUT'],
   '/on': ['POST'],
   '/off': ['POST'],
+  '/cycle': ['POST'],
   '/panel/sleep': ['POST'],
   '/panel/wake': ['POST'],
   '/panel/toggle': ['POST'],
@@ -356,6 +357,7 @@ async function doWrite(
   source: Source,
   log: (line: string) => void,
 ): Promise<void> {
+  const was = deps.store.get();
   const applied = deps.store.write(stateId, source, new Date()).state;
   await persistCurrent(deps);
   // A write always succeeds if the body is valid (contract §7). An unreachable light is
@@ -369,12 +371,62 @@ async function doWrite(
   }
   // The device can hold any string. Only a row this server knows is evidence of anything.
   deps.store.setConfirmed(deps.store.getTable().has(confirmed) ? confirmed : UNKNOWN_ID);
+  await wakeForHuman(deps, was, applied, source, log);
   // D-42's VERSION NUDGE IS NOT ON THIS PATH ANY MORE (#68). It used to sit here, and
   // against an unreachable host it was 2 seconds of the measured 6.4 a write paid - a third
   // of the cost, for something its own docstring calls advisory. It still reaches the device
   // on the two paths that own it: `applyConfig` nudges the moment the table changes, and the
   // supervisor re-nudges on its tick if that one did not land. A table edit is not lost by
   // this, only delayed - at worst by one supervisor poll.
+}
+
+/**
+ * A PERSON CHANGING THE ROW LIGHTS A PANEL THEY DARKENED BY HAND (#93).
+ *
+ * Rocket's case: darken the glass, then press AVAILABLE, and expect to see AVAILABLE. The
+ * panel does not do this on its own. Its `woken` latch clears the SCHEDULE on a state change
+ * and deliberately does NOT clear a manual sleep - "a person who asked for the screen off has
+ * not changed their mind because the row moved". That reasoning is right about the row moving
+ * BY ITSELF and wrong about a hand on a button, so the split is drawn here, on the only side
+ * of the wire that knows which it was.
+ *
+ * Three gates, and each one is load-bearing:
+ *
+ * `human:` only. The detector re-asserts on a heartbeat (D-6) and drops to AVAILABLE when a
+ * call ends; waking on those would make a manual sleep last until the next Zoom meeting.
+ *
+ * A CHANGE, not a write. The same heartbeat re-asserts the row it already holds, several
+ * times a minute in a busy hour. This is the firmware's own reason for latching on a key
+ * change rather than on `presence_key`'s trigger, arrived at independently and for the same
+ * hazard.
+ *
+ * Only when we believe the glass is dark. The alternative - wake unconditionally - is one
+ * extra device write on every human press, and #68 measured a write at 6.4s against a panel
+ * that is not answering. Doubling the latency of the ONE path that matters, to fix a case
+ * that arises after somebody presses Sleep, is the wrong trade. The cost is a race exactly
+ * one supervisor tick wide: sleep, then press a state within that tick, and the glass stays
+ * dark until the next press.
+ *
+ * Failure is swallowed. The state write has already landed and been confirmed; a panel that
+ * will not take a wake must not turn a good write into a 5xx.
+ */
+async function wakeForHuman(
+  deps: ServerDeps,
+  was: { state: string; confirmedReason?: string | null },
+  applied: string,
+  source: Source,
+  log: (line: string) => void,
+): Promise<void> {
+  if (source.kind !== 'human') return;
+  if (was.state === applied) return;
+  if (was.confirmedReason !== 'asleep') return;
+  if (deps.driver.setPanelSleep === undefined) return;
+  try {
+    await deps.driver.setPanelSleep(false);
+    log(`[onair] ${source.raw} set ${applied} at a dark panel, so the glass was woken`);
+  } catch (err) {
+    log(`[onair] wake after a human state change failed: ${errorMessage(err)}`);
+  }
 }
 
 type EnqueueWrite = (run: () => Promise<void>) => Promise<void>;
@@ -832,6 +884,43 @@ async function handle(
     return;
   }
 
+  // POST /cycle - one button that walks a RING of rows, wrapping (#93).
+  //
+  // Here rather than in the module, and for a sharper reason than D-134's. The module knows
+  // `state` from a stream that is usually fresh, so "read it and advance" looks safe there -
+  // but the whole point of this button is that a human jabs it three times to get from ON AIR
+  // to RECORDING, and three presses land inside one round trip. All three would read the same
+  // `state` and write the same successor. Computed INSIDE the write queue, each press sees the
+  // one before it, which is the only place that is true.
+  //
+  // The ring is supplied by the caller, not derived from a flag on the row, because "which
+  // rows do I cycle" is a property of the BUTTON: a deck can hold a two-row ring for a quick
+  // toggle and a four-row ring beside it.
+  if (path === '/cycle') {
+    const ring = parseRing(url.searchParams.get('ring'), deps);
+    if (ring.length === 0) {
+      sendJson(res, 400, {
+        error: 'ring names no row this server has',
+        validStates: deps.store.getTable().ids(),
+      });
+      return;
+    }
+    const source = coerceSource(url.searchParams.get('source'));
+    await enqueueWrite(() => {
+      // The read is HERE, inside the queued job. Hoisting it out is the bug this route was
+      // written to avoid, and it would look correct in every test that presses once.
+      const from = deps.store.get().state;
+      const at = ring.indexOf(from);
+      // Not in the ring - `unknown` at boot, or a row somebody cycled past by other means.
+      // The first entry is the answer rather than an error: a button that does nothing when
+      // the state is NO DATA is a button that is dead exactly when it is wanted.
+      const next = at === -1 ? ring[0]! : ring[(at + 1) % ring.length]!;
+      return doWrite(deps, next, source, log);
+    });
+    broadcastAndSend(res, deps, hub, ws);
+    return;
+  }
+
   // POST /on | /off - they no longer NAME a state, they resolve through configuration.
   // "Fall back to the first row" is a bad rule when the first row is ON AIR, so an unset
   // shortcut is a 409 rather than a guess.
@@ -862,6 +951,31 @@ async function handle(
  * plus at most one of three context fields - `validStates` on an unknown state id, `problems`
  * on a config document that failed validation, or the live `config` on a refused save.
  */
+
+/**
+ * The ring for `POST /cycle`: a comma-separated list of row ids, in the order to walk them.
+ * Omitted means every row the table has except `unknown`, in `order`.
+ *
+ * IDS THIS SERVER DOES NOT HAVE ARE DROPPED, NOT REFUSED, and that is a deliberate softening
+ * of D-34's accept-nothing rule for unknown ids. The difference is what the id is FOR: on a
+ * state write it names the row to assert, so a typo that resolved would be a false state. Here
+ * it names a stop on a route, and the caller is a Companion button whose options were frozen
+ * the day somebody dragged it onto the deck. Delete a row from the table and every placed
+ * cycle button would 400 forever - dead in exactly the way a physical button must not be. A
+ * ring with a missing stop still cycles; only an EMPTY one is refused.
+ *
+ * Duplicates are kept. `a,b,a,c` is a legal route with two visits to `a`, and nothing about
+ * advancing one step cares - though `indexOf` means a press at `a` always leaves from the
+ * first of them.
+ */
+function parseRing(raw: string | null, deps: ServerDeps): string[] {
+  const table = deps.store.getTable();
+  if (raw === null || raw.trim() === '') return table.ids().filter((id) => id !== UNKNOWN_ID);
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '' && table.has(s));
+}
 
 /**
  * An unknown id is a `400` that LISTS the valid ids - never accept-and-fall-back. A typo

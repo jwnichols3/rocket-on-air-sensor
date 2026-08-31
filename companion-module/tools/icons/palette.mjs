@@ -26,6 +26,10 @@ export const TABLE_FALLBACK = [
 export const UTILITY = [
   { id: 'sleep', bgcolor: '#282828' },
   { id: 'wake', bgcolor: '#c8c8cd' },
+  // The cycle button's RESTING colour only. In use it wears whatever row the deck is on, so
+  // this row of the contact sheet under-states the job: judge that icon by looking down the
+  // state rows, which are the backgrounds it actually gets painted onto (#93).
+  { id: 'cycle', bgcolor: '#282828' },
 ];
 
 /**
@@ -47,4 +51,4 @@ export function surfaces(rows) {
 }
 
 /** The icon names a variant must supply, in the order the contact sheet lays them out. */
-export const ICON_NAMES = ['available', 'on-air', 'interruptible', 'recording', 'unknown', 'sleep', 'wake'];
+export const ICON_NAMES = ['available', 'on-air', 'interruptible', 'recording', 'unknown', 'sleep', 'wake', 'cycle'];

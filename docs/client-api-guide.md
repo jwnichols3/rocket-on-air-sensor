@@ -169,6 +169,30 @@ Query parameter: `?source=`. The retired `?hold=1` / `?hold=0` (removed 2026-08-
 **accepted and ignored** rather than rejected, for the reason given in 4.2: a shell alias or
 phone Shortcut that still carries it must still be able to turn the light off.
 
+### 4.3b `POST /cycle` - one button that walks the table
+
+For a Stream Deck key that replaces four of them. Each press moves one stop around a ring of
+rows and wraps at the end, so you press until the row you want comes up.
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:8484/cycle?ring=available,on-air,interruptible&source=companion'
+```
+
+Omit `?ring=` and it is every row except `unknown`, in table order. The response is the usual
+`GET /status` body, so the row you landed on is in `state`.
+
+**Do not implement this yourself by reading `state` and writing its successor.** It works
+until somebody presses twice quickly - the second press starts before the first one's answer
+arrives, reads the same `state`, and writes the same row - and pressing quickly is exactly how
+this button is used. The server computes the successor inside its write queue, where each
+press can see the one before it.
+
+Two behaviours worth knowing. A current state the ring does not name (`unknown` at boot) goes
+to the **first** entry rather than erroring. And a ring entry this server does not have is
+**dropped**, not refused, because a Companion button freezes its options the day it is placed
+and a deleted row would otherwise brick it forever; only a ring with nothing valid in it gets
+a `400`.
+
 ### 4.4 No write outranks another
 
 > **Every write with a valid body is applied. No `source` outranks another, and no earlier
@@ -215,11 +239,18 @@ Two different fields, two different questions:
 `delivered` says the command reached the device - **not** that the glass went dark. Read
 `confirmedReason` on the next `GET /status` for that; a dark panel reports `asleep`.
 
-Three things end a sleep, and the third will surprise you if you have not been told:
-`POST /panel/wake`, the panel's own scheduled wake time, and **any busy row**. The panel
-refuses to darken while the current row is busy, however it was asked - so a sleep pressed
-during a call does nothing, and a call starting while it is asleep lights it. `delivered:true`
-with the panel still lit is correct, not an error.
+Three things end a sleep: `POST /panel/wake`, the panel's own scheduled wake time, and **a
+`human:` write that changes the row while the panel is dark**. That last one is there because
+darkening the glass and then pressing AVAILABLE means you want to see AVAILABLE. An `auto:`
+write does not do it - the detector heartbeats, and a manual sleep has to outlive the next
+Zoom call - and neither does re-asserting the row already held.
+
+**A busy row is not one of them, and this is the part that will surprise you.** The panel
+refuses to *darken* while the current row is busy, however it was asked, so a sleep pressed
+during a call appears to do nothing - but the switch is on, and the sleep is *pending*. It
+takes effect the moment the row stops being busy. `delivered:true` with the panel still lit is
+correct, not an error; the panel's own `Night` sensor says `lit (sleep pending - busy or no
+data)` while this is true.
 
 `POST /panel/toggle` is the one-button form: it reads the glass and sends the opposite. It
 answers with `asked` set to whichever command it chose and `wasDark` set to the reading it

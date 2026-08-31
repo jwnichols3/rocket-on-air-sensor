@@ -299,3 +299,92 @@ test('#92 a driver that cannot darken a panel refuses the toggle too', async (t)
   assert.equal(res.status, 501);
   assert.match(((await res.json()) as { error: string }).error, /cannot darken/);
 });
+
+// ---- #93: a person changing the row lights a panel they darkened by hand ------------------
+//
+// Rocket's case, in his words: "if I go from on air and then I blank the screen, but then I
+// hit the available button it should wake the screen up and make available show up".
+//
+// The panel does not do this by itself and that is deliberate. Its `woken` latch clears the
+// SCHEDULE on a state change and pointedly ignores a manual sleep - "a person who asked for
+// the screen off has not changed their mind because the row moved". That is right about the
+// row moving BY ITSELF and wrong about a hand on a button, and only this side of the wire
+// knows which it was. So the split is drawn here, and these four tests are the split.
+
+const settled = async (base: string, want: string): Promise<void> =>
+  waitFor(
+    async () => ((await (await fetch(`${base}/status`)).json()) as { confirmedReason?: string }).confirmedReason === want,
+    `the panel never reported ${want}`,
+  );
+
+test('#93 a HUMAN state change at a hand-darkened panel wakes the glass', async (t) => {
+  const panel = await fakePanel(t);
+  const h = await boot(t, new EsphomeTextDriver({ host: panel.host, timeoutMs: 500, log: () => {} }), 25);
+
+  await post(h.base, '/state/available');
+  await post(h.base, '/panel/sleep');
+  await settled(h.base, 'asleep');
+  assert.equal(panel.isSleeping(), true);
+
+  await post(h.base, '/state/interruptible?source=companion');
+  assert.equal(panel.isSleeping(), false, 'pressing a state button left the glass dark');
+  assert.deepEqual(panel.switchCalls, ['/switch/PanelSleep/turn_on', '/switch/PanelSleep/turn_off']);
+
+  // THE STATE IS THE POINT, not the brightness: the row the operator asked for is the row the
+  // panel comes back showing. A wake that fired BEFORE the write would light the old row for
+  // a moment, which is a false reading of a lit panel and the one thing that is never allowed.
+  const s = (await (await fetch(`${h.base}/status`)).json()) as Record<string, unknown>;
+  assert.equal(s.state, 'interruptible');
+});
+
+test('#93 an AUTO state change does not - a manual sleep must outlive the next Zoom call', async (t) => {
+  // The detector heartbeats by re-sending state (D-6) and drops to AVAILABLE when a call
+  // ends. Waking on those would make "screen off" mean "screen off until something happens",
+  // which is not what the switch says on the tin.
+  const panel = await fakePanel(t);
+  const h = await boot(t, new EsphomeTextDriver({ host: panel.host, timeoutMs: 500, log: () => {} }), 25);
+
+  await post(h.base, '/state/available');
+  await post(h.base, '/panel/sleep');
+  await settled(h.base, 'asleep');
+  const callsBefore = panel.switchCalls.length;
+
+  await fetch(`${h.base}/state`, {
+    method: 'PUT',
+    body: JSON.stringify({ state: 'interruptible', source: 'auto:vcrec' }),
+  });
+  assert.equal(panel.switchCalls.length, callsBefore, 'an automatic write woke the panel');
+  assert.equal(panel.isSleeping(), true);
+});
+
+test('#93 a human RE-ASSERT of the row already held does not wake it either', async (t) => {
+  // A change, not a write. The same press repeated - or a Shortcut on a timer - re-asserts
+  // the row several times a minute in a busy hour, and a panel that lit up on each of them
+  // could never be darkened while anything was writing. This is the firmware's own reason for
+  // latching on a key CHANGE rather than on every re-assert, arrived at separately.
+  const panel = await fakePanel(t);
+  const h = await boot(t, new EsphomeTextDriver({ host: panel.host, timeoutMs: 500, log: () => {} }), 25);
+
+  await post(h.base, '/state/available');
+  await post(h.base, '/panel/sleep');
+  await settled(h.base, 'asleep');
+  const callsBefore = panel.switchCalls.length;
+
+  await post(h.base, '/state/available?source=companion');
+  assert.equal(panel.switchCalls.length, callsBefore, 'a re-assert of the current row woke the panel');
+  assert.equal(panel.isSleeping(), true);
+});
+
+test('#93 a human change at a LIT panel costs no extra device write', async (t) => {
+  // The alternative implementation - send a wake on every human press and let the panel
+  // ignore it - is one more round trip on the path that matters most. #68 measured a write
+  // at 6.4 s against a panel that was not answering; doubling that to fix a case which only
+  // arises after somebody presses Sleep is the wrong way round.
+  const panel = await fakePanel(t);
+  const h = await boot(t, new EsphomeTextDriver({ host: panel.host, timeoutMs: 500, log: () => {} }), 25);
+
+  await post(h.base, '/state/available?source=companion');
+  await post(h.base, '/state/interruptible?source=companion');
+  await post(h.base, '/state/on-air?source=companion');
+  assert.deepEqual(panel.switchCalls, [], 'a lit panel was sent sleep-switch traffic it did not need');
+});
