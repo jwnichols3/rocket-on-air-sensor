@@ -80,7 +80,12 @@ dismiss. Find the hidden `<input type=file>` behind it and upload directly:
 - `find` -> *"hidden file input for Import module package"*
 - `file_upload` with that ref and the absolute `.tgz` path
 
-Confirm the new version appears in the module's version list.
+**Confirm the new version appears in the module's version list before going on**, at
+`/modules/connection/rocket-onair`. Do not skip this because step 3 is about to show you a
+version list anyway - **the connection dialog's version dropdown can be stale.** Measured: an
+import that had worked perfectly showed only the OLD versions in that dropdown, which reads
+exactly like a failed import. The modules page is the source of truth; a reload of the
+connection page then fixes the dropdown.
 
 ## 3. MOVE THE CONNECTION ONTO IT
 
@@ -91,6 +96,12 @@ connection" - is **still on the old one**. Nothing has changed on the deck.
 
 `Connections` -> click the connection -> **Module Version** -> pencil -> pick the new version
 -> **Save**. The connection restarts on the new build.
+
+Two timing details, both cost a retry:
+- **Load the connection page fresh after an import.** A page open from before the import
+  offers a stale version list (see step 2).
+- **The dialog animates.** Clicking the version dropdown immediately after the pencil catches
+  it mid-transition and the click misses. Wait a beat, screenshot, then click.
 
 Check the connection is green afterwards. A module that fails to initialise goes red or
 warning here and nowhere else.
@@ -109,8 +120,16 @@ Good markers, cheapest first:
 | Marker | Where | Why it works |
 |---|---|---|
 | A new **variable** | `Variables` -> the connection | Registered by the running instance at init. Check the description text too, not just the name |
-| A new **feedback** | a button's feedback picker | Same, and it is what a deck actually keys on |
+| A new **preset**, and the **count** | `Buttons` -> `Presets` tab -> the connection | The count is on the connection's row before you even open it, which makes absent-before / present-after a single number. Best marker when a version adds actions rather than variables |
+| A new **feedback** | a button's feedback picker | What a deck actually keys on |
 | A changed variable **description** | `Variables` | Catches a rename the name alone would miss |
+
+**Pick the marker from what the version actually changed.** A release that adds only actions
+registers no new variable, and looking for one would say "no change" about a perfectly good
+install. Actions surface as presets, so the preset count is the marker for those.
+
+The `Presets` tab often needs **two clicks** - the first lands before the panel renders. And
+`find` returns a ref for it that does not activate; click the coordinates instead.
 
 Verify the value is *correct*, not merely present. A new field showing the wrong thing is a
 worse outcome than a missing one, because it looks like success.
@@ -215,3 +234,31 @@ The loop must terminate in one of two ways, and "I read it and it seemed fine" i
   the missing search box on `Connections`, rebuild-always, `ssh` not being available, the
   `Update Policy` red herring, and `/log` vs `/logs`. Steps 3 and 4 are the two that would
   have been guessed wrong without this file existing at all.
+
+## 2026-08-30 - 0.4.0 -> 0.5.0 (#91, the panel sleep/wake buttons)
+
+- **THE CONNECTION DIALOG'S VERSION DROPDOWN WAS STALE, and it looked exactly like a failed
+  import.** After uploading 0.5.0 I went straight to step 3, opened the version picker, and
+  saw only `v0.4.0 / v0.3.0 / v0.2.0`. `/modules/connection/rocket-onair` showed `0.5.0`
+  installed all along. A reload of the connection page fixed the dropdown. **I had skipped
+  step 2's confirmation**, which is the check that would have told the two apart instantly -
+  so step 2 now says why it matters rather than just saying to do it.
+- **The connection id shortcut from the last run paid off**:
+  `/connections/LtdseHJSGXPUank5m0uDc` opens the On_Air editor directly, no scrolling past
+  thirty connections. Keep that id.
+- **Marker used: the PRESET COUNT, 7 -> 9**, plus `PANEL SLEEP` and `PANEL WAKE` appearing by
+  name under `Buttons` -> `Presets` -> `On_Air` -> `Utility`. 0.5.0 adds no new variable at
+  all, so the previous run's marker type would have reported no change on a perfectly good
+  install. That is why the marker table now says to pick the marker from what the version
+  changed.
+- **The `Presets` tab needed two clicks both times** - the first lands before the panel
+  renders - and the `find` ref for it does not activate. Coordinates work.
+- **The dialog animation ate one click.** Pencil, then immediately clicking the dropdown,
+  caught it mid-transition.
+- **Nothing in the log.** Only `ptz-a`, still failing every ~77s about an unrelated host, as
+  it was on the previous run. Confirmed the tail was current by comparing the last line's
+  timestamp to the clock rather than assuming the view was live - worth doing, because a log
+  that has silently stopped updating looks identical to a quiet one.
+- Loop outcome: **five edits.** Step 2 now explains itself, step 3 gained the two timing
+  traps, and the marker table gained presets plus the rule that the marker must match what
+  the version changed.
