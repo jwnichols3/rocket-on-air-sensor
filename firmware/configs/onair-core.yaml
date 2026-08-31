@@ -216,6 +216,19 @@ globals:
     restore_value: false
     # True at boot so the first frame is drawn without waiting for anything to change.
     initial_value: 'true'
+  # THE PAINTER'S ACKNOWLEDGEMENT (#79). `repaint_pending` says a paint was ASKED FOR; this
+  # says one HAPPENED. The backlight's wake handshake needs the second, because a brighten
+  # that lands before the repaint lights the glass on the frame that was on it when it went
+  # dark - see wake_step() in onair_table.h for why a delay is not a fix for that.
+  #
+  # It lives here rather than on the board for exactly repaint_pending's reason: it is shared
+  # vocabulary between the core and whichever board is compiled in. A board that paints on a
+  # fixed interval instead - the Elegoo - simply never increments it, as it never reads
+  # repaint_pending.
+  - id: paint_epoch
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
   # ---- the client contract's clock (D-91, #65) -------------------------------------
   #
   # WHEN THE SERVER LAST ANSWERED THIS PANEL. Every threshold is measured from here, and
@@ -449,6 +462,23 @@ number:
     initial_value: 420
     min_value: 0
     max_value: 1439
+    step: 1
+    mode: box
+  # HOW DARK "dark" IS (#79). 0 is a true off - the ledc channel is stopped and GPIO2 parked
+  # LOW - and anything above it is a dim. ZERO IS THE DEFAULT because Rocket asked for black;
+  # the control exists so that dim is available without another ticket if #77's noise
+  # measurement ever makes it the better trade.
+  #
+  # A board with no backlight ignores this entirely: the core holds the level, and only a
+  # board that has a light to drive ever reads it (D-85).
+  - platform: template
+    name: "NightBrightness"
+    id: night_brightness
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: 0
+    max_value: 100
     step: 1
     mode: box
   - platform: template
@@ -842,6 +872,10 @@ interval:
               onair::held().night_in = ni;
             }
 
+            // Mirrored every tick rather than on change: it is one entity read and an int
+            // store, and a level that silently disagreed with the entity would be invisible.
+            onair::held().night_level = onair::clamp_level((int) id(night_brightness).state);
+
             bool dark = onair::night_should_darken(ni);
             if (dark != onair::held().night_dark) {
               onair::held().night_dark = dark;
@@ -996,6 +1030,28 @@ sensor:
     lambda: 'return (float) id(frames);'
 
 text_sensor:
+  # WHICH BUILD IS ACTUALLY RUNNING (#87). Stock ESPHome, and the answer to the one question
+  # this repo has now got wrong twice.
+  #
+  # `esphome upload` does not compile - it ships whatever is in build/ - and on this board a
+  # fresh image boots PENDING_VERIFY and is silently rolled back if anything resets it inside
+  # safe_mode's 60s window. Both failures end identically: the upload says success, the panel
+  # comes back WORKING, and the firmware running is not the firmware that was flashed.
+  #
+  # CLAUDE.md's rule is therefore "after flashing, wait for a marker only the new build can
+  # produce". Until now that marker had to be INVENTED for every flash - a new entity, a
+  # changed string - and #87 records why the obvious substitute does not work: esp_app_desc
+  # .version is the string "2026.8.0" on every build this project has ever made, so nothing
+  # in the image identifies the build.
+  #
+  # This publishes ESPHome's version, the CONFIG HASH and the BUILD TIMESTAMP. The hash moves
+  # when the YAML changes and the timestamp moves when anything is recompiled, so
+  # `GET /text_sensor/Build` is a standing answer instead of a per-flash invention. It
+  # describes the RUNNING image, which is exactly the thing a successful-looking upload can
+  # leave stale.
+  - platform: version
+    name: "Build"
+    id: build_stamp
   - platform: template
     name: "Render"
     id: render_sensor

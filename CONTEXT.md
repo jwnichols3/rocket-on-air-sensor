@@ -5195,3 +5195,59 @@ else (state, light control, API) lives on the receiver.
   Soak: 20 consecutive runs of the 377-test server suite, ten of them under eight spinners at
   load average ~360. **19 green.** The twentieth went red in `auth-routes.test.ts` - which turned
   out to be #49, and is D-146.
+
+- **D-143 (2026-08-31)** **Paint before light: the wake handshake waits for the PAINTER, not
+  for a timer (#79).** Three unsequenced timers touch the glass - the core's 50ms night tick
+  decides `night_dark`, a 100ms interval consumes `repaint_pending` and paints, a 200ms
+  interval drives the backlight - and nothing ordered the last two. So a brighten could land
+  before the repaint and the panel would light up on **the frame that was on it when it went
+  dark**: on a panel that slept at 23:00 and woke to an incoming call, a stale, confidently
+  drawn wrong answer, which is this system's cardinal sin wearing the opposite mask.
+
+  A delay was rejected. It would not fix the race, only make it rarer - and a race you cannot
+  see is one you stop looking for. The painter now increments a `paint_epoch` counter **after**
+  `component.update` returns (it is synchronous, so the frame is in the framebuffer by then),
+  and the backlight will not brighten until the counter has moved past the value it asked for.
+
+  Three properties fall out of the design and are each tested:
+  - **Only a brighten is gated.** Darkening onto a stale frame is invisible by definition.
+  - **The grace window is a trap door, not a timing assertion.** If the painter never runs the
+    glass still lights after 2s, because a false OFF is worse than a false ON (D-6, D-63) and a
+    lit stale frame is a far smaller lie than a panel that stays black through a call. It
+    lights under a different step name so the board can log that it went blind.
+  - **The epoch compare is wrapping** (`(uint32_t)(epoch - want) < 0x80000000`), not `>=`. At
+    the wrap a naive compare reads "already past" and lights on the stale frame.
+
+  The decision lives in `wake_step()` in `onair_table.h` where it is unit-tested without a
+  panel; the board file holds only the wiring. Same split as `night_should_darken` (D-114) and
+  for the same reason.
+
+- **D-144 (2026-08-31)** **`NightBrightness` exists, and 0 stays the default (#79).**
+  `effective_backlight()` hardcoded `night_dark ? 0 : 100`. It now reads a `NightBrightness`
+  number, 0..100, NVS-backed, **default 0** - Rocket asked for black, so black is what ships;
+  the control is there so that dim needs no second ticket if #77's noise measurement ever makes
+  it the better trade. Zero is a true off (`ledc_stop`, GPIO2 parked LOW) rather than a very
+  low duty cycle.
+
+  The value is clamped in the header rather than trusted from the entity. It is a plain `int`
+  in a struct several tasks read, and an out-of-range level reaches `set_brightness()` as a
+  float outside 0..1. **The board needed no change**: `crowpanel-7.yaml` already branched three
+  ways on the number.
+
+- **D-145 (2026-08-31)** **The firmware publishes which BUILD is running, because nothing in
+  the image ever said (#87).** #87's own investigation found that `esp_app_desc.version` is the
+  string `"2026.8.0"` on every build this project has ever produced, so the question "is the
+  panel running the firmware I just flashed?" had no direct answer and had to be attacked by
+  inventing an ad-hoc marker for each flash - a new entity, a changed string (D-141).
+
+  Stock ESPHome already has the answer and it was simply not enabled: `text_sensor: platform:
+  version` publishes the ESPHome version, the **config hash** and the **build timestamp**. Two
+  independent discriminators - the hash moves when the YAML changes, the timestamp when
+  anything recompiles - and it describes the RUNNING image, which is exactly what a
+  successful-looking upload can leave stale. `GET /text_sensor/Build` is now the standing
+  marker CLAUDE.md's flashing rule asks for.
+
+  This does not close #87 either. The rollback mechanism is still armed by design and still the
+  leading hypothesis, and the hard falsifier in that ticket - whether another `esphome upload`
+  happened before the new build appeared - is Rocket's to answer. What changes is that the
+  next occurrence is measurable instead of arguable.

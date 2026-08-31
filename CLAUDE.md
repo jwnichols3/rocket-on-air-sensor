@@ -45,11 +45,23 @@ rollback on - it is the only soft-brick protection on a board with no serial. Wh
 mechanism is what bit in #87 is still open; a stale binary (D-100 again) is not eliminated,
 because `esphome upload` ships `build/firmware.ota.bin` and does not compile, and nothing has
 ever checked THAT file. So: **after flashing, wait for a marker that only the new build can
-produce** - a new entity, a changed version string, a log
-line that did not exist before. `/onair` answering proves nothing: the panel serves HTTP
-throughout the OTA write, so the page you are talking to may be the build you were trying to
-replace. This has cost a measurement twice (D-100, then #87); both times the flash looked
-fine and the thing measured was the old firmware.
+produce.** `/onair` answering proves nothing: the panel serves HTTP throughout the OTA write,
+so the page you are talking to may be the build you were trying to replace. This has cost a
+measurement twice (D-100, then #87); both times the flash looked fine and the thing measured
+was the old firmware.
+
+**There is now a standing marker, so stop inventing one per flash (D-145).**
+
+```
+curl -s -u rocket:ESP32 http://<device>/text_sensor/Build
+# 2026.8.0 (config hash 0x...., built 2026-08-31 13:47:22)
+```
+
+The config hash moves when the YAML changes and the timestamp moves whenever anything is
+recompiled, so this identifies the RUNNING image - which is exactly what a successful-looking
+upload can leave stale. Record it BEFORE the flash and compare after: a marker you only ever
+observe afterwards proves the page renders, not that anything moved. And look again past the
+60s window, because an image inside it is `PENDING_VERIFY` and any reset silently reverts it.
 
 ## Agent skills
 

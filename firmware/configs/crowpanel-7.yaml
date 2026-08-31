@@ -144,14 +144,33 @@ interval:
   #
   # Edge-triggered on `applied`, so the steady state is one integer compare per tick and a
   # light call happens only when the answer actually moves.
+  #
+  # PAINT BEFORE LIGHT (#79). A brighten is not applied until the painter below says a frame
+  # has actually landed, because this interval and that one are unordered - so without the
+  # handshake a waking panel lights up on the frame that was on it when it went dark. The
+  # decision is wake_step() in onair_table.h, where it is unit-tested; this is only the wiring.
   - interval: 200ms
     then:
       - lambda: |-
-          static int applied = -999;
+          static onair::WakeGate gate;
           int want = onair::effective_backlight();
-          if (want == applied)
-            return;
-          applied = want;
+          switch (onair::wake_step(gate, want, id(paint_epoch), millis())) {
+            case onair::WakeStep::NOTHING:
+            case onair::WakeStep::HOLD:
+              return;
+            case onair::WakeStep::ASK_FOR_PAINT:
+              id(repaint_pending) = true;
+              return;
+            case onair::WakeStep::APPLY_UNPAINTED:
+              // The trap door fired. Say so - a lit stale frame is the right call (D-6, D-63)
+              // but it is still a fault, and this is the only place it is visible.
+              ESP_LOGW("onair", "backlight: went to %d with no repaint inside %ums - lighting "
+                                "anyway, the frame may be stale", want,
+                       (unsigned) onair::WAKE_PAINT_GRACE_MS);
+              break;
+            case onair::WakeStep::APPLY:
+              break;
+          }
           auto call = id(backlight).make_call();
           call.set_transition_length(0);
           if (want >= 100) {
@@ -173,6 +192,11 @@ interval:
           then:
             - lambda: 'id(repaint_pending) = false;'
             - component.update: my_display
+            # AFTER the update, and that is the whole point: component.update is synchronous,
+            # so by the time this runs the new frame is in the framebuffer the LCD peripheral
+            # is already DMAing out. Incrementing before it would acknowledge a paint that had
+            # not happened, which is the bug the counter exists to prevent.
+            - lambda: 'id(paint_epoch)++;'
 
 display:
   - platform: mipi_rgb

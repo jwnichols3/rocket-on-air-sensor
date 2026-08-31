@@ -481,6 +481,12 @@ struct Held {
   bool night_dark{false};
   bool night_woken{false};
   std::string night_key;
+  /// HOW DARK "dark" IS (#79). 0 is a true off - `ledc_stop()` with GPIO2 parked LOW - and
+  /// non-zero is a dim. Zero is the default because Rocket asked for black; the same
+  /// mechanism gives dim without another ticket if #77's noise measurement ever wants it.
+  /// Mirrored from the `NightBrightness` entity by the main loop, for the usual reason: this
+  /// header cannot reach an `id()`, and the board reads it from a lambda that must not block.
+  int night_level{0};
   /// THE WHOLE NIGHT INPUT, as the main loop last computed it (#81). Snapshotted rather than
   /// recomputed because the two readers cannot compute it: the page runs on the httpd task
   /// and cannot reach an `id()`, and the text sensor runs on its own 5s interval and would
@@ -1240,6 +1246,11 @@ inline void pump() {
 /// True while the operator is holding the glass in a test state.
 inline bool bench_active() { return held().bench_level != BENCH_NONE; }
 
+/// A backlight percentage that is definitely a backlight percentage. The entity already has
+/// min/max, but `night_level` is a plain int in a struct that several tasks read, and a level
+/// outside 0..100 reaches `set_brightness()` as a float outside 0..1.
+inline int clamp_level(int pct) { return pct < 0 ? 0 : (pct > 100 ? 100 : pct); }
+
 /// What the backlight should be, every reason folded into ONE answer, so no board file has to
 /// know the precedence. A person standing at the page beats the clock: the Beta control is
 /// someone deliberately looking at the panel, and the schedule is a guess about whether
@@ -1247,7 +1258,85 @@ inline bool bench_active() { return held().bench_level != BENCH_NONE; }
 inline int effective_backlight() {
   if (bench_active())
     return held().bench_level;
-  return held().night_dark ? 0 : 100;
+  return held().night_dark ? clamp_level(held().night_level) : 100;
+}
+
+/// How long the wake handshake will wait for a repaint before lighting the glass anyway.
+inline constexpr uint32_t WAKE_PAINT_GRACE_MS = 2000;
+
+/// The board-local state of the paint-then-light handshake (#79). One per backlight.
+struct WakeGate {
+  /// The level last actually written to the light. -999 is "nothing written yet".
+  int applied{-999};
+  bool waiting{false};
+  /// The paint counter value that would prove a NEW frame has landed since we asked.
+  uint32_t want_epoch{0};
+  uint32_t since_ms{0};
+};
+
+enum class WakeStep {
+  NOTHING,          ///< the light is already where it should be
+  ASK_FOR_PAINT,    ///< set repaint_pending and come back
+  HOLD,             ///< the frame has not landed yet; leave the glass exactly as it is
+  APPLY,            ///< write the level, the frame is known good
+  APPLY_UNPAINTED,  ///< write it anyway; the painter never ran. Worth a log line
+};
+
+/**
+ * PAINT BEFORE LIGHT (#79), decided here so it can be tested without a panel.
+ *
+ * Three unsequenced timers touch the glass: the core's 50ms night tick decides `night_dark`,
+ * a 100ms interval consumes `repaint_pending` and paints, and a 200ms interval drives the
+ * backlight. Nothing orders the last two, so a brighten can land before the repaint and the
+ * panel lights up on THE FRAME THAT WAS ON IT WHEN IT WENT DARK - which on a panel that slept
+ * at 23:00 and woke to an incoming call is a stale, confidently-drawn wrong answer.
+ *
+ * A fixed delay would not fix it; it would only make the race rarer, which is worse, because
+ * a race you cannot see is one you stop looking for. So this waits for the PAINTER to say it
+ * ran, by way of a counter the painter increments, rather than for a timer to elapse.
+ *
+ * Only a BRIGHTEN is gated. Darkening onto a stale frame is invisible by definition, and
+ * gating it would keep an old frame lit for no reason.
+ *
+ * THE GRACE WINDOW IS NOT A TIMING ASSERTION, it is a trap door. If the painter never runs
+ * the glass must still light: this system's invariant is that a false OFF is worse than a
+ * false ON (D-6, D-63), and a lit stale frame is a far smaller lie than a panel that stays
+ * black through a call. The step is named differently in that case so the board can say so.
+ *
+ * `g` is mutated. Pure otherwise: every input is a parameter, including the clock.
+ */
+inline WakeStep wake_step(WakeGate &g, int want, uint32_t paint_epoch, uint32_t now_ms,
+                          uint32_t grace_ms = WAKE_PAINT_GRACE_MS) {
+  if (want == g.applied) {
+    g.waiting = false;  // whatever we were waiting for, the answer moved back on its own
+    return WakeStep::NOTHING;
+  }
+  // Darkening, or the very first write after boot. Neither can show a stale frame: one is
+  // going out, and the other has no previous frame to be stale.
+  if (g.applied == -999 || want < g.applied) {
+    g.waiting = false;
+    g.applied = want;
+    return WakeStep::APPLY;
+  }
+  if (!g.waiting) {
+    g.waiting = true;
+    g.want_epoch = paint_epoch + 1;
+    g.since_ms = now_ms;
+    return WakeStep::ASK_FOR_PAINT;
+  }
+  // Unsigned on purpose: this stays correct across the 49-day millis() wrap.
+  const bool painted = (uint32_t) (paint_epoch - g.want_epoch) < 0x80000000u;
+  if (painted) {
+    g.waiting = false;
+    g.applied = want;
+    return WakeStep::APPLY;
+  }
+  if (now_ms - g.since_ms >= grace_ms) {
+    g.waiting = false;
+    g.applied = want;
+    return WakeStep::APPLY_UNPAINTED;
+  }
+  return WakeStep::HOLD;
 }
 
 /**

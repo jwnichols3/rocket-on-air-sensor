@@ -1448,6 +1448,131 @@ static void test_night() {
   CHECK_MSG(onair::effective_backlight() == 0, "and can darken a lit one");
   onair::held().bench_level = onair::BENCH_NONE;
   CHECK(onair::effective_backlight() == 100);
+  onair::held().night_level = 0;
+}
+
+// ---------------------------------------------------------------- night brightness (#79)
+
+static void test_night_brightness() {
+  begin("a dark night is whatever NightBrightness says, and 0 is a true off");
+  onair::held().bench_level = onair::BENCH_NONE;
+  onair::held().night_dark = true;
+  onair::held().night_level = 0;
+  CHECK_MSG(onair::effective_backlight() == 0, "the default is black, because that is what was asked for");
+  onair::held().night_level = 30;
+  CHECK_MSG(onair::effective_backlight() == 30, "a dim night is the same mechanism, not a second one");
+  onair::held().night_dark = false;
+  CHECK_MSG(onair::effective_backlight() == 100,
+            "the level applies only while the schedule says dark - it is not a global dimmer");
+
+  begin("the level is clamped, because it is a plain int several tasks can reach");
+  CHECK(onair::clamp_level(-1) == 0);
+  CHECK(onair::clamp_level(0) == 0);
+  CHECK(onair::clamp_level(100) == 100);
+  CHECK(onair::clamp_level(101) == 100);
+  CHECK(onair::clamp_level(1000000) == 100);
+  onair::held().night_dark = true;
+  onair::held().night_level = 250;
+  CHECK_MSG(onair::effective_backlight() == 100,
+            "a nonsense level must never reach set_brightness() as a float above 1.0");
+  onair::held().night_level = -5;
+  CHECK_MSG(onair::effective_backlight() == 0, "nor below 0.0");
+
+  begin("the bench still beats the schedule, at any night level");
+  onair::held().night_level = 40;
+  onair::held().bench_level = 100;
+  CHECK_MSG(onair::effective_backlight() == 100, "a person at the page outranks the clock");
+  onair::held().bench_level = onair::BENCH_NONE;
+  onair::held().night_dark = false;
+  onair::held().night_level = 0;
+}
+
+// ------------------------------------------------- the paint-then-light handshake (#79)
+
+static void test_wake_handshake() {
+  begin("the first application after boot goes straight through");
+  onair::WakeGate g;
+  uint32_t epoch = 7;
+  CHECK_MSG(onair::wake_step(g, 100, epoch, 1000) == onair::WakeStep::APPLY,
+            "there is no previous frame at boot, so there is nothing stale to hide");
+  CHECK(g.applied == 100);
+  CHECK_MSG(onair::wake_step(g, 100, epoch, 1200) == onair::WakeStep::NOTHING,
+            "a steady answer must not re-drive the light every 200ms");
+
+  begin("DARKENING is never gated - a stale frame going out is invisible");
+  CHECK(onair::wake_step(g, 0, epoch, 1400) == onair::WakeStep::APPLY);
+  CHECK(g.applied == 0);
+  CHECK_MSG(!g.waiting, "and it leaves nothing armed behind it");
+
+  begin("BRIGHTENING asks for a paint and then HOLDS until one lands");
+  CHECK_MSG(onair::wake_step(g, 100, epoch, 2000) == onair::WakeStep::ASK_FOR_PAINT,
+            "the first brighten tick asks, it does not light");
+  CHECK_MSG(g.applied == 0, "and the glass is still where it was - this is the whole point");
+  CHECK_MSG(onair::wake_step(g, 100, epoch, 2200) == onair::WakeStep::HOLD,
+            "the painter has not run yet, so the glass stays dark");
+  CHECK(g.applied == 0);
+  epoch++;  // the painter ran
+  CHECK_MSG(onair::wake_step(g, 100, epoch, 2400) == onair::WakeStep::APPLY,
+            "and only now, with a frame proven to have landed, does the light go on");
+  CHECK(g.applied == 100);
+
+  begin("THE TRAP DOOR: a painter that never runs must not hold the glass dark");
+  // A false OFF is this system's cardinal sin (D-6, D-63). A lit stale frame is a far
+  // smaller lie than a panel that stays black through an incoming call.
+  onair::WakeGate t;
+  t.applied = 0;
+  CHECK(onair::wake_step(t, 100, epoch, 10000) == onair::WakeStep::ASK_FOR_PAINT);
+  CHECK(onair::wake_step(t, 100, epoch, 10000 + onair::WAKE_PAINT_GRACE_MS - 1) ==
+        onair::WakeStep::HOLD);
+  CHECK_MSG(onair::wake_step(t, 100, epoch, 10000 + onair::WAKE_PAINT_GRACE_MS) ==
+                onair::WakeStep::APPLY_UNPAINTED,
+            "at the grace boundary the glass lights anyway, and says it did so blind");
+  CHECK(t.applied == 100);
+
+  begin("an answer that moves back while waiting disarms the gate");
+  onair::WakeGate b;
+  b.applied = 0;
+  CHECK(onair::wake_step(b, 100, epoch, 20000) == onair::WakeStep::ASK_FOR_PAINT);
+  CHECK_MSG(onair::wake_step(b, 0, epoch, 20100) == onair::WakeStep::NOTHING,
+            "the panel went back to sleep before the paint - nothing to do");
+  CHECK_MSG(!b.waiting, "and the arm is cleared, not left to fire on the next brighten");
+  CHECK(b.applied == 0);
+
+  begin("a dim night brightens to full through the SAME gate");
+  onair::WakeGate d;
+  d.applied = 30;  // dimmed rather than black all night
+  CHECK_MSG(onair::wake_step(d, 100, epoch, 30000) == onair::WakeStep::ASK_FOR_PAINT,
+            "a dim panel shows a stale frame just as readably as a lit one");
+  epoch++;
+  CHECK(onair::wake_step(d, 100, epoch, 30100) == onair::WakeStep::APPLY);
+  CHECK(d.applied == 100);
+
+  begin("100 -> 30 is a DARKEN and goes straight through");
+  CHECK(onair::wake_step(d, 30, epoch, 30200) == onair::WakeStep::APPLY);
+  CHECK(d.applied == 30);
+
+  begin("the epoch comparison survives the millis()/counter wrap");
+  onair::WakeGate w;
+  w.applied = 0;
+  uint32_t high = 0xFFFFFFFEu;
+  CHECK(onair::wake_step(w, 100, high, 40000) == onair::WakeStep::ASK_FOR_PAINT);
+  CHECK_MSG(w.want_epoch == 0xFFFFFFFFu, "the wanted epoch is simply the next one");
+  CHECK(onair::wake_step(w, 100, high, 40100) == onair::WakeStep::HOLD);
+  CHECK_MSG(onair::wake_step(w, 100, 0xFFFFFFFFu, 40200) == onair::WakeStep::APPLY,
+            "a paint at the wrap boundary still counts");
+  // THE CASE A NAIVE `paint_epoch >= want_epoch` GETS WRONG, and the only one that
+  // discriminates: ask at the last counter value, so the wanted epoch wraps to 0. The painter
+  // has NOT run, and the live counter is still 0xFFFFFFFF - which a plain `>=` reads as
+  // "already past 0" and lights the glass on the stale frame. Measured: with the naive
+  // compare, every other assertion in this function still passes.
+  onair::WakeGate w2;
+  w2.applied = 0;
+  CHECK(onair::wake_step(w2, 100, 0xFFFFFFFFu, 50000) == onair::WakeStep::ASK_FOR_PAINT);
+  CHECK_MSG(w2.want_epoch == 0u, "the next epoch after the last one is zero, not a huge number");
+  CHECK_MSG(onair::wake_step(w2, 100, 0xFFFFFFFFu, 50100) == onair::WakeStep::HOLD,
+            "the counter has not moved, so no paint has landed - wrap or no wrap");
+  CHECK_MSG(onair::wake_step(w2, 100, 0u, 50200) == onair::WakeStep::APPLY,
+            "and a wrapped counter must not read as 'the painter went backwards'");
 }
 
 int main() {
@@ -1469,6 +1594,8 @@ int main() {
   test_glass_bar();
   test_bench();
   test_night();
+  test_night_brightness();
+  test_wake_handshake();
   test_night_bar();
 
   printf("\n%d checks, %d failed\n", g_checks, g_failures);
