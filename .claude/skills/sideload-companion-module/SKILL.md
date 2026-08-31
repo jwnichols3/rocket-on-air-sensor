@@ -107,6 +107,14 @@ Two timing details, both cost a retry:
 - **The dialog animates.** Clicking the version dropdown immediately after the pencil catches
   it mid-transition and the click misses. Wait a beat, screenshot, then click.
 
+> **THE FIRST CLICK AFTER A NAVIGATE IS UNRELIABLE, ANYWHERE IN THIS ADMIN UI.** It has now
+> eaten a click on the version pencil and on the `Presets` tab, for the same reason both
+> times: React had not finished painting and the handler was not attached yet. **Screenshot
+> after every navigation and confirm the page has actually rendered before clicking.** The
+> failure is silent - the click reports success and nothing happens - so it reads as a broken
+> control rather than as a race, and the natural response (click again, harder) is what breaks
+> a toggle.
+
 Check the connection is green afterwards. A module that fails to initialise goes red or
 warning here and nowhere else.
 
@@ -142,6 +150,13 @@ for the tab that does not activate; click the coordinates instead.
 Verify the value is *correct*, not merely present. A new field showing the wrong thing is a
 worse outcome than a missing one, because it looks like success.
 
+**A preset whose face is data-driven will not look like its own art, and that is not a
+fault.** Companion renders each preset thumbnail with its feedbacks applied against live
+values, so a preset that wears the current state shows the *state's* face, not the base style
+you wrote. 0.7.0's cycle button rendered as a green tick because the row was AVAILABLE.
+Identify presets like that by NAME, not by picture: `find` -> *"preset button titled X"*
+returns it from the accessibility tree even when the image shows something else entirely.
+
 And check the marker was **absent before**. A marker you only ever observe after the change
 proves the page renders, not that anything moved - which is the same vacuous-check failure as
 diffing two directories that both failed to extract.
@@ -168,6 +183,20 @@ not a fault.
 **Check the tail is current before reading anything into a quiet log**: compare the last
 line's timestamp to the clock. `ptz-a` fails every ~77 s and is a usable heartbeat - if its
 last line is more than that old, the view has stopped updating and you are reading history.
+
+### The one thing this procedure cannot prove
+
+**A sideload can prove the action EXISTS. It cannot prove pressing it works, because there is
+nowhere safe to press it.** Companion has no scratch surface - `Interactive Buttons` in the
+sidebar is not a testable sandbox and `/interactive-buttons` is not even a URL, it redirects
+to `/connections`. The only way to press a new action is to place it on a real button on a
+real page, which means editing the deck somebody is using.
+
+So do not go looking for a sandbox; there isn't one. Either place a button deliberately, with
+the owner's say-so, or **state the gap in the report**: the module-to-server hop for the new
+action is covered by module tests against a fake server and by the live server route under
+curl, and by nothing that presses the two together. Say which, rather than letting a green
+connection imply more than it proves.
 
 ## 5. Say what the humans have to do by hand
 
@@ -324,3 +353,39 @@ The loop must terminate in one of two ways, and "I read it and it seemed fine" i
 - Loop outcome: **four edits.** One correction (the Presets tab is a toggle, and this file had
   it wrong), two additions (the log filter and the `Reloading 0 instances` line), one prune
   (the `find`-worked note, now redundant with step 2 carrying the query verbatim).
+
+## 2026-08-30 - 0.6.0 -> 0.7.0 (#93, the state-cycle key)
+
+- **Marker used: the PRESET COUNT, 18 -> 20**, plus a preset named `Next state (cycle)` in
+  `States` and in `States (words)`. Recorded 18 before the import, predicted 20 out loud, and
+  read 20 after. The prediction is worth making explicitly: it is what turns "a number changed"
+  into a test.
+- **THE MARKER LOOKED WRONG AND WAS RIGHT.** The cycle preset rendered as a green tick, because
+  Companion draws preset thumbnails with feedbacks applied and the row was AVAILABLE - which is
+  exactly what that button is designed to do. Confirmed by name with `find` rather than by
+  picture. Step 4 now carries this; it would otherwise read as a build that shipped the wrong
+  art.
+- **Confirmed last run's Presets-tab correction, and generalised it.** The click was eaten once
+  again - but only on the visit where the page had just been navigated and the button grid was
+  still blank. On the visit where the page was already painted, one click worked. So the toggle
+  wording is right and the cause is render timing, which also explains the version pencil eating
+  a click on this same run. Promoted to a general rule at step 3 rather than left as two
+  unrelated quirks.
+- **Went looking for a scratch surface to press the new action on. There is none.**
+  `/interactive-buttons` is not a route - it redirects to `/connections` and opens the Add New
+  Connection panel, which is startling and harmless. Cost one navigation. Written up as its own
+  short section, because the next run will have the same instinct and deserves to be told no
+  before it spends the navigation.
+- **The install-is-not-running trap fired again, exactly as documented**: after the import,
+  `/modules/connection/rocket-onair` listed 0.7.0 with the plug still on 0.6.0. Step 3 remains
+  the step that carries this file.
+- **Version dropdown was NOT stale this time.** Step 2's confirmation was done first, as the
+  file now says to; the connection page was then loaded fresh and offered v0.7.0 immediately.
+  The 0.5.0 run's failure does not reproduce when the order is followed, which is evidence the
+  fix was the right one.
+- **Log was clean and current.** `Installed connection module rocket-onair v0.7.0` ->
+  `Reloading 0 instances` -> `Starting instance: On_Air` -> `state table v11, 5 rows`, no
+  On_Air errors. `ptz-a` still failing every ~77s about an unrelated host, third run running.
+- Loop outcome: **three edits, no prune.** One generalisation (first-click-after-navigate),
+  one addition (data-driven preset faces), one new section (there is no sandbox). Nothing in
+  the file turned out to be false this run - the two corrections made last run both held.
