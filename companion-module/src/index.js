@@ -1345,9 +1345,15 @@ class OnAirInstance extends InstanceBase {
 		// THE PANEL BUTTONS. #91 shipped two, and they stay: a one-way button is the thing you
 		// want on a wall when you know which way you mean. #92 adds the toggle beside them
 		// because a deck has finite buttons and the common case is one press either way.
-		const SLEEP_BG = combineRgb(40, 40, 40)
+		// THE TOGGLE MIRRORS THE GLASS; THE ONE-WAY BUTTONS ARE COMMANDS. Two different jobs,
+		// so two different colour families - and that separation is not decoration, it is the
+		// fix for a real confusion. When every panel button sat on its own dark/light pair, the
+		// one-way SLEEP and the toggle both rendered a moon on dark and were indistinguishable
+		// in the preset picker; Rocket dragged the wrong one and spent an evening pressing a
+		// button that could only ever sleep.
+		const CMD_BG = combineRgb(70, 70, 74)
 		const ASLEEP_BG = combineRgb(0, 0, 0)
-		const WAKE_BG = combineRgb(200, 200, 205)
+		const LIT_BG = combineRgb(200, 200, 205)
 
 		const panel = (key, category, withArt) => {
 			const word = (text, bg) => ({
@@ -1362,7 +1368,7 @@ class OnAirInstance extends InstanceBase {
 				type: 'button',
 				category,
 				name: 'Panel sleep',
-				style: { ...word('PANEL\nSLEEP', SLEEP_BG), ...art('sleep', SLEEP_BG) },
+				style: { ...word('PANEL\nSLEEP', CMD_BG), ...art('sleep', CMD_BG) },
 				steps: [{ down: [{ actionId: 'panel_sleep', options: {} }], up: [] }],
 				// It wears the asleep feedback so it reports the panel's ANSWER rather than the
 				// press: the panel refuses a sleep while the row is busy, and a button that lit up
@@ -1386,32 +1392,37 @@ class OnAirInstance extends InstanceBase {
 				type: 'button',
 				category,
 				name: 'Panel wake',
-				style: { ...word('PANEL\nWAKE', WAKE_BG), ...art('wake', WAKE_BG) },
+				style: { ...word('PANEL\nWAKE', CMD_BG), ...art('wake', CMD_BG) },
 				steps: [{ down: [{ actionId: 'panel_wake', options: {} }], up: [] }],
 				feedbacks: [],
 			}
 
-			// THE TOGGLE SHOWS THE PANEL, AND THE AFFORDANCE FALLS OUT OF THAT. At rest it wears
-			// the moon on dark: the glass is lit, press to darken it. Asleep it goes to the sun on
-			// a bright ground: the glass is dark, press to light it. The background carries the
-			// STATE and the icon carries WHAT THE PRESS WILL DO, which is the one thing a toggle
-			// cannot say by its position - it has none.
+			// THE TOGGLE IS A MIRROR OF THE GLASS. Sun on a bright ground means the screen is ON;
+			// moon on black means the screen is OFF. Icon and background say the same thing, so
+			// the key looks like a small copy of the panel across the room.
+			//
+			// IT USED TO SAY WHAT THE PRESS WOULD DO, and that was wrong. The reasoning was that
+			// a toggle has no position and therefore cannot show an affordance - true, but it
+			// answered a question nobody asks. Rocket read it the other way round on sight
+			// ("my assumption is the screen is black if the moon is showing") and he is right:
+			// an indicator shows STATE. What the press does is then obvious, because there are
+			// only two states and pressing goes to the other one.
 			presets[`panel_toggle${key}`] = {
 				type: 'button',
 				category,
 				name: 'Panel sleep/wake toggle',
-				style: { ...word('PANEL\nSLEEP?', SLEEP_BG), ...art('sleep', SLEEP_BG) },
+				style: { ...word('SCREEN\nON', LIT_BG), ...art('wake', LIT_BG) },
 				steps: [{ down: [{ actionId: 'panel_toggle', options: {} }], up: [] }],
 				feedbacks: [
 					{
 						feedbackId: 'panel_asleep',
 						options: {},
 						style: {
-							text: withArt ? '' : 'PANEL\nWAKE?',
+							text: withArt ? '' : 'SCREEN\nOFF',
 							size: '14',
-							color: readableInk(combineRgb(255, 255, 255), WAKE_BG),
-							bgcolor: WAKE_BG,
-							...art('wake', WAKE_BG),
+							color: readableInk(combineRgb(255, 255, 255), ASLEEP_BG),
+							bgcolor: ASLEEP_BG,
+							...art('sleep', ASLEEP_BG),
 						},
 					},
 				],

@@ -5085,3 +5085,74 @@ else (state, light control, API) lives on the receiver.
   dashboard really does load its frontend from `https://oi.esphome.io/v2/www.js` with no
   `local:` set, so on a network with no route out `/onair/config` is the only page on the
   device that renders - which is D-111's argument, stronger than when it was made.
+
+- **D-139 (2026-08-31)** **The toggle mirrors the glass. An indicator shows state, not the
+  action.** #93. The sleep/wake toggle showed a moon at rest and a sun when asleep, on the
+  argument that a toggle has no position and so its icon should say WHAT THE PRESS WILL DO.
+  Rocket read it the other way round on sight - *"my assumption is the screen is black if the
+  moon is showing"* - and then, having seen it, asked for it directly: *"what I'd like to see
+  on the button is the current status of the display."*
+
+  **He is right and the original argument answered a question nobody asks.** With two states,
+  showing the state makes the action obvious - pressing goes to the other one - while showing
+  the action leaves the state unsaid. So the key is now a small copy of the panel across the
+  room: **sun on a bright ground while the screen is on, moon on black while it is off**, icon
+  and background saying the same thing. The words variant reads `SCREEN ON` / `SCREEN OFF`.
+
+  **The direction is now asserted, because it was built backwards and shipped that way.**
+  Swapping the two faces is a one-character edit that reads plausibly either way to whoever
+  makes it, and no other test would catch it. The test names the icon and the colour it expects
+  for each face.
+
+  **The one-way buttons moved to a neutral command grey, and that fixes a real confusion rather
+  than tidying one.** Every panel button used to sit on its own dark/light pair, so the one-way
+  SLEEP and the toggle both rendered a moon on dark and were indistinguishable in the preset
+  picker. Rocket dragged the wrong one and spent an evening pressing a button that could only
+  ever sleep. **Two jobs, two colour families**: commands sit on mid grey, the toggle mirrors
+  the glass in near-white and black.
+
+- **D-140 (2026-08-31)** **`checkFeedbacks` derives its list from the definitions, because a
+  hand-written copy is a bug with a delay on it.** #93. Rocket reported the toggle doing
+  nothing. The action was right, the panel really went dark, `confirmedReason` really said
+  `asleep`, and the feedback was present and enabled on his button with correct overrides. It
+  never fired: `checkAll()` was a hand-written list of six ids and `panel_asleep` - added with
+  the feature in #91 - was never added to it. **Companion only re-evaluates a feedback when the
+  module asks**, so it was computed once at button load and frozen. Two releases shipped where
+  every press of that button looked like it did nothing.
+
+  The existing tests asserted the preset CONTAINED the feedback with the right style. Shape,
+  not behaviour. Nothing asserted that anything ever caused it to be re-read, and that gap is
+  the whole bug.
+
+  **The guard is the SET, not the id.** A test naming `panel_asleep` would have been written
+  the day it was fixed and would say nothing about the next feedback anybody adds; the test
+  asserts every defined feedback is re-evaluated. A second test drives a real `asleep` reading
+  through ingest and checks both halves - the callback flipping AND Companion being told. Both
+  fail against the exact code that shipped.
+
+  **A one-way panel press now logs.** It logged nothing on success, so a deck that was visibly
+  changing the panel produced an empty module log - which reads exactly like presses that never
+  arrived, and cost three passes of this diagnosis.
+
+- **D-141 (2026-08-31)** **The OTA image was checked before it was shipped, for the first
+  time.** #87 has stood open on the observation that `esphome upload` ships
+  `build/firmware.ota.bin`, does not compile, and that **nothing has ever checked THAT file** -
+  leaving a stale binary (D-100 again) alive as an explanation for a flash that came back on
+  the old firmware.
+
+  So this flash checked it, and the check is cheap enough to be the rule from now on:
+
+  1. `esphome compile` explicitly, never `upload` alone.
+  2. Confirm the BUILT sources under `build/<name>/src/` carry the change.
+  3. Confirm the OTA image is **newer than every edited source**.
+  4. **`strings` the OTA image for a phrase only the new build contains.** Here `Refusing to
+     darken` and `reflash`, one occurrence each.
+  5. Confirm the uploaded byte count matches the image that was checked.
+  6. After the reboot, look for a marker only the new build can serve - and then look AGAIN
+     past safe_mode's 60s `boot_is_good_after`, because an image inside that window is
+     `PENDING_VERIFY` and any reset reverts it to the other slot with no error anywhere.
+
+  Step 4 is the one that was missing. It answers "is the binary the source" directly rather
+  than by inference from timestamps, and it would have settled D-100 in seconds. **This does
+  not close #87** - it removes the stale-binary explanation for THIS flash only, and says
+  nothing about whether the rollback mechanism was what bit before.

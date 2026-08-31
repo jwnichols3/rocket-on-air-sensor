@@ -16,6 +16,9 @@ import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
+// The generated art, so a test can name the icon it expects instead of comparing two opaque
+// base64 blobs and hoping they are the right way round (#93).
+import { ICONS } from '../src/icons.js'
 import { InstanceStatus } from '@companion-module/base'
 import { startFakeServer } from './fake-server.mjs'
 
@@ -1270,17 +1273,26 @@ test('#92 the toggle preset shows the panel, and changes what it offers when asl
 
 	const asleep = t.feedbacks.find((f) => f.feedbackId === 'panel_asleep')
 	assert.ok(asleep, 'the toggle does not report whether the panel is dark')
-	// The two faces must differ in BOTH channels. The background carries the state and the
-	// icon carries what the press will do; a feedback that changed only one of them would
-	// leave a button that either lies about the state or lies about the action.
+	// The two faces must differ in BOTH channels, so the key reads as a small copy of the
+	// panel across the room rather than as a label that happens to change colour.
 	assert.notEqual(asleep.style.bgcolor, t.style.bgcolor, 'the asleep face is the same colour')
-	assert.notEqual(asleep.style.png64, t.style.png64, 'the asleep face offers the same action')
+	assert.notEqual(asleep.style.png64, t.style.png64, 'the asleep face shows the same picture')
 
-	// And the words version says it in words rather than going blank.
-	assert.equal(seen.presets.panel_toggle_words.style.text, 'PANEL\nSLEEP?')
+	// THE ICON IS THE STATE, NOT THE ACTION (#93). This is the direction, asserted, because it
+	// was built backwards and shipped: the resting face means "the screen is ON" and must be
+	// the SUN on a bright ground, and the asleep face means "the screen is OFF" and must be
+	// the MOON on black. Swapping them is a one-character edit that no other test would catch,
+	// and it reads plausibly either way to whoever makes it.
+	assert.equal(t.style.bgcolor, 0xc8c8cd, 'a lit panel must show a BRIGHT key')
+	assert.equal(asleep.style.bgcolor, 0x000000, 'a dark panel must show a BLACK key')
+	assert.equal(t.style.png64, ICONS.wake.dark, 'a lit panel must show the SUN')
+	assert.equal(asleep.style.png64, ICONS.sleep.light, 'a dark panel must show the MOON')
+
+	// And the words version says the same thing in words rather than going blank.
+	assert.equal(seen.presets.panel_toggle_words.style.text, 'SCREEN\nON')
 	assert.equal(
 		seen.presets.panel_toggle_words.feedbacks.find((f) => f.feedbackId === 'panel_asleep').style.text,
-		'PANEL\nWAKE?',
+		'SCREEN\nOFF',
 	)
 	assert.equal(seen.presets.panel_toggle_words.style.png64, undefined, 'the words preset carries art')
 })
