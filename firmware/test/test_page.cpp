@@ -121,6 +121,15 @@ static std::string get_config_bench() {
   return onair::config_page("", onair::Submitted::APPLIED, "", true);
 }
 
+/// The page as `?night=1` serves it (#81).
+static std::string get_config_night() {
+  return onair::config_page("", onair::Submitted::APPLIED, "", false, true);
+}
+
+/// Put the night snapshot where the page will read it. The main loop does this every tick on
+/// the device; a host test has no main loop, so it writes the same field directly.
+static void set_night(const onair::NightInput &in) { onair::held().night_in = in; }
+
 /// Drives a real POST through Page::handleRequest and returns the request, so a test can
 /// read both the status and the body.
 static AsyncWebServerRequest post(const std::vector<std::pair<std::string, std::string>> &fields,
@@ -565,9 +574,37 @@ static void test_byte_budget() {
   override_row("deleted-row-with-a-long-id", "A LABEL THAT IS LONG");
   cases.push_back({"a dormant override for a deleted row", get_config().size()});
 
+  // #81. THE WIDEST PAGE THIS DEVICE CAN SERVE, and it is not the default one: a dark panel
+  // always renders the Night bar, however the operator arrived, so the bar's cost lands on
+  // exactly the page somebody opens to undo the darkness. Measured with the bar forced on
+  // rather than assumed absent.
+  seed_table();
+  override_row("available", "FREE NOW");
+  override_row("on-air", "ON A CALL");
+  override_row("interruptible", "KNOCK FIRST");
+  override_row("recording", "RECORDING NOW");
+  override_row("unknown", "NOT SURE");
+  onair::held().night_dark = true;
+  cases.push_back({"every row changed + the panel dark, so the Night bar shows",
+                   get_config().size()});
+  onair::held().night_dark = false;
+
   begin("EVERY five-row page the device can serve stays under the fence");
+  // 4400 rather than 4000 since #81, AND THE RESERVE MOVED WITH IT - 2600 -> 3000, so a
+  // five-row page reserves 5100 B. Move these two together or not at all.
+  //
+  // The fence is not the hard limit; `reserve()` is. The fence sits BELOW the reserve on
+  // purpose and the GAP is the safety margin: exceed the reserve and std::string grows the
+  // buffer, and a failed allocation under `-fno-exceptions` is `abort()`, which reboots the
+  // panel driving the light. The gap was 700 B before #81 and is 700 B after it.
+  //
+  // What #81 added is fixed, not per-row: 123 B of always-visible verdict line, and 545 B of
+  // Night bar on the page a DARK panel serves. Paying for fixed content out of the gap would
+  // have shrunk the margin to 375 B while looking like a one-line change, so the fixed part of
+  // the reserve grew instead. Do the same next time: per-row growth adjusts `rows * 420`,
+  // fixed growth adjusts the base, and the fence follows whichever moved.
   for (const auto &c : cases)
-    CHECK_MSG(c.bytes < 4000,
+    CHECK_MSG(c.bytes < 4400,
               std::string(c.name) + " = " + std::to_string(c.bytes) + " B");
   printf("        [budget]");
   for (const auto &c : cases)
@@ -1072,6 +1109,155 @@ static onair::NightInput night_ok(uint16_t now) {
   return in;
 }
 
+// =========================================================================================
+// #81. THE NIGHT BAR - the verdict everybody sees, and the three controls behind a click
+// =========================================================================================
+static void test_night_bar() {
+  auto ok_at = [](uint16_t now) {
+    onair::NightInput in;
+    in.enabled = true; in.clock_valid = true;
+    in.now_min = now; in.sleep_min = 23 * 60; in.wake_min = 7 * 60;
+    in.busy = false; in.real_row = true; in.heard_from_server = true;
+    return in;
+  };
+
+  begin("THE VERDICT IS ON THE DEFAULT PAGE, always - it is the half an operator reads");
+  seed_table();
+  set_night(ok_at(12 * 60));
+  std::string h = get_config();
+  CHECK_MSG(has(h, "Screen:"), "the verdict must not need a query parameter");
+  CHECK_MSG(has(h, "Darkens at 23:00"), "and it must say WHEN, not just that a schedule exists");
+
+  begin("the two darknesses are told apart, because one of them ends by itself");
+  seed_table();
+  onair::NightInput in = ok_at(2 * 60);
+  set_night(in);
+  CHECK_MSG(has(get_config(), "until 07:00"), "a scheduled sleep must say when it lifts");
+  in = ok_at(12 * 60);
+  in.manual = true;                       // pressed Sleep in the afternoon
+  set_night(in);
+  h = get_config();
+  CHECK(has(h, "Sleep was pressed"));
+  CHECK_MSG(!has(h, "until 07:00"), "a manual sleep has no wake time and must not invent one");
+
+  begin("THE TWO CONDITIONS SOMEBODY WOULD OTHERWISE FILE A BUG ABOUT");
+  // The whole reason this line is on the default page rather than behind the click.
+  seed_table();
+  in = ok_at(2 * 60);
+  in.busy = true;
+  set_night(in);
+  CHECK_MSG(has(get_config(), "the row is busy"), "\"it did not go dark\" must answer itself");
+  in = ok_at(2 * 60);
+  in.clock_valid = false;
+  set_night(in);
+  CHECK_MSG(has(get_config(), "no time from the network"), "and so must the other one");
+
+  begin("a pending sleep says so, rather than reporting the daytime it is technically in");
+  seed_table();
+  in = ok_at(12 * 60);
+  in.manual = true;
+  in.busy = true;                          // refused, and still armed - D-137
+  set_night(in);
+  h = get_config();
+  CHECK(has(h, "Sleep is pending"));
+  CHECK_MSG(!has(h, "Darkens at"), "reporting the schedule here hides the press entirely");
+
+  begin("the bar is off the default page, but always one click away");
+  seed_table();
+  set_night(ok_at(12 * 60));
+  onair::held().night_dark = false;
+  CHECK_MSG(!has(get_config(), "<strong>Night</strong>"), "four set-once controls must not tax every page load");
+  CHECK_MSG(has(get_config(), "/onair/config?night=1"), "but a query parameter nobody can see is unreachable");
+  CHECK(has(get_config_night(), "<strong>Night</strong>"));
+
+  begin("A DARK PANEL ALWAYS SHOWS THE BAR - never a hidden control holding the screen off");
+  seed_table();
+  onair::held().night_dark = true;
+  CHECK_MSG(has(get_config(), "<strong>Night</strong>"),
+            "the bar that can undo the darkness must appear however the page was reached");
+  onair::held().night_dark = false;
+
+  begin("the bar shows the schedule the panel is actually running");
+  seed_table();
+  in = ok_at(12 * 60);
+  in.sleep_min = 22 * 60 + 30;
+  in.wake_min = 6 * 60 + 15;
+  set_night(in);
+  h = get_config_night();
+  CHECK(has(h, "value=\"22:30\""));
+  CHECK(has(h, "value=\"06:15\""));
+  CHECK(has(h, "value=\"on\" checked"));
+  CHECK_MSG(has(h, "reflash"), "the timezone caveat has to be where the times are edited");
+
+  begin("an apply reaches the main loop as a REQUEST, and only once");
+  seed_table();
+  AsyncWebServerRequest req = post({{"action", "night"}, {"night", "on"},
+                                    {"sleep", "22:30"}, {"wake", "06:15"}});
+  CHECK(req.status == 200);
+  onair::Held::NightRequest want;
+  CHECK_MSG(onair::take_night_request(want), "the page must have asked for something");
+  CHECK(want.enabled == true);
+  CHECK(want.sleep_min == 22 * 60 + 30);
+  CHECK(want.wake_min == 6 * 60 + 15);
+  CHECK_MSG(!onair::take_night_request(want), "and it is one-shot - a repeat would fight the entity");
+
+  begin("off round-trips, which a request keyed only on presence could not express");
+  seed_table();
+  req = post({{"action", "night"}, {"night", "off"}, {"sleep", "23:00"}, {"wake", "07:00"}});
+  CHECK(req.status == 200);
+  want.enabled = true;
+  CHECK(onair::take_night_request(want));
+  CHECK_MSG(want.enabled == false, "\"turn it off\" must not read as \"leave it alone\"");
+
+  begin("EVERY BAD TIME IS REFUSED, never defaulted - a stored 00:00 is a silent schedule");
+  seed_table();
+  const char *bad[] = {"25:00", "23:60", "7:00", "07:0", "0700", "", "aa:bb", "23:0a", "-1:00",
+                       "23:00:00"};
+  for (const char *t : bad) {
+    req = post({{"action", "night"}, {"night", "on"}, {"sleep", t}, {"wake", "07:00"}});
+    CHECK_MSG(req.status == 400, std::string("accepted a sleep time of \"") + t + "\"");
+    CHECK_MSG(!onair::take_night_request(want), "a refused POST must stage nothing at all");
+    req = post({{"action", "night"}, {"night", "on"}, {"sleep", "23:00"}, {"wake", t}});
+    CHECK_MSG(req.status == 400, std::string("accepted a wake time of \"") + t + "\"");
+    CHECK(!onair::take_night_request(want));
+  }
+
+  begin("EQUAL TIMES ARE REFUSED - in_night_window would make that schedule never run");
+  seed_table();
+  req = post({{"action", "night"}, {"night", "on"}, {"sleep", "23:00"}, {"wake", "23:00"}});
+  CHECK(req.status == 400);
+  CHECK(has(req.body, "never run"));
+  CHECK_MSG(!onair::take_night_request(want), "storing it would report success and do nothing");
+
+  begin("an unrecognised on/off value is refused, and so is a missing one");
+  seed_table();
+  req = post({{"action", "night"}, {"night", "maybe"}, {"sleep", "23:00"}, {"wake", "07:00"}});
+  CHECK(req.status == 400);
+  CHECK(has(req.body, "must be on or off"));
+  req = post({{"action", "night"}, {"sleep", "23:00"}, {"wake", "07:00"}});
+  CHECK(req.status == 400);
+  CHECK(!onair::take_night_request(want));
+
+  begin("the night bar is behind the same CSRF check as everything else");
+  seed_table();
+  req = post({{"action", "night"}, {"night", "on"}, {"sleep", "23:00"}, {"wake", "07:00"}},
+             "http://evil.example");
+  CHECK(req.status == 400);
+  CHECK(has(req.body, "came from another site"));
+  CHECK_MSG(!onair::take_night_request(want), "and nothing was staged");
+
+  begin("hhmm and parse_hhmm round-trip every minute of the day");
+  for (uint16_t m = 0; m < 1440; m++) {
+    uint16_t back = 0xFFFF;
+    CHECK_MSG(onair::parse_hhmm(onair::hhmm(m), back) && back == m,
+              "a time the page rendered must parse back to the same minute");
+  }
+  CHECK_MSG(onair::hhmm(7 * 60) == "07:00", "always five characters - 7:0 is a schedule nobody trusts");
+
+  set_night(onair::NightInput{});
+  onair::held().night_dark = false;
+}
+
 static void test_night() {
   begin("the window WRAPS midnight, which is where this arithmetic goes wrong");
   CHECK(onair::in_night_window(23 * 60, 23 * 60, 7 * 60));       // 23:00 exactly, inclusive
@@ -1179,6 +1365,78 @@ static void test_night() {
               "the schedule's verdict moved at some minute of the day");
   }
 
+  // ---- #81: the verdict, which is now one decision with two presentations ----------------
+
+  begin("night_why names every branch, and the ORDER of them is the meaning");
+  in = night_ok(2 * 60);
+  CHECK(onair::night_why(in) == onair::NightWhy::DARK);
+  in = night_ok(12 * 60);
+  CHECK(onair::night_why(in) == onair::NightWhy::DAYTIME);
+  in = night_ok(12 * 60); in.enabled = false;
+  CHECK(onair::night_why(in) == onair::NightWhy::SCHEDULE_OFF);
+  in = night_ok(2 * 60); in.clock_valid = false;
+  CHECK(onair::night_why(in) == onair::NightWhy::NO_CLOCK);
+  in = night_ok(2 * 60); in.woken = true;
+  CHECK(onair::night_why(in) == onair::NightWhy::WOKEN);
+  in = night_ok(2 * 60); in.busy = true;
+  CHECK(onair::night_why(in) == onair::NightWhy::HOLDING_OFF);
+  in = night_ok(2 * 60); in.real_row = false;
+  CHECK(onair::night_why(in) == onair::NightWhy::HOLDING_OFF);
+
+  begin("A REFUSED MANUAL SLEEP IS REPORTED BEFORE THE SCHEDULE IS CONSULTED");
+  // D-137: a busy row SUPPRESSES a manual sleep, it never ends it. So the operator who
+  // pressed Sleep during a call must be told the press is still pending - report
+  // SCHEDULE_OFF or DAYTIME first and the pending sleep becomes invisible, which is the
+  // exact confusion this ticket exists to remove.
+  in = night_ok(12 * 60);
+  in.manual = true;
+  in.busy = true;
+  CHECK_MSG(onair::night_why(in) == onair::NightWhy::SLEEP_PENDING, "a pending sleep must outrank DAYTIME");
+  in = night_ok(12 * 60);
+  in.manual = true; in.busy = true; in.enabled = false;
+  CHECK_MSG(onair::night_why(in) == onair::NightWhy::SLEEP_PENDING, "and must outrank SCHEDULE_OFF");
+
+  begin("night_reason still says \"dark\" EXACTLY - the server parses that one string");
+  // esphome-driver.ts compares against NIGHT_DARK = 'dark', and that comparison is what
+  // POST /panel/toggle reads the glass with. Break this and the toggle silently inverts.
+  CHECK(std::string(onair::night_reason(night_ok(2 * 60))) == "dark");
+  in = night_ok(12 * 60);
+  in.manual = true;
+  CHECK(std::string(onair::night_reason(in)) == "dark");
+
+  begin("every other reason starts \"lit\", so a glance at the sensor answers the question");
+  const uint16_t hours[] = {2 * 60, 12 * 60};
+  for (uint16_t h : hours) {
+    onair::NightInput v = night_ok(h);
+    for (int k = 0; k < 4; k++) {
+      v = night_ok(h);
+      if (k == 0) v.enabled = false;
+      if (k == 1) v.clock_valid = false;
+      if (k == 2) v.busy = true;
+      if (k == 3) v.woken = true;
+      std::string r = onair::night_reason(v);
+      CHECK_MSG(r == "dark" || r.rfind("lit", 0) == 0, "a reason that is neither dark nor lit");
+      CHECK_MSG(!r.empty(), "an empty reason tells the operator nothing");
+    }
+  }
+
+  begin("night_reason agrees with night_should_darken, always");
+  // The two must never disagree: the sensor saying "dark" while the glass is lit is exactly
+  // the false reading #82 spent a ticket removing.
+  for (uint16_t m = 0; m < 1440; m += 37) {
+    for (int mask = 0; mask < 32; mask++) {
+      onair::NightInput v = night_ok(m);
+      v.enabled = mask & 1;
+      v.clock_valid = mask & 2;
+      v.busy = mask & 4;
+      v.real_row = mask & 8;
+      v.manual = mask & 16;
+      bool dark = onair::night_should_darken(v);
+      CHECK_MSG(dark == (std::string(onair::night_reason(v)) == "dark"),
+                "the sensor and the glass disagree about darkness");
+    }
+  }
+
   begin("the operator at the page beats the schedule, both ways");
   onair::held().bench_level = onair::BENCH_NONE;
   onair::held().night_dark = true;
@@ -1211,6 +1469,7 @@ int main() {
   test_glass_bar();
   test_bench();
   test_night();
+  test_night_bar();
 
   printf("\n%d checks, %d failed\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;

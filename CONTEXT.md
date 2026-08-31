@@ -5027,3 +5027,61 @@ else (state, light control, API) lives on the receiver.
   pending - busy or no data)`. Ending that call by pressing AVAILABLE now clears it. Ending it
   automatically still does not, which is the honest consequence of gate one and is documented
   rather than papered over.
+
+- **D-138 (2026-08-30)** **The night verdict is one decision with two presentations, and the
+  controls are one click away.** #81. Rocket asked for a `Night` bar on `/onair/config`. He
+  also said, of the choice he was handed: *"I don't want to make the choices too complicated."*
+  He was right, and the ticket had been sitting on `needs-info` for two days because of a
+  question about six bytes that was never his to answer.
+
+  **The split is what an operator reads against what an operator sets.** The VERDICT is always
+  on the default page - one sentence, 123 bytes. `Screen: on. Refusing to darken: the row is
+  busy.` and `Screen: on. Scheduled, but this panel has no time from the network.` are the two
+  conditions somebody otherwise files a bug about, and answering them anywhere else costs an
+  afternoon. The three CONTROLS sit behind `?night=1`, with a link in the footer, because a
+  schedule is set once and then left alone. This is the Beta bar's precedent applied word for
+  word, including the half that matters: **a dark panel always renders the bar**, however the
+  page was reached, because a hidden control holding the screen off is the trap.
+
+  **`night_why()` is one decision; `night_reason()` and the page are two presentations of it.**
+  The seven branches used to live inside a lambda in `onair-core.yaml`, where no host test
+  could reach them and the page could not either - the page runs on the httpd task and cannot
+  touch an `id()`. They are now a pure function over `NightInput`, and the main loop snapshots
+  that input into `Held` so both readers see one answer. The sensor keeps its wire contract
+  (`"dark"` exactly - `esphome-driver.ts` compares against it and that comparison is what
+  `POST /panel/toggle` reads the glass with); the page says the same thing in sentences, with
+  the wake time filled in.
+
+  **The branch ORDER carries meaning and is asserted.** A refused manual sleep is reported
+  before the schedule is consulted. Report `SCHEDULE_OFF` or `DAYTIME` first and a pending
+  sleep becomes invisible, which is D-137's trap wearing a different hat.
+
+  **The fence moved and the reserve moved with it - 4000 -> 4400 and 2600 -> 3000.** The page
+  had six bytes of headroom, and I told Rocket the verdict line would fit. It does not: it is
+  123 bytes, and the bar is another 545 on the page a dark panel serves. What matters is that
+  both numbers moved together. The fence sits BELOW `reserve()` on purpose and the gap is the
+  safety margin - exceed the reserve and `std::string` grows the buffer, and a failed
+  allocation under `-fno-exceptions` is `abort()`, which reboots the panel driving the light.
+  Paying for new FIXED content out of that gap would have shrunk it from 700 bytes to 375
+  while looking like a one-line change. Per-row growth adjusts `rows * 420`; fixed growth
+  adjusts the base; the fence follows whichever moved.
+
+  **`publish_state()` does not persist a number, and would have shipped a setting that silently
+  forgot itself.** Measured in the pinned ESPHome 2026.8.0: `TemplateNumber::publish_state()`
+  only updates RAM, and `pref_.save()` lives in `control()`, which only a `NumberCall` reaches.
+  A schedule set from the page would have reported success and reverted on the next reboot -
+  the exact failure this bar refuses on every other field. `make_call().set_value().perform()`
+  instead. The SWITCH beside it is the opposite: `Switch::publish_state()` does call
+  `rtc_.save()`, so `turn_on`/`turn_off` persist on their own. **Two entity types, two rules.**
+
+  **What did not ship, and why.** The ticket asked for four controls. Night brightness is the
+  fourth and it does not exist in the firmware - `effective_backlight()` returns 0 or 100 and
+  nothing between. It belongs to #79, which is otherwise substantially shipped. Night is fully
+  dark today, which is what was wanted, so the control would have been a slider with one
+  position.
+
+  **Corrections to the ticket, both verified today.** There is no `panel_night` global; #78
+  shipped the equivalent as `held().night_dark` plus `effective_backlight()`. And the ESPHome
+  dashboard really does load its frontend from `https://oi.esphome.io/v2/www.js` with no
+  `local:` set, so on a network with no route out `/onair/config` is the only page on the
+  device that renders - which is D-111's argument, stronger than when it was made.

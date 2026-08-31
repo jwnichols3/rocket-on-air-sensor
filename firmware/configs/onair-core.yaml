@@ -835,6 +835,12 @@ interval:
               onair::held().night_woken = true;
             }
             ni.woken = onair::held().night_woken;
+            // THE SNAPSHOT (#81). Taken here, where every field is already correct, so the
+            // page and the Night sensor read one answer instead of computing two.
+            {
+              esphome::LockGuard guard(onair::held().lock);
+              onair::held().night_in = ni;
+            }
 
             bool dark = onair::night_should_darken(ni);
             if (dark != onair::held().night_dark) {
@@ -893,6 +899,34 @@ interval:
               id(show_clock).turn_on();
             } else {
               id(show_clock).turn_off();
+            }
+          }
+      - lambda: |-
+          // #81. The page validated it; this writes it. The three entities are what PERSIST
+          // the schedule across a reboot, so they stay the source of truth and `night_in`
+          // picks the change up on the next tick.
+          onair::Held::NightRequest want;
+          if (onair::take_night_request(want)) {
+            ESP_LOGI("onair", "night schedule set from the device page: %s, %02u:%02u to %02u:%02u",
+                     want.enabled ? "on" : "off", want.sleep_min / 60, want.sleep_min % 60,
+                     want.wake_min / 60, want.wake_min % 60);
+            // make_call(), NOT publish_state(). MEASURED in the pinned ESPHome 2026.8.0:
+            // `TemplateNumber::publish_state()` only updates the value in RAM, and
+            // `pref_.save()` lives in `control()` - which is what a NumberCall reaches and a
+            // bare publish never does. A publish here would set the schedule, report success,
+            // and lose it on the next reboot, which is precisely the "a setting silently does
+            // nothing" failure this bar refuses everywhere else.
+            //
+            // The SWITCH below is the other way round and is correct as written:
+            // `Switch::publish_state()` does call `rtc_.save()` (switch.cpp:62), so turn_on /
+            // turn_off persist on their own. Two entity types, two rules; check before
+            // copying either.
+            id(night_sleep_min).make_call().set_value(want.sleep_min).perform();
+            id(night_wake_min).make_call().set_value(want.wake_min).perform();
+            if (want.enabled) {
+              id(night_mode).turn_on();
+            } else {
+              id(night_mode).turn_off();
             }
           }
       - if:
@@ -1026,26 +1060,12 @@ text_sensor:
     name: "Night"
     id: night_sensor
     update_interval: 5s
+    # ONE LINE, because the seven branches that used to be here moved to `night_why()` in
+    # onair_table.h (#81). They had to: the operator's page needs the same verdict and cannot
+    # reach an `id()` from the httpd task, and nothing here was reachable by a host test.
     lambda: |-
-      if (onair::held().night_dark)
-        return {"dark"};
-      // A manual sleep that is ARMED BUT REFUSED. Without this the panel says "lit
-      // (daytime)" after somebody presses Sleep during a call, which is true and useless -
-      // it gives no hint the sleep is pending and will take effect the moment the call ends.
-      if (id(panel_sleep).state)
-        return {"lit (sleep pending - busy or no data)"};
-      if (!id(night_mode).state)
-        return {"lit (schedule off)"};
-      auto t = id(wall_clock).now();
-      if (!t.is_valid())
-        return {"lit (no time yet)"};
-      if (!onair::in_night_window((uint16_t) (t.hour * 60 + t.minute),
-                                  (uint16_t) id(night_sleep_min).state,
-                                  (uint16_t) id(night_wake_min).state))
-        return {"lit (daytime)"};
-      if (onair::held().night_woken)
-        return {"lit (woken by a state change)"};
-      return {"lit (holding off - busy or no data)"};
+      esphome::LockGuard guard(onair::held().lock);
+      return {std::string(onair::night_reason(onair::held().night_in))};
   - platform: template
     # The bench override (#87), or "normal". Same argument as Render and Clock: a panel this
     # one cannot be read over HTTP is a panel nobody can check, and this one deliberately

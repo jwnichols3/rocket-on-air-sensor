@@ -538,10 +538,15 @@ test('the NIGHT_DARK constant matches what the firmware can actually emit', () =
   // a string to a string a YAML lambda returns. Renaming it there and not here does not
   // fail a build - it silently reports every dark panel as lit, which is the bug this
   // ticket closes, restored. D-106 is the record of what that costs.
-  const core = readFileSync(join(REPO, 'firmware', 'configs', 'onair-core.yaml'), 'utf8');
-  const block = /name: "Night"[\s\S]*?lambda: \|-\n([\s\S]*?)\n  - platform:/.exec(core);
-  assert.ok(block, 'the Night text_sensor moved or was renamed - re-check this coupling');
-  const returns = [...block[1]!.matchAll(/return \{"([^"]*)"\}/g)].map((m) => m[1]!);
+  //
+  // THE STRINGS MOVED IN #81, and this guard following them is the point rather than a
+  // nuisance: they left the YAML lambda for `night_reason()` in `onair_table.h`, so the
+  // operator's page could switch over the same decision the sensor reports. A coupling that
+  // silently stopped being checked when its target moved would be worse than no coupling.
+  const header = readFileSync(join(REPO, 'firmware', 'configs', 'onair_table.h'), 'utf8');
+  const block = /inline const char \*night_reason\(const NightInput &in\) \{([\s\S]*?)\n\}/.exec(header);
+  assert.ok(block, 'night_reason() moved or was renamed - re-check this coupling');
+  const returns = [...new Set([...block[1]!.matchAll(/return "([^"]*)";/g)].map((m) => m[1]!))];
   assert.ok(returns.length >= 2, `expected several verdicts, got ${JSON.stringify(returns)}`);
   assert.ok(
     returns.includes(NIGHT_DARK),

@@ -655,19 +655,108 @@ inline void render_bench(std::string &h) {
   h += "</span></form>";
 }
 
+/**
+ * ONE SENTENCE, ALWAYS ON THE PAGE (#81). The half of the night feature an operator reads.
+ *
+ * "not asleep: the row is busy" and "not asleep: no time from the network" are the two
+ * conditions somebody otherwise files a bug about. They cost about eighty bytes to answer
+ * here and an afternoon to answer any other way, so they go on the default page while the
+ * four controls stay behind `?night=1`.
+ *
+ * Reads the snapshot the main loop leaves in `Held`, under the lock. This runs on the httpd
+ * task and cannot reach an `id()`, which is also why the verdict is a shared pure function
+ * rather than the seven-branch lambda it used to be.
+ */
+inline void render_night_line(std::string &h) {
+  onair::NightInput in;
+  {
+    esphome::LockGuard guard(held().lock);
+    in = held().night_in;
+  }
+  h += "<p class=\"m\">Screen: ";
+  switch (night_why(in)) {
+    case NightWhy::DARK:
+      // Two darknesses, and the operator wants to know which. One of them ends by itself.
+      if (in.manual)
+        h += "<strong>off</strong> - Sleep was pressed.";
+      else
+        h += "<strong>off</strong> until " + hhmm(in.wake_min) + ".";
+      break;
+    case NightWhy::SLEEP_PENDING:
+      h += "<strong>on</strong>. Sleep is pending - it will not darken during a call.";
+      break;
+    case NightWhy::SCHEDULE_OFF:
+      h += "<strong>on</strong>. The night schedule is off.";
+      break;
+    case NightWhy::NO_CLOCK:
+      h += "<strong>on</strong>. Scheduled, but this panel has no time from the network.";
+      break;
+    case NightWhy::DAYTIME:
+      h += "<strong>on</strong>. Darkens at " + hhmm(in.sleep_min) + ".";
+      break;
+    case NightWhy::WOKEN:
+      h += "<strong>on</strong>. A state change woke it until " + hhmm(in.wake_min) + ".";
+      break;
+    case NightWhy::HOLDING_OFF:
+      h += "<strong>on</strong>. Refusing to darken: the row is busy, or there is no data.";
+      break;
+  }
+  h += "</p>";
+}
+
+/// The night schedule's three controls (#81). Off the default page for the byte budget,
+/// exactly like the Beta bar - and like it, ALWAYS rendered when the override is actually in
+/// force, because a control that is holding the screen dark must never be the hidden one.
+///
+/// Radios and not a checkbox, matching render_glass. An unchecked checkbox posts nothing at
+/// all, and "absent" already means "no override" everywhere else on this page - so a
+/// checkbox here would make "turn the schedule off" indistinguishable from "leave it alone".
+inline void render_night(std::string &h) {
+  onair::NightInput in;
+  {
+    esphome::LockGuard guard(held().lock);
+    in = held().night_in;
+  }
+  h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\">"
+       "<input type=\"hidden\" name=\"action\" value=\"night\">"
+       "<strong>Night</strong>"
+       "<label><input type=\"radio\" name=\"night\" value=\"off\"";
+  if (!in.enabled)
+    h += " checked";
+  h += "> Off</label><label><input type=\"radio\" name=\"night\" value=\"on\"";
+  if (in.enabled)
+    h += " checked";
+  h += "> On</label>"
+       "<label>Sleep <input type=\"time\" name=\"sleep\" required value=\"";
+  h += hhmm(in.sleep_min);
+  h += "\"></label><label>Wake <input type=\"time\" name=\"wake\" required value=\"";
+  h += hhmm(in.wake_min);
+  h += "\"></label><button>Apply</button><span class=\"m\">"
+       // SAY IT HERE. The times are editable at run time and the TIMEZONE is not - it is a
+       // compile-time substitution in onair-core.yaml. Somebody discovering that when the
+       // clocks change, on a panel with no serial console, is a bad afternoon.
+       "The times are this panel's local time. Changing the timezone still needs a reflash."
+       "</span></form>";
+}
+
 /// Everything you set once and then leave alone, in one place and below the table.
-inline void render_settings(std::string &h, bool show_bench) {
+inline void render_settings(std::string &h, bool show_bench, bool show_night) {
   h += "<h2>Panel settings</h2>";
+  render_night_line(h);
   render_glass(h);
   render_appearance(h);
   // The Beta bar is off the default page for the byte budget, but an ACTIVE override always
   // renders: a hidden control holding the screen dark is the trap this whole thing avoids.
   if (show_bench || bench_active())
     render_bench(h);
+  // Same rule, same reason (#81). A dark panel always shows the bar that can undo it.
+  if (show_night || held().night_dark)
+    render_night(h);
 }
 
 inline std::string config_page(const std::string &banner, Submitted outcome,
-                               const std::string &open_id, bool show_bench = false) {
+                               const std::string &open_id, bool show_bench = false,
+                               bool show_night = false) {
   Table table;
   Overlay overlay;
   bool have;
@@ -692,7 +781,13 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
   }
 
   std::string h;
-  h.reserve(2600 + rows * 420 + (open_id.empty() ? 0 : 2200));
+  // 3000 rather than 2600 since #81. THE FIXED HALF OF THIS PAGE GREW, so the fixed half of
+  // the reserve grows with it: the always-visible verdict line is 123 B, and the Night bar is
+  // another 545 B on the page a dark panel serves. Raising the fence alone would have paid for
+  // them out of the gap between fence and reserve, and that gap is the safety margin itself.
+  // The cost is 400 B of TRANSIENT heap while a page renders, on a board with a proven 24.7 kB
+  // contiguous floor - which is the cheap side of the trade against a reallocation.
+  h.reserve(3000 + rows * 420 + (open_id.empty() ? 0 : 2200));
 
   page_head(h, "On-Air panel - configuration", ip, db);
   h += "<h1>Panel configuration</h1>";
@@ -719,8 +814,9 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
   // form logically".
   // ONLY WHEN ASKED FOR, OR WHEN IT IS HOLDING THE GLASS.
   //
-  // Not shyness - arithmetic. This bar cost 4228 B on the five-row page against a 4000 B
-  // ceiling and the budget test caught it, and that ceiling is real: a failed reserve() under
+  // Not shyness - arithmetic. This bar cost 4228 B on the five-row page against what was then
+  // a 4000 B ceiling (4400 since #81) and the budget test caught it, and that ceiling is real:
+  // a failed reserve() under
   // -fno-exceptions is abort(), which reboots the panel driving the light. A beta instrument
   // should not tax every page load of the thing it exists to measure.
   //
@@ -754,7 +850,7 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
     h += "<p class=\"banner err\">This panel has not received the list of states from the "
          "server, so there is nothing to change yet. Check the server address and password "
          "on the ESPHome dashboard, then press Refresh.</p>";
-    render_settings(h, show_bench);
+    render_settings(h, show_bench, show_night);
     page_foot(h);
     return h;
   }
@@ -803,9 +899,12 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
          "edited here. Edit them in the admin console instead.</p>";
   }
 
-  render_settings(h, show_bench);
+  render_settings(h, show_bench, show_night);
 
+  // A LINK, because a query parameter nobody can see is a setting nobody can reach. The
+  // bar is off the default page for bytes, not to hide it.
   h += "<p class=\"m\"><a href=\"/onair\">Status</a> &middot; "
+       "<a href=\"/onair/config?night=1\">Night</a> &middot; "
        "<a href=\"/onair/config?bench=1\">Beta</a> &middot; "
        "<a href=\"/?esphome=1\">ESPHome dashboard, for the server address and "
        "password</a></p>";
@@ -890,6 +989,42 @@ inline Submitted handle_action(AsyncWebServerRequest *request, std::string &note
     }
     c.show_clock = clock == "on";
     c.kind = Command::GLASS;
+    return submit(c, note);
+  }
+
+  // #81. With the other three, before the id checks - a schedule carries no row id either.
+  //
+  // REFUSED RATHER THAN DEFAULTED, on every field. An `<input type=time>` is a hint to a
+  // browser and nothing more; anything at all arrives by POST. A schedule that quietly reads
+  // `25:00` as something else, and reports success, is a setting that does nothing - which is
+  // the failure render_appearance names and the one this bar is most exposed to.
+  if (action == "night") {
+    std::string on = param(request, "night");
+    if (on != "on" && on != "off") {
+      note = "the night schedule must be on or off";
+      return Submitted::FAILED;
+    }
+    uint16_t sleep_min = 0;
+    uint16_t wake_min = 0;
+    if (!parse_hhmm(trim(param(request, "sleep")), sleep_min)) {
+      note = "the sleep time must be a real time of day, as HH:MM";
+      return Submitted::FAILED;
+    }
+    if (!parse_hhmm(trim(param(request, "wake")), wake_min)) {
+      note = "the wake time must be a real time of day, as HH:MM";
+      return Submitted::FAILED;
+    }
+    // EQUAL ENDPOINTS ARE NEVER DARK. `in_night_window` says so deliberately - the wrapping
+    // branch would otherwise read as every minute of the day. So accepting this would store a
+    // schedule that can never fire, and answer "applied". Refusing is the only honest reply.
+    if (sleep_min == wake_min) {
+      note = "the sleep and wake times cannot be the same - that schedule would never run";
+      return Submitted::FAILED;
+    }
+    c.night_enabled = on == "on";
+    c.night_sleep_min = sleep_min;
+    c.night_wake_min = wake_min;
+    c.kind = Command::NIGHT;
     return submit(c, note);
   }
 
@@ -1049,7 +1184,8 @@ class Page : public AsyncWebHandler {
     std::string open_id = trim(param(request, "edit"));
     if (open_id.size() > 32)
       open_id.clear();
-    std::string body = config_page(note, outcome, open_id, param(request, "bench") == "1");
+    std::string body = config_page(note, outcome, open_id, param(request, "bench") == "1",
+                                   param(request, "night") == "1");
     // PENDING wants 202, and this transport cannot say it: ESPHome's init_response_ maps
     // only 200/204/400/401/404/409/422 and sends 500 for anything else (measured on
     // 2026.8.0). A 500 would be a worse lie than a 200, because it claims the request

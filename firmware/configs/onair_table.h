@@ -182,6 +182,117 @@ inline bool in_night_window(uint16_t now_min, uint16_t sleep_min, uint16_t wake_
   return now_min >= sleep_min || now_min < wake_min;  // wraps midnight, the usual case
 }
 
+/**
+ * WHY the glass is dark, or why it is not (#81). ONE decision, two presentations.
+ *
+ * This logic used to live inside a lambda in `onair-core.yaml`, where no host test could
+ * reach it and where the page could not reach it either - the page runs on the httpd task and
+ * cannot touch an `id()`. Both readers now switch over this enum, so the diagnostic sensor and
+ * the operator's page can never drift apart while still saying different words: the sensor
+ * has a wire contract to keep and the page has a person to talk to.
+ *
+ * The branch ORDER is the meaning and is not free to change. A refused manual sleep is
+ * reported before the schedule is even consulted, because "you pressed Sleep and it has not
+ * happened yet" is the answer the operator came for; report `SCHEDULE_OFF` first and a
+ * pending sleep becomes invisible.
+ */
+/// Minutes since midnight as `HH:MM`. Fixed five characters, always - a schedule that
+/// renders `7:0` on the page is one an operator will retype rather than trust.
+inline std::string hhmm(uint16_t minutes) {
+  uint16_t m = minutes % 1440;
+  char buf[6];
+  buf[0] = (char) ('0' + (m / 60) / 10);
+  buf[1] = (char) ('0' + (m / 60) % 10);
+  buf[2] = ':';
+  buf[3] = (char) ('0' + (m % 60) / 10);
+  buf[4] = (char) ('0' + (m % 60) % 10);
+  buf[5] = '\0';
+  return std::string(buf);
+}
+
+/**
+ * `HH:MM` back to minutes. STRICT, and that is the whole reason it exists: an `<input
+ * type=time>` is only a hint, anything at all can arrive by POST, and a schedule that
+ * silently reads `25:00` as something else is a setting that does nothing while reporting
+ * success. Rejects on length, on shape, on non-digits and on range.
+ */
+inline bool parse_hhmm(const std::string &text, uint16_t &out) {
+  if (text.size() != 5 || text[2] != ':')
+    return false;
+  for (int i : {0, 1, 3, 4})
+    if (text[i] < '0' || text[i] > '9')
+      return false;
+  int h = (text[0] - '0') * 10 + (text[1] - '0');
+  int m = (text[3] - '0') * 10 + (text[4] - '0');
+  if (h > 23 || m > 59)
+    return false;
+  out = (uint16_t) (h * 60 + m);
+  return true;
+}
+
+enum class NightWhy : uint8_t {
+  /// The glass is off, whatever put it there.
+  DARK,
+  /// Somebody pressed Sleep. The panel refuses while the row is busy, so it has NOT happened
+  /// yet - and it will, the moment the row goes calm. See D-137: busy suppresses, never ends.
+  SLEEP_PENDING,
+  SCHEDULE_OFF,
+  /// The schedule is on and this panel has never reached an NTP server. It will not guess.
+  NO_CLOCK,
+  DAYTIME,
+  /// Inside the window, but a state change woke the panel and it stays awake until morning.
+  WOKEN,
+  /// Inside the window and refusing anyway: the row is busy, or the panel cannot say what is
+  /// happening. Both are the invariant doing its job (D-6, D-63).
+  HOLDING_OFF,
+};
+
+inline bool night_should_darken(const NightInput &in);
+
+inline NightWhy night_why(const NightInput &in) {
+  if (night_should_darken(in))
+    return NightWhy::DARK;
+  if (in.manual)
+    return NightWhy::SLEEP_PENDING;
+  if (!in.enabled)
+    return NightWhy::SCHEDULE_OFF;
+  if (!in.clock_valid)
+    return NightWhy::NO_CLOCK;
+  if (!in_night_window(in.now_min, in.sleep_min, in.wake_min))
+    return NightWhy::DAYTIME;
+  if (in.woken)
+    return NightWhy::WOKEN;
+  return NightWhy::HOLDING_OFF;
+}
+
+/**
+ * The `Night` text sensor's value. A WIRE CONTRACT, not prose.
+ *
+ * `"dark"` is load-bearing and must stay exactly that: `esphome-driver.ts` compares against
+ * it (`NIGHT_DARK`) and that comparison is what `POST /panel/toggle` reads the glass with.
+ * Nothing parses the `lit (...)` variants, so those are free - but they are still the string
+ * an operator reads over HTTP on a board with no serial console, so keep them terse and true.
+ */
+inline const char *night_reason(const NightInput &in) {
+  switch (night_why(in)) {
+    case NightWhy::DARK:
+      return "dark";
+    case NightWhy::SLEEP_PENDING:
+      return "lit (sleep pending - busy or no data)";
+    case NightWhy::SCHEDULE_OFF:
+      return "lit (schedule off)";
+    case NightWhy::NO_CLOCK:
+      return "lit (no time yet)";
+    case NightWhy::DAYTIME:
+      return "lit (daytime)";
+    case NightWhy::WOKEN:
+      return "lit (woken by a state change)";
+    case NightWhy::HOLDING_OFF:
+      return "lit (holding off - busy or no data)";
+  }
+  return "lit (holding off - busy or no data)";
+}
+
 inline bool night_should_darken(const NightInput &in) {
   // THE FIRST TWO GATE BOTH PATHS - the schedule's and the manual override's - which is the
   // whole reason they moved to the top. A human pressing Sleep does not outrank the
@@ -235,7 +346,7 @@ inline constexpr size_t MAX_OVERRIDES = 8;
  * correct task to make wait: the loop that drives the display never stops for a browser.
  */
 struct Command {
-  enum Kind : uint8_t { NONE = 0, SAVE, CLEAR, CLEAR_ALL, REFRESH, APPEARANCE, GLASS, BENCH };
+  enum Kind : uint8_t { NONE = 0, SAVE, CLEAR, CLEAR_ALL, REFRESH, APPEARANCE, GLASS, BENCH, NIGHT };
   Kind kind{NONE};
   std::string id;
   std::string label;
@@ -254,6 +365,11 @@ struct Command {
   bool show_clock{false};
   /// Only meaningful for BENCH (#87). Validated on the HTTP side before staging.
   int bench_level{-1};
+  /// Only meaningful for NIGHT (#81). Validated on the HTTP side before staging - the main
+  /// loop applies minutes it does not have to re-range-check.
+  bool night_enabled{false};
+  uint16_t night_sleep_min{0};
+  uint16_t night_wake_min{0};
   bool armed{false};
   /// TRUE once the main loop has taken a copy and is applying it. The HTTP side uses this
   /// to tell "not started yet" from "in flight": only the first can be safely cancelled.
@@ -365,6 +481,21 @@ struct Held {
   bool night_dark{false};
   bool night_woken{false};
   std::string night_key;
+  /// THE WHOLE NIGHT INPUT, as the main loop last computed it (#81). Snapshotted rather than
+  /// recomputed because the two readers cannot compute it: the page runs on the httpd task
+  /// and cannot reach an `id()`, and the text sensor runs on its own 5s interval and would
+  /// otherwise duplicate ten lines of entity reads that must agree exactly with the tick's.
+  NightInput night_in;
+  /// A schedule change asked for by the page (#81). Same shape and the same reason as
+  /// `clock_request` below: this header cannot reach an `id()`, so it says what was asked and
+  /// lets the YAML apply it on the main loop. `present` is the one-shot.
+  struct NightRequest {
+    bool present{false};
+    bool enabled{false};
+    uint16_t sleep_min{0};
+    uint16_t wake_min{0};
+  };
+  NightRequest night_request;
   /// The last minute-of-day the night tick saw, so crossing the scheduled wake time is an
   /// EDGE rather than a level. 0xFFFF is "no minute seen yet" - 0 is a real minute
   /// (midnight) and using it as the sentinel would fire the edge once at boot.
@@ -1008,6 +1139,19 @@ inline void apply_command(const Command &c, bool &ok, std::string &note) {
       held().clock_request = c.show_clock ? Held::ClockRequest::ON : Held::ClockRequest::OFF;
       note = c.show_clock ? "the panel will show the time" : "the panel will stop showing the time";
       return;
+    case Command::NIGHT:
+      // A REQUEST, not the setting. The three settings live in ESPHome entities, which is
+      // what persists them across a reboot; this header cannot reach an `id()`, so it says
+      // what was asked and the YAML applies it on the main loop. Same shape as GLASS above,
+      // and for the same reason - a second copy here would be a second source of truth.
+      held().night_request.present = true;
+      held().night_request.enabled = c.night_enabled;
+      held().night_request.sleep_min = c.night_sleep_min;
+      held().night_request.wake_min = c.night_wake_min;
+      note = c.night_enabled ? "the panel will darken from " + hhmm(c.night_sleep_min) + " to " +
+                                   hhmm(c.night_wake_min)
+                             : "the night schedule is off - the panel will stay lit";
+      return;
     case Command::CLEAR_ALL: {
       esphome::LockGuard guard(held().lock);
       held().overlay.clear();
@@ -1137,6 +1281,17 @@ inline bool take_clock_request(bool &on) {
     return false;
   on = held().clock_request == Held::ClockRequest::ON;
   held().clock_request = Held::ClockRequest::NONE;
+  return true;
+}
+
+/// One-shot: true once per Night apply on the page (#81). Main loop only, same shape and
+/// same reason as `take_clock_request` - this header cannot reach the ESPHome entities that
+/// persist the schedule, so the YAML does the writing.
+inline bool take_night_request(Held::NightRequest &out) {
+  if (!held().night_request.present)
+    return false;
+  out = held().night_request;
+  held().night_request.present = false;
   return true;
 }
 
