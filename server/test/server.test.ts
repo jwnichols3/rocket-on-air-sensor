@@ -9,6 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { LightDriver } from '../src/driver.js';
 import { createApiServer, type ServerDeps } from '../src/server.js';
 import { defaultState, StateStore, StateTable, UNKNOWN_ID, type PersistedState } from '../src/state.js';
+import { waitFor } from './wait-for.js';
 
 class StubDriver implements LightDriver {
   calls: string[] = [];
@@ -388,13 +389,15 @@ test('GET /ui is GONE - it is retired, not moved', async () => {
 test('GET /events sends a snapshot then an event per write', async () => {
   const h = await boot();
   const controller = new AbortController();
+  // Hoisted out of the reader so the test can wait on the SNAPSHOT arriving, which is the real
+  // "the stream is attached" signal that the fixed sleep below used to guess at (#90).
+  const events: Array<Record<string, unknown>> = [];
   const eventsPromise = (async () => {
     const res = await fetch(`${h.base}/events`, { signal: controller.signal });
     assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/);
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let buf = '';
-    const events: Array<Record<string, unknown>> = [];
     while (events.length < 3) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -409,10 +412,14 @@ test('GET /events sends a snapshot then an event per write', async () => {
     }
     return events;
   })();
-  await sleep(50);
+  // The snapshot can only be written once the stream is registered with the hub, so waiting for
+  // it makes a loaded machine slower here instead of wrong.
+  await waitFor(() => events.length >= 1, 'the SSE snapshot never arrived');
   await fetch(`${h.base}/on`, { method: 'POST' });
   await fetch(`${h.base}/message`, { method: 'PUT', body: JSON.stringify({ text: 'HI' }) });
-  const events = await eventsPromise;
+  // Still awaited: the reader resolves only once all three frames have been parsed, so this is
+  // what makes the three assertions below wait for their data rather than race it.
+  await eventsPromise;
   assert.equal(events[0]!.intended, 'off'); // snapshot
   assert.equal(events[1]!.intended, 'on'); // after POST /on
   assert.equal(events[2]!.message, 'HI'); // after PUT /message
@@ -475,6 +482,8 @@ test('POST /admin/restart returns 403 without a configured token and never calls
   const res = await fetch(`${h.base}/admin/restart`, { method: 'POST' });
   assert.equal(res.status, 403);
   assert.deepEqual(await res.json(), { error: 'restart requires ONAIR_TOKEN to be configured' });
+  // The sleep STAYS - `calls === 0` is an ABSENCE, and a slow machine only makes it easier to
+  // satisfy, which is the safe direction (D-127).
   await sleep(10);
   assert.equal(calls, 0);
   await h.close();
@@ -490,6 +499,7 @@ test('POST /admin/restart returns 401 with a wrong token when a token is configu
     headers: { authorization: 'Bearer wrong' },
   });
   assert.equal(wrong.status, 401);
+  // The sleep STAYS - `calls === 0` is an ABSENCE (D-127), as above.
   await sleep(10);
   assert.equal(calls, 0);
   await h.close();
@@ -504,6 +514,11 @@ test('POST /admin/restart returns 202 with the right token and calls exitFn exac
   });
   assert.equal(res.status, 202);
   assert.deepEqual(await res.json(), { restarting: true });
+  // Two halves needing two different tools. "It was called" is a POSITIVE and is waited for;
+  // "and not a second time" is an ABSENCE and keeps its sleep. Waiting for `calls === 1` alone
+  // would be weaker than the old code, because it would return at the moment the count hit one
+  // and never see a second call.
+  await waitFor(() => calls >= 1, () => `exitFn was never called, got ${calls}`);
   await sleep(50);
   assert.equal(calls, 1);
   await h.close();

@@ -5156,3 +5156,42 @@ else (state, light control, API) lives on the receiver.
   than by inference from timestamps, and it would have settled D-100 in seconds. **This does
   not close #87** - it removes the stale-binary explanation for THIS flash only, and says
   nothing about whether the rollback mechanism was what bit before.
+
+- **D-142 (2026-08-31)** **The rest of the suite stops sleeping and then asserting a positive
+  (#90), and the direction of the assertion is what decides whether the sleep goes.** D-127
+  established the narrow rule and #89 fixed the two tests that had actually fired; the same
+  shape survived in fourteen more, left alone on purpose so that a fix would not quietly become
+  a rewrite of the test suite.
+
+  All fourteen are converted. The rule is unchanged and is worth restating because it is the
+  part people get backwards: **sleeping and then asserting that something HAS happened is a
+  race against the scheduler; sleeping and then asserting that something has NOT happened is
+  sound**, because a slow machine only makes an absence easier to satisfy. So four sites keep
+  their `sleep` - `stop()` taking effect, the two `calls === 0` restart guards, and the two
+  "nothing was escalated / `updatedAt` never moved" latch tests - and each now carries a
+  one-line comment saying it asserts an absence, so the next reader does not convert it too.
+
+  **Two findings the ticket did not anticipate, both about false PASSES rather than false
+  failures:**
+
+  1. **Three of the absence tests were vacuous.** `sets.every(v => v === 'available')` is
+     `true` on an empty array, so a supervisor that never wrote anything passed a test about
+     what it wrote. They now wait for one real tick before asserting - which is a vacuity
+     guard, not a timing assertion, and cannot reintroduce the flake.
+  2. **My own vacuity guard broke a test while making it look better.** Moving the `updatedAt`
+     capture below the new wait put the supervisor's one legitimate write OUTSIDE the measured
+     window, and a mutation that makes `setConfirmed` stamp `updatedAt` then turned nothing
+     red. Caught only because every conversion was mutation-tested; the ordering is now
+     load-bearing and says so in a comment.
+
+  **Every conversion is proven able to fail.** Thirteen mutations, each reverted after: no
+  re-assert by any path, never confirm, no decay, a frozen panel confirming anyway, `stop()` as
+  a no-op, a silent `bestEffort`, the queue bypassed, an auto-raise, `setConfirmed` stamping
+  the clock, the SSE snapshot suppressed, and `exitFn` never called. `#68`'s lesson is why this
+  is not optional: a `waitFor` whose predicate returns a truthy Promise passes everything, so
+  a conversion nobody has watched go red is not a test. One mutation - a naive `>=` epoch
+  compare - initially turned nothing red, and the TEST was wrong rather than the code.
+
+  Soak: 20 consecutive runs of the 377-test server suite, ten of them under eight spinners at
+  load average ~360. **19 green.** The twentieth went red in `auth-routes.test.ts` - which turned
+  out to be #49, and is D-146.
