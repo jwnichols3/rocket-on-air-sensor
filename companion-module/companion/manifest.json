@@ -4,7 +4,7 @@
   "name": "rocket-onair",
   "shortname": "On Air",
   "description": "Drive and follow a Rocket On-Air light. Presets are generated from the server's own state table.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "license": "MIT",
   "repository": "https://github.com/jwnichols3/rocket-on-air-sensor",
   "bugs": "https://github.com/jwnichols3/rocket-on-air-sensor/issues",

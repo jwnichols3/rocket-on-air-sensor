@@ -145,7 +145,7 @@ class OnAirInstance extends InstanceBase {
 		this.stopping = false
 
 		this.setActionDefinitions(this.buildActions())
-		this.setFeedbackDefinitions(this.buildFeedbacks())
+		this.defineFeedbacks()
 		this.setVariableDefinitions(this.buildVariables())
 
 		// CROSSING A THRESHOLD IS A CHANGE WITH NOTHING ARRIVING TO ANNOUNCE IT. Every other
@@ -409,15 +409,30 @@ class OnAirInstance extends InstanceBase {
 		return true
 	}
 
+	/**
+	 * Register the feedbacks AND remember their ids, so `checkAll()` cannot fall behind them.
+	 */
+	defineFeedbacks() {
+		const defs = this.buildFeedbacks()
+		this.feedbackIds = Object.keys(defs)
+		this.setFeedbackDefinitions(defs)
+	}
+
+	/**
+	 * ASK COMPANION TO RE-EVALUATE EVERY FEEDBACK THIS MODULE HAS.
+	 *
+	 * DERIVED, NEVER LISTED, and that is the whole of this function. It used to be a
+	 * hand-written list of six ids, and `panel_asleep` was missing from it - added with the
+	 * feature in #91 and never added here. Two releases shipped where the panel really did go
+	 * dark and the button on the deck never changed, because nothing ever asked Companion to
+	 * look again. Every press LOOKED like it did nothing.
+	 *
+	 * A hand-maintained copy of a set that is defined somewhere else is a bug with a delay on
+	 * it. The suite now fails if a defined feedback is not re-evaluated.
+	 */
 	checkAll() {
-		this.checkFeedbacks(
-			'state_is',
-			'busy',
-			'connection_lost',
-			'no_data',
-			'light_not_confirming',
-			'light_disagrees',
-		)
+		const ids = this.feedbackIds ?? Object.keys(this.buildFeedbacks())
+		this.checkFeedbacks(...ids)
 	}
 
 	// ---- what Companion's own connection light says ------------------------------------------
@@ -589,7 +604,7 @@ class OnAirInstance extends InstanceBase {
 			// Definitions are repeatedly callable and diff-patched to the UI, so regenerating
 			// costs nothing and needs no restart.
 			this.setActionDefinitions(this.buildActions())
-			this.setFeedbackDefinitions(this.buildFeedbacks())
+			this.defineFeedbacks()
 			this.setVariableDefinitions(this.buildVariables())
 			this.setPresetDefinitions(this.buildPresets())
 			this.publishVariables()
@@ -864,7 +879,14 @@ class OnAirInstance extends InstanceBase {
 				}
 				if (delivered === false) {
 					this.log('warn', `panel ${what}: the server could not reach the panel. Nothing changed on the glass.`)
-				} else if (what === 'toggle' && asked) {
+				} else if (what !== 'toggle') {
+					// EVERY PRESS LEAVES A LINE, not just the toggle's. This used to log nothing at
+					// all on a successful one-way press, and that silence cost real time: a deck
+					// that was visibly changing the panel produced an empty module log, which reads
+					// exactly like presses that never arrived. A button whose effect can only be
+					// confirmed by looking at the hardware in another room is not debuggable.
+					this.log('info', `panel ${what}: asked the panel to ${what === 'sleep' ? 'darken' : 'light'}`)
+				} else if (asked) {
 					// WHICH WAY IT WENT IS THE ONE THING A TOGGLE CANNOT SHOW ON ITS OWN FACE. The
 					// server decided, from a reading this module never saw; logging its answer is
 					// what makes a press that did the opposite of what the operator expected

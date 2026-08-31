@@ -1492,3 +1492,62 @@ test('#93 the cycle preset wears the current row, so it can be pressed until the
 	await inst.destroy()
 	await fake.close()
 })
+
+test('#93 EVERY feedback this module defines is one it asks Companion to re-evaluate', async () => {
+	// THE BUG THIS EXISTS FOR, and it shipped twice. `panel_asleep` was added with the sleep
+	// feature in #91 and never added to the hand-written list in checkAll(), so Companion was
+	// never told to look at it again. The panel went dark, `confirmed_reason` said `asleep`,
+	// the feedback was present and enabled on the button - and the moon on the deck never
+	// changed, because nothing re-evaluated it. Every press looked like it did nothing.
+	//
+	// Asserting the SET rather than the one id: a test that named panel_asleep would have been
+	// written the day it was fixed and would say nothing about the next feedback somebody adds.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+
+	const defined = Object.keys(seen.feedbacks)
+	assert.ok(defined.length >= 7, `expected the full feedback set, got ${JSON.stringify(defined)}`)
+	assert.ok(seen.repaints.length > 0, 'the module never asked Companion to redraw at all')
+	const rechecked = new Set(seen.repaints.flat())
+	const missed = defined.filter((id) => !rechecked.has(id))
+	assert.deepEqual(missed, [], `defined but never re-evaluated: ${JSON.stringify(missed)}`)
+
+	await inst.destroy()
+	await fake.close()
+})
+
+test('#93 the asleep feedback actually flips when the server says the panel is dark', async () => {
+	// The end-to-end of the above, through the real ingest path: a status carrying
+	// confirmedReason "asleep" must both make the callback true AND cause a redraw request
+	// naming that feedback. Either half alone is what shipped broken.
+	const OnAir = await loadInstanceClass()
+	const fake = startFakeServer()
+	const port = await fake.listen()
+	const { inst, seen, config } = makeInstance(OnAir, port, 'test-pass')
+
+	await inst.init(config)
+	await settle()
+	assert.equal(seen.feedbacks.panel_asleep.callback(), false, 'a lit panel must not read as asleep')
+
+	fake.setConfirmed('unknown')
+	fake.setConfirmedReason('asleep')
+	// The fixture's setters do not broadcast - a poll is how this reading really arrives, since
+	// `confirmedReason` moves when the SUPERVISOR reads the glass, not when anybody writes.
+	await inst.poll()
+	await settle(150)
+
+	assert.equal(seen.variables.confirmed_reason, 'asleep')
+	assert.equal(seen.feedbacks.panel_asleep.callback(), true, 'the callback did not follow the server')
+	assert.ok(
+		seen.repaints.some((ids) => ids.includes('panel_asleep')),
+		'the value was right and Companion was never told to look - which is exactly the bug',
+	)
+
+	await inst.destroy()
+	await fake.close()
+})
