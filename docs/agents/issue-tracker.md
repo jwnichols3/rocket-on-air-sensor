@@ -25,6 +25,37 @@ When set to `yes`, PRs run through the same labels and states as issues, using t
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either — resolve with `gh pr view 42` and fall back to `gh issue view 42`.
 
+## NEVER write "does not close #N" in a commit message
+
+GitHub's closing-keyword parser is a **regex, and it does not understand negation.** Every one
+of these closes the ticket on push:
+
+```
+This does not close #87
+Not a fix for #87
+Does not resolve #87 - the mechanism is still armed
+```
+
+Measured on 2026-08-31: `324c361`'s body contained the sentence *"This does not close #87"*,
+written to say the ticket must stay open, and the push closed it. The keywords are `close`,
+`closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, `resolved`, each followed
+by `#N`.
+
+This repo's commit messages are long and discursive, which is exactly the style that walks into
+it - a message explaining what a change does NOT settle is the most likely place to write the
+phrase, and the most damaging place for it to fire.
+
+**Write it without the keyword:**
+
+```
+#87 stays open - the rollback mechanism is still armed by design.
+This leaves #87 open.
+Partial: see #87.
+```
+
+And after any push that mentions an issue you meant to leave open, check it:
+`gh issue view <n> --json state`.
+
 ## When a skill says "publish to the issue tracker"
 
 Create a GitHub issue.
