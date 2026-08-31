@@ -389,3 +389,26 @@ The loop must terminate in one of two ways, and "I read it and it seemed fine" i
 - Loop outcome: **three edits, no prune.** One generalisation (first-click-after-navigate),
   one addition (data-driven preset faces), one new section (there is no sandbox). Nothing in
   the file turned out to be false this run - the two corrections made last run both held.
+
+## 2026-08-31 - 0.7.0 -> 0.7.1 (a feedback that was never re-evaluated)
+
+- **Marker used: THE BUTTON ITSELF, on the grid at `/buttons`.** 0.7.1 fixes a feedback that
+  never fired, and the panel happened to be dark throughout - so key 2/2 went from a white moon
+  on dark to a black sun on light grey across the version change, with nothing else touched.
+  When a release fixes something VISUAL, the placed button is the best marker there is: it is
+  the actual user-visible behaviour rather than a proxy for it, and absent-before /
+  present-after is one screenshot each.
+- **The button editor is a diagnostic tool and this file never said so.** `Buttons` -> click the
+  key -> `Feedbacks` shows each feedback, whether it is enabled, and its full override list
+  (Companion 5.x calls these "Layered Styles Overrides" - Text/Color/Image/Background as
+  separate rows). That view is what proved the preset was correct and the FEEDBACK EVALUATION
+  was not, which is a distinction no amount of reading module source would have settled
+  quickly. Check it before suspecting the preset.
+- **A correct-looking button that never changes means the feedback is not being re-checked.**
+  Companion only re-evaluates a feedback when the module asks. The overrides can be perfect and
+  the id can be missing from the module's `checkFeedbacks(...)` call, and nothing anywhere
+  reports a fault. Symptom to remember: action works, hardware responds, button face frozen.
+- Version dropdown was current with no reload needed; the two-click dance on the pencil was the
+  first-click-after-navigate race again, already documented at step 3.
+- Loop outcome: **two additions**, both about using the button editor as a diagnostic. Nothing
+  in the file turned out to be false.
