@@ -188,7 +188,8 @@ async function bootApp(opts: { token?: string } = {}): Promise<App> {
     JSON.stringify({ ...defaultState(), state: 'available', intended: 'off', tableVersion: 1 }),
     'utf8',
   );
-  return createApp({ stateFile, port: 0, token: opts.token, driver: new StubDriver(), log: () => {} });
+  // bind loopback (#49): the wildcard does not exclude another process on 127.0.0.1:P.
+  return createApp({ stateFile, port: 0, bind: 'loopback', token: opts.token, driver: new StubDriver(), log: () => {} });
 }
 
 test('handshake + snapshot: 101, correct accept, first frame is status JSON', async () => {

@@ -5251,3 +5251,60 @@ else (state, light control, API) lives on the receiver.
   leading hypothesis, and the hard falsifier in that ticket - whether another `esphome upload`
   happened before the new build appeared - is Rocket's to answer. What changes is that the
   next occurrence is measurable instead of arguable.
+
+- **D-146 (2026-08-31)** **#49 IS SOLVED, and its hypothesis was wrong in an instructive way.
+  Nothing ever crossed a response. The tests were talking to a DIFFERENT PROCESS.**
+
+  Three witnesses over a week, none reproducible on demand: a `403` on `/status` that no
+  handler in this service can produce; a `200` on `/admin/config` with no `config` key; a
+  `connect ETIMEDOUT` to a loopback port, where a port with no listener refuses instantly. The
+  ticket's hypothesis was undici's origin-keyed connection pool handing a response for request
+  A back to request B, and every stated next step was aimed at that.
+
+  **The mechanism, proven by direct experiment rather than inferred:**
+
+  `bind: 'all'` resolves to `['::']`, the dual-stack wildcard. **A wildcard bind does not
+  exclude a process that binds `127.0.0.1:P` specifically.** Both `listen()` calls succeed, and
+  IPv4 traffic to `127.0.0.1:P` is delivered to the MORE SPECIFIC bind - the stranger, not us.
+  Measured, in isolation: with a squatter on `127.0.0.1:28123` and our server on `[::]:28123`,
+  `http://127.0.0.1:28123` reaches the squatter and `http://[::1]:28123` reaches us.
+
+  Every test app boots on `port: 0`, so the OS hands out an ephemeral port; when it recycles
+  one that another process already holds on IPv4 loopback, the test's `fetch` goes to that
+  process. **On this machine the stranger is Tailscale's local API, which answers `403 invalid
+  localapi request`** - and that is witness 2 exactly, including the status code that "no
+  handler in this service can produce". It could not, and did not.
+
+  **The reproduction.** `server/test/cross-response.test.ts` boots N apps on recycled ephemeral
+  ports and asserts two properties - every response matches its request, and every connect
+  either succeeds or is refused promptly. At **6000 iterations it produced 753 port reuses and
+  failed both**, capturing the stray bodies verbatim: `{"error":"unauthorized"}` and
+  `auth required` / `invalid localapi request`, none of which this server can emit. That the
+  bodies were foreign is what turned a week-old mystery into a five-minute diagnosis, and it is
+  the whole argument for the ticket's insistence on self-diagnosing assertions.
+
+  **The fix** is a `bind` test seam on `AppOptions`, mirroring the existing `port` override, and
+  every test rig that talks to `127.0.0.1` now passes `bind: 'loopback'` - which is exclusive,
+  so nothing else can hold that address and port. It applies to the STARTING bind only: a later
+  `PUT /admin/config` that changes `bind` is honoured, because that is what the two rebind tests
+  exist to exercise. Overriding it there turned both of them red, which is how that was found.
+
+  **Verified as a controlled before/after at the same scale:** wildcard bind, 753 reuses in
+  6000, both properties FAIL; loopback bind, 760 reuses in 6000, both PASS. `CROSS_BIND_ALL=1`
+  restores the wildcard and is kept deliberately as the negative control - a harness never seen
+  to fail is not evidence.
+
+  **What this retires.** The undici-pool hypothesis, the plan to reach for
+  `closeAllConnections()`, and the framing of this as a race at all. There is no race: the
+  request reached exactly the process listening on the address it was sent to. The earlier
+  conclusion that production is unaffected still holds and is now better founded - `8484` is a
+  fixed port, so nothing random can come to own it - but the reason is completely different
+  from the one recorded at the time.
+
+  **The lesson worth keeping**, because it generalises past this bug: *an unexpected status is
+  evidence about WHICH SERVER answered, not only about which branch ran.* The instinct was to
+  hunt for a `403` inside our own code. There wasn't one, and the ticket said so on day one -
+  that fact was treated as a mystery to be explained rather than as the answer it already was.
+  `auth-routes.test.ts` now wraps every status assertion in a helper that prints the route, the
+  content type and the body, so the next stray response names its owner instead of printing
+  `403 !== 401`.

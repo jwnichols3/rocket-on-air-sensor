@@ -32,6 +32,7 @@ async function boot(t: TestContext) {
     stateFile: join(dir, 'state.json'),
     configFile,
     port: 0,
+    bind: 'loopback', // #49: exclusive, so no other process can share this port
     driver: new StubDriver(),
     log: () => {},
   });
@@ -40,25 +41,58 @@ async function boot(t: TestContext) {
 }
 
 const json = async (r: Response): Promise<Record<string, unknown>> => (await r.json()) as Record<string, unknown>;
+
+/**
+ * A STATUS ASSERTION THAT NAMES THE STRAY RESPONSE (#49).
+ *
+ * This file has now produced three of that ticket's witnesses, on three different tests, and
+ * only ONE of them was instrumented - so the other two were recorded as "it went red once" and
+ * taught us nothing. The most recent, a `200` that came back as something else during a
+ * 20-run soak, is the whole argument for making this the default here rather than a thing
+ * remembered at the two sites where it already paid off.
+ *
+ * `assert.equal(res.status, 200)` prints `403 !== 200`. That is exactly the information that
+ * does NOT help: the interesting question is never "what did I want" but "whose answer is
+ * this", and the route, the content type and the body all say so. The body is read from a
+ * CLONE and only on the failing path, so a caller that goes on to parse the real body is
+ * unaffected.
+ */
+async function expectStatus(res: Response, want: number, note?: string): Promise<void> {
+  if (res.status === want) return;
+  let body = '(unreadable)';
+  try {
+    body = (await res.clone().text()).slice(0, 400);
+  } catch {
+    /* already consumed - the status and headers below are still the useful part */
+  }
+  assert.fail(
+    `wanted ${want}, got ${res.status} from ${res.url}${note === undefined ? '' : ` (${note})`}\n` +
+      `  content-type: ${res.headers.get('content-type')}\n` +
+      `  body: ${body}\n` +
+      `  #49: if this status is one the requested route CANNOT produce, this is somebody ` +
+      `else's response and the body above names whose.`,
+  );
+}
+
 const bearer = (v: string) => ({ ...REMOTE, authorization: `Bearer ${v}` });
 
 // ------------------------------------------------ the passphrase gates data
 
 test('a data route demands the passphrase from a non-local client', async (t) => {
   const h = await boot(t);
-  assert.equal((await fetch(`${h.base}/status`, { headers: REMOTE })).status, 401);
-  assert.equal((await fetch(`${h.base}/status`, { headers: bearer(DEFAULT_PASSPHRASE) })).status, 200);
-  assert.equal((await fetch(`${h.base}/status`, { headers: bearer('wrong') })).status, 401);
+  await expectStatus(await fetch(`${h.base}/status`, { headers: REMOTE }), 401);
+  await expectStatus(await fetch(`${h.base}/status`, { headers: bearer(DEFAULT_PASSPHRASE) }), 200);
+  await expectStatus(await fetch(`${h.base}/status`, { headers: bearer('wrong') }), 401);
 });
 
 test('every data route is gated, and the two public ones are not', async (t) => {
   const h = await boot(t);
   for (const path of ['/status', '/config/states', '/events']) {
-    assert.equal((await fetch(`${h.base}${path}`, { headers: REMOTE })).status, 401, path);
+    await expectStatus(await fetch(`${h.base}${path}`, { headers: REMOTE }), 401, path);
   }
   for (const path of ['/public/status', '/display']) {
     const res = await fetch(`${h.base}${path}`, { headers: REMOTE });
-    assert.equal(res.status, 200, path);
+    await expectStatus(res, 200, path);
     await res.text();
   }
 });
@@ -66,8 +100,8 @@ test('every data route is gated, and the two public ones are not', async (t) => 
 test('?passphrase= works where a header cannot, and ?token= is still accepted', async (t) => {
   const h = await boot(t);
   const p = DEFAULT_PASSPHRASE;
-  assert.equal((await fetch(`${h.base}/status?passphrase=${p}`, { headers: REMOTE })).status, 200);
-  assert.equal((await fetch(`${h.base}/status?token=${p}`, { headers: REMOTE })).status, 200);
+  await expectStatus(await fetch(`${h.base}/status?passphrase=${p}`, { headers: REMOTE }), 200);
+  await expectStatus(await fetch(`${h.base}/status?token=${p}`, { headers: REMOTE }), 200);
 });
 
 test('a query credential is refused on a WRITE - it would land in logs and history', async (t) => {
@@ -76,7 +110,7 @@ test('a query credential is refused on a WRITE - it would land in logs and histo
     method: 'POST',
     headers: REMOTE,
   });
-  assert.equal(res.status, 401);
+  await expectStatus(res, 401);
 });
 
 // --------------------------------------- NEITHER credential on the other's routes
@@ -84,7 +118,7 @@ test('a query credential is refused on a WRITE - it would land in logs and histo
 test('the passphrase does NOT open an admin route', async (t) => {
   const h = await boot(t);
   const res = await fetch(`${h.base}/admin/config`, { headers: bearer(DEFAULT_PASSPHRASE) });
-  assert.equal(res.status, 401);
+  await expectStatus(res, 401);
   assert.match(String((await json(res)).error), /admin session/);
 });
 
@@ -98,10 +132,10 @@ test('an admin session does NOT open a data route', async (t) => {
     }),
   );
   const token = String(session.token);
-  assert.equal((await fetch(`${h.base}/admin/config`, { headers: bearer(token) })).status, 200);
+  await expectStatus(await fetch(`${h.base}/admin/config`, { headers: bearer(token) }), 200);
   // Two different trust questions. "You may reconfigure the system" is not "you may write
   // state", and conflating them would make the split D-35 exists to create decorative.
-  assert.equal((await fetch(`${h.base}/status`, { headers: bearer(token) })).status, 401);
+  await expectStatus(await fetch(`${h.base}/status`, { headers: bearer(token) }), 401);
 });
 
 // ------------------------------------------------------------ admin sessions
@@ -113,7 +147,7 @@ test('the admin login takes user + password, and issues a bearer session - no co
     headers: REMOTE,
     body: JSON.stringify({ user: DEFAULT_ADMIN_USER, password: DEFAULT_ADMIN_PASSWORD }),
   });
-  assert.equal(res.status, 200);
+  await expectStatus(res, 200);
   // No cookie: a header cannot be forged cross-origin without a preflight, so CSRF on
   // admin routes is structurally impossible rather than defended against.
   assert.equal(res.headers.get('set-cookie'), null);
@@ -130,7 +164,7 @@ test('a wrong admin password is 401, and grants nothing', async (t) => {
     headers: REMOTE,
     body: JSON.stringify({ user: DEFAULT_ADMIN_USER, password: 'nope' }),
   });
-  assert.equal(res.status, 401);
+  await expectStatus(res, 401);
 });
 
 test('DELETE /admin/session ends it', async (t) => {
@@ -144,9 +178,9 @@ test('DELETE /admin/session ends it', async (t) => {
       }),
     )).token,
   );
-  assert.equal((await fetch(`${h.base}/admin/config`, { headers: bearer(token) })).status, 200);
+  await expectStatus(await fetch(`${h.base}/admin/config`, { headers: bearer(token) }), 200);
   await fetch(`${h.base}/admin/session`, { method: 'DELETE', headers: bearer(token) });
-  assert.equal((await fetch(`${h.base}/admin/config`, { headers: bearer(token) })).status, 401);
+  await expectStatus(await fetch(`${h.base}/admin/config`, { headers: bearer(token) }), 401);
 });
 
 // ------------------------------------------------------------- THE WAIVER
@@ -154,10 +188,10 @@ test('DELETE /admin/session ends it', async (t) => {
 test('locally, both credentials are invisible - the waiver grants a full admin session', async (t) => {
   const h = await boot(t);
   // No credential at all, from loopback with our Host and no foreign Origin.
-  assert.equal((await fetch(`${h.base}/status`)).status, 200);
-  assert.equal((await fetch(`${h.base}/admin/config`)).status, 200);
+  await expectStatus(await fetch(`${h.base}/status`), 200);
+  await expectStatus(await fetch(`${h.base}/admin/config`), 200);
   const res = await fetch(`${h.base}/admin/session`, { method: 'POST' });
-  assert.equal(res.status, 200);
+  await expectStatus(res, 200);
   assert.equal((await json(res)).via, 'waiver', 'this is what pays for having no cookie');
 });
 
@@ -165,7 +199,7 @@ test('D-24 ATTACK 1 over HTTP: a foreign Origin from loopback is refused', async
   const h = await boot(t);
   // Measured: the server sees remote 127.0.0.1 with origin http://10.42.14.189:9099.
   const res = await fetch(`${h.base}/state/on-air`, { method: 'POST', headers: REMOTE });
-  assert.equal(res.status, 401);
+  await expectStatus(res, 401);
   assert.equal((await json(await fetch(`${h.base}/status`))).state, UNKNOWN_ID, 'and it changed nothing');
 });
 
@@ -175,7 +209,7 @@ test('D-24 ATTACK 2 over HTTP: another port on the same host is refused', async 
     headers: { origin: 'http://127.0.0.1:9099', 'sec-fetch-site': 'same-site' },
   });
   // A port is not part of a "site", so rejecting only `cross-site` would have let this in.
-  assert.equal(res.status, 401);
+  await expectStatus(res, 401);
 });
 
 // ---------------------------------------------------------------- rotation
@@ -187,11 +221,11 @@ test('rotating the passphrase keeps the previous one working, and persists the w
     method: 'PUT',
     body: JSON.stringify({ ...cfg, auth: { ...cfg.auth, passphrase: 'brand-new' } }),
   });
-  assert.equal(res.status, 200);
-  assert.equal((await fetch(`${h.base}/status`, { headers: bearer('brand-new') })).status, 200);
+  await expectStatus(res, 200);
+  await expectStatus(await fetch(`${h.base}/status`, { headers: bearer('brand-new') }), 200);
   // The walk around the house: the ESP32 and Companion are still hand-configured with the
   // old one and keep working while you go and update them.
-  assert.equal((await fetch(`${h.base}/status`, { headers: bearer(DEFAULT_PASSPHRASE) })).status, 200);
+  await expectStatus(await fetch(`${h.base}/status`, { headers: bearer(DEFAULT_PASSPHRASE) }), 200);
   const onDisk = JSON.parse(await readFile(h.configFile, 'utf8')) as OnAirConfig;
   assert.equal(onDisk.auth.previous, DEFAULT_PASSPHRASE);
   assert.equal(typeof onDisk.auth.previousUntil, 'number', 'persisted, so a restart mid-rotation does not cut them');
@@ -206,7 +240,7 @@ test('changing the admin password logs every session out', async (t) => {
     body: JSON.stringify({ ...cfg, auth: { ...cfg.auth, adminPassword: 'something-else' } }),
   });
   // The point of changing it is that whoever knew the old one stops being admin.
-  assert.equal((await fetch(`${h.base}/admin/config`, { headers: bearer(token) })).status, 401);
+  await expectStatus(await fetch(`${h.base}/admin/config`, { headers: bearer(token) }), 401);
 });
 
 test('an empty credential in the config is a validation error, never bypassable auth', async (t) => {
@@ -217,7 +251,7 @@ test('an empty credential in the config is a validation error, never bypassable 
       method: 'PUT',
       body: JSON.stringify({ ...cfg, auth: { ...cfg.auth, [key]: '' } }),
     });
-    assert.equal(res.status, 400, key);
+    await expectStatus(res, 400, key);
     assert.ok((((await json(res)).problems as string[]) ?? []).some((p) => p.includes(key)));
   }
 });
@@ -230,9 +264,9 @@ test('FACTORY RESET ALWAYS DEMANDS THE PASSWORD - including from loopback', asyn
   // everything else an admin session can do is recoverable, and a factory reset on a box
   // across the house is the lockout path.
   const noBody = await fetch(`${h.base}/admin/factory-reset`, { method: 'POST', body: '{}' });
-  assert.equal(noBody.status, 403);
+  await expectStatus(noBody, 403);
   const wrong = await fetch(`${h.base}/admin/factory-reset`, { method: 'POST', body: JSON.stringify({ password: 'x' }) });
-  assert.equal(wrong.status, 403);
+  await expectStatus(wrong, 403);
 });
 
 test('factory reset restores the shipped defaults', async (t) => {
@@ -254,7 +288,7 @@ test('factory reset restores the shipped defaults', async (t) => {
     method: 'POST',
     body: JSON.stringify({ password: DEFAULT_ADMIN_PASSWORD }),
   });
-  assert.equal(res.status, 200);
+  await expectStatus(res, 200);
   const after = (await json(res)).config as OnAirConfig;
   assert.equal(after.auth.passphrase, DEFAULT_PASSPHRASE, 'a FIXED default, not a random one (D-43)');
   assert.equal(after.auth.adminUser, DEFAULT_ADMIN_USER);
@@ -290,7 +324,7 @@ test('factory reset ends every session', async (t) => {
     method: 'POST',
     body: JSON.stringify({ password: DEFAULT_ADMIN_PASSWORD }),
   });
-  assert.equal((await fetch(`${h.base}/admin/config`, { headers: bearer(token) })).status, 401);
+  await expectStatus(await fetch(`${h.base}/admin/config`, { headers: bearer(token) }), 401);
 });
 
 // -------------------------------------------------------- the public pair
@@ -316,7 +350,7 @@ test('GET /public/status is thin, resolved for rendering, and leaks nothing', as
 test('GET /public/events streams the same thin view, unauthenticated', async (t) => {
   const h = await boot(t);
   const res = await fetch(`${h.base}/public/events`, { headers: REMOTE });
-  assert.equal(res.status, 200);
+  await expectStatus(res, 200);
   assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/);
   const reader = res.body!.getReader();
   const first = new TextDecoder().decode((await reader.read()).value!);
@@ -375,7 +409,7 @@ test('the CHANGE event on /public/events is the thin view too, not the gated bod
 test('the CHANGE event on /events keeps the gated shape (#88)', async (t) => {
   const h = await boot(t);
   const res = await fetch(`${h.base}/events?passphrase=${DEFAULT_PASSPHRASE}`, { headers: REMOTE });
-  assert.equal(res.status, 200);
+  await expectStatus(res, 200);
   const [, change] = await statusEvents(res, 2, async () => {
     await fetch(`${h.base}/state/on-air`, { method: 'POST' });
   });
@@ -404,14 +438,14 @@ test('a browser gets a readable 401; everything else gets the JSON byte for byte
   // is a response belonging to a DIFFERENT request, so if it recurs the useful evidence is
   // which one - the body names the route it came from. See the note in `boot`.
   const why = `${asClient.status} ${asClient.headers.get('content-type')} from ${h.base}/status: ${clientBody}`;
-  assert.equal(asClient.status, 401, why);
+  await expectStatus(asClient, 401, why);
   assert.equal(asClient.headers.get('content-type'), 'application/json', why);
   assert.equal(clientBody, '{"error":"missing or invalid passphrase"}\n', why);
 
   const asBrowser = await fetch(`${h.base}/status`, {
     headers: { ...REMOTE, accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
   });
-  assert.equal(asBrowser.status, 401, 'still a 401 - the medium changed, not the answer');
+  await expectStatus(asBrowser, 401, 'still a 401 - the medium changed, not the answer');
   assert.match(asBrowser.headers.get('content-type') ?? '', /^text\/html/);
   const page = await asBrowser.text();
   assert.match(page, /<!doctype html>/i);
@@ -448,6 +482,6 @@ test('a presented-but-wrong credential gets the readable 401 too', async (t) => 
   const res = await fetch(`${h.base}/status`, {
     headers: { ...bearer('wrong'), accept: 'text/html' },
   });
-  assert.equal(res.status, 401);
+  await expectStatus(res, 401);
   assert.match(res.headers.get('content-type') ?? '', /^text\/html/);
 });

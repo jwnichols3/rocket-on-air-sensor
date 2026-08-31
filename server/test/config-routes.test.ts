@@ -31,6 +31,7 @@ async function boot(t: TestContext, over: Partial<AppOptions> = {}, configOnDisk
     stateFile: join(dir, 'state.json'),
     configFile,
     port: 0,
+    bind: 'loopback', // #49: exclusive, so no other process can share this port
     driver: new StubDriver(),
     log: () => {},
     ...over,

@@ -67,6 +67,7 @@ async function boot(t: TestContext, driver: EsphomeTextDriver, pollMs: number) {
     stateFile: join(dir, 'state.json'),
     configFile: join(dir, 'config.json'),
     port: 0,
+    bind: 'loopback', // #49: exclusive, so no other process can share this port
     driver,
     log: () => {},
     supervise: { pollMs },

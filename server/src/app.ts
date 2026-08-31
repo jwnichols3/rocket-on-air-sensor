@@ -5,6 +5,7 @@ import {
   loadConfigFile,
   resolveBind,
   saveConfigFile,
+  type BindMode,
   type OnAirConfig,
 } from './config-store.js';
 import { rotate, SessionStore } from './auth.js';
@@ -39,6 +40,23 @@ export interface AppOptions {
    */
   seedConfig?: (base: OnAirConfig) => OnAirConfig;
   log?: (line: string) => void;
+  /**
+   * TEST SEAM: overrides the config's `bind`, exactly as `port` above overrides its port.
+   *
+   * It exists because of #49. A test app on `port: 0` takes the config default `bind: 'all'`,
+   * which resolves to the dual-stack wildcard `::` - and a wildcard bind does NOT exclude
+   * another process binding `127.0.0.1:P` specifically. Both succeed, and IPv4 traffic to
+   * `127.0.0.1:P` reaches the MORE SPECIFIC bind, which is the stranger. That is how three
+   * separate test failures came to be recorded as "a response belonging to a different
+   * request": they were answers from a different PROCESS, on a port the OS had recycled.
+   *
+   * Tests that talk to `http://127.0.0.1:<port>` should pass `bind: 'loopback'`, which is
+   * exclusive - nothing else can hold that address and port at the same time.
+   *
+   * It applies to the STARTING bind only. A later `PUT /admin/config` that changes `bind` is
+   * honoured, because that is the behaviour the rebind tests exist to exercise.
+   */
+  bind?: BindMode;
   /** Test seam: overrides for the supervisor's timers. */
   supervise?: { pollMs?: number; reassertMs?: number; decayMs?: number };
 }
@@ -298,6 +316,9 @@ export async function createApp(opts: AppOptions): Promise<App> {
 
     if (!rebinding) return { ok: true };
 
+    // NOT `opts.bind ?? next.bind`. The seam sets the STARTING bind; a rebind is a test
+    // deliberately changing it, and overriding that would make the two rebind tests assert
+    // against a bind they did not ask for. Measured - both went red.
     const target = resolveBind(next.bind);
     if (target.warning) log(`[onair] ${target.warning}`);
     // Stop accepting BEFORE binding: the new addresses usually overlap the old ones on the
@@ -333,7 +354,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
   // A config the service could not read is a config it must not act on: bind loopback,
   // start anyway, and serve the repair view. The port override still applies so a test or
   // an operator can pin it.
-  const startBind = problem ? 'loopback' : config.bind;
+  const startBind = problem ? 'loopback' : (opts.bind ?? config.bind);
   const resolved = resolveBind(startBind);
   if (resolved.warning) log(`[onair] ${resolved.warning}`);
   const opened = await listenAll(makeServer, resolved.addresses, effectivePort(config));

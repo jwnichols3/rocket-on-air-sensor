@@ -62,6 +62,7 @@ test('boot driver re-apply failure is logged and confirmed stays unknown', async
   const app = await createApp({
     stateFile,
     port: 0,
+    bind: 'loopback', // #49: exclusive, so no other process can share this port
     driver: new FailingDriver(),
     log: (line) => lines.push(line),
   });

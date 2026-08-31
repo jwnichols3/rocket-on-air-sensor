@@ -40,7 +40,8 @@ async function stateFileWith(state: Partial<PersistedState> & { state: string },
 }
 
 async function boot(t: TestContext, opts: Partial<AppOptions> & { stateFile: string }) {
-  const app = await createApp({ port: 0, log: () => {}, ...opts });
+  // bind loopback (#49): the wildcard does not exclude another process on 127.0.0.1:P.
+  const app = await createApp({ port: 0, bind: 'loopback', log: () => {}, ...opts });
   t.after(() => app.close());
   return app;
 }

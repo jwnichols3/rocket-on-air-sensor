@@ -91,6 +91,7 @@ async function boot(t: TestContext, driver: LightDriver, pollMs = 1_000_000) {
     stateFile: join(dir, 'state.json'),
     configFile: join(dir, 'config.json'),
     port: 0,
+    bind: 'loopback', // #49: exclusive, so no other process can share this port
     driver,
     log: () => {},
     supervise: { pollMs },
