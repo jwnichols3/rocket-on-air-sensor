@@ -68,6 +68,14 @@ Canonical five roles (`needs-triage`, `needs-info`, `ready-for-agent`,
 Single-context: `CONTEXT.md` at root; decisions recorded in its `## Decisions` section
 (the ADR record). See `docs/agents/domain.md`.
 
+### Sideloading the Companion module
+
+`.claude/skills/sideload-companion-module/`. **Importing the package does not move the
+connection onto it** - Companion holds several versions and goes on running the old one, with
+nothing on screen saying so. Same shape as the flash rule above, same fix: verify with a
+marker the new build produces, not with the version label. The skill carries a
+self-refinement loop; run it.
+
 ## Dependencies
 
 **Minimal, necessary, trusted - not zero.** A dependency earns its place by being
