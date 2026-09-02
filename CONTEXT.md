@@ -3935,6 +3935,13 @@ else (state, light control, API) lives on the receiver.
   every minute all night. Instead the key is captured on ENTERING the window and compared each
   tick; a difference latches `night_woken` until the window ends.
 
+  **The latch does not outrank a person.** `night_should_darken()` tests `manual` BEFORE
+  `woken`, so pressing Sleep darkens a woken panel immediately - a state change wakes the
+  SCHEDULE, and somebody who asked for the screen off has not changed their mind because the
+  row moved. Asserted at `test_page.cpp:1353` and measured on the panel on 2026-09-02. Said
+  explicitly here because the sentence above reads as though the latch wins, and on 2026-08-31
+  I misread my own note that way and reported the opposite behaviour to Rocket.
+
   **One backlight answer, not two.** `effective_backlight()` folds the Beta override and the
   schedule into a single number so no board file has to know the precedence. A person standing
   at the page beats the clock: the Beta control is someone deliberately looking at the panel,
