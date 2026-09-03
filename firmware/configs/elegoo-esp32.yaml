@@ -48,6 +48,12 @@ font:
   - file: "gfonts://Roboto@700"
     id: status_huge
     size: 30
+  # The middle rung. Without it `label_font` fell off 30px straight to the 14px NOTE face,
+  # so AVAILABLE and RECORDING - nine characters, the commonest rows on this panel - were
+  # drawn in the same size as the IP address underneath them.
+  - file: "gfonts://Roboto@700"
+    id: status_mid
+    size: 20
 
 # The envelope research for #50 could establish only a FLOOR for contiguous heap - 24.7 KB,
 # because the config page's reserve() succeeds on hardware - and no ceiling. Pool A's budget
@@ -102,7 +108,13 @@ display:
       const char *label = view.eff.known ? view.eff.row.label.c_str() : "";
 
       // A long label will not fit at 30px. Pick the size from the label, not the row.
-      auto label_font = [&](const char *t) { return strlen(t) > 8 ? id(status_title) : id(status_huge); };
+      // Three rungs, measured against this 128px glass at Roboto 700: ~17px per character at
+      // 30, ~12 at 20, ~8 at 14. So "ON AIR" (6) takes 30, "AVAILABLE" and "RECORDING" (9)
+      // take 20, and "INTERRUPTIBLE" (13) takes 14 - each the largest that still fits.
+      auto label_font = [&](const char *t) {
+        const size_t n = strlen(t);
+        return n <= 6 ? id(status_huge) : (n <= 10 ? id(status_mid) : id(status_title));
+      };
 
       if (view.shape == onair::Shape::NO_CONFIG) {
         // NO CONFIG - the table has never arrived, so there is no row to render and no
@@ -130,42 +142,39 @@ display:
         for (int x = 0; x < 128; x += 4) it.line(x, 0, x, 14, COLOR_ON);
         it.printf(64, 26, id(status_title), COLOR_ON, TextAlign::CENTER, "NO DATA");
         id(render_branch) = 3;
-      } else if (view.shape == onair::Shape::BUSY) {
-        // BUSY - maximum ink. Words knocked out of a solid block, band left alone. Every
-        // busy row shares this shape; the label is what tells them apart, which is the
-        // point of the label being the row's and not the firmware's.
-        it.filled_rectangle(0, 0, 128, 48, COLOR_ON);
-        it.printf(64, 24, label_font(label), COLOR_OFF, TextAlign::CENTER, "%s", label);
+      } else {
+        // A ROW, drawn as one picture per SAFETY CLASS - the closest a 1-bit panel gets to
+        // the CrowPanel's `it.fill(bg); print(label)`.
+        //
+        // WHY THIS IS NOT SIMPLY THE COLOUR PANEL'S BRANCH: this glass is a monochrome
+        // SH1106. It has no colour to fill with, and the row colours do not survive being
+        // reduced to ink - AVAILABLE (#0b6e2e) and ON AIR (#c1121f) are luminance 73 and
+        // 71, TWO APART out of 255. Drawing "the operator's colours" here would render
+        // "in a call" and "not in a call" as the same grey field with a different word in
+        // it, and FALSE OFF is the one error that matters (D-6/D-63). So busy keeps the
+        // ink: solid field, words knocked out. Calm is the plain field. That difference is
+        // legible across a room; nine characters of text is not.
+        //
+        // CALM_HEAVY and CALM_LIGHT COLLAPSE TO ONE PICTURE, which is the change here. The
+        // ring and the double frame were the mono panel's way of showing the difference
+        // between two calm rows back when this board was the only renderer; they read as
+        // decoration next to the colour panel, and both mean exactly "not busy". The split
+        // still HAPPENS in compute_view and `render_branch` still reports which shape it
+        // chose, so both boards go on reporting the same vocabulary over HTTP - which is
+        // what makes two panels comparable at all (#57 stage 3, D-147).
+        const bool busy = view.eff.row.busy;
+        if (busy) it.filled_rectangle(0, 0, 128, 48, COLOR_ON);
+        const auto ink = busy ? COLOR_OFF : COLOR_ON;
+        it.printf(64, 22, label_font(label), ink, TextAlign::CENTER, "%s", label);
         // CONDITION 2 (D-91): the state is held, and the panel says it is not being
         // refreshed. "NO LINK" and not "STALE" - the state is not stale, the LINK is.
-        if (view.unrefreshed) it.print(64, 44, id(status_text), COLOR_OFF, TextAlign::BASELINE_CENTER, "NO LINK");
-        id(render_branch) = 0;
-      } else if (view.shape == onair::Shape::CALM_HEAVY) {
-        // CALM, HEAVY - double frame INSET above the band, mid ink.
         //
-        // THIS is where colour reaches a 1-bit panel. Two calm rows are identical in
-        // semantics and differ only in presentation, so the shape has to come from
-        // presentation - and lit pixels are what this display has instead of colour, so
-        // a brighter background gets more of them. It is not decoration: without it the
-        // hardcoded `key == "interruptible"` was the last piece of server vocabulary
-        // left in the firmware, which is exactly what D-38 set out to remove.
-        //
-        // Colour is deliberately NOT allowed near the busy branches. Shape there is
-        // keyed on `busy` and stays that way: a dark-red row and a dark-green row have
-        // near-identical luminance, and a false OFF is the one error that matters.
-        //
-        // On the seeded table this draws exactly what it drew before - INTERRUPTIBLE
-        // (#e8a317, luminance 167) heavy, AVAILABLE (#0b6e2e, luminance 73) light.
-        it.rectangle(0, 0, 128, 48, COLOR_ON);
-        it.rectangle(2, 2, 124, 44, COLOR_ON);
-        it.printf(64, 24, label_font(label), COLOR_ON, TextAlign::CENTER, "%s", label);
-        id(render_branch) = 1;
-      } else {
-        // CALM, LIGHT - a big open ring plus the word. Comparable ink, unmistakable shape.
-        it.filled_circle(64, 24, 22, COLOR_ON);
-        it.filled_circle(64, 24, 15, COLOR_OFF);
-        it.printf(64, 24, id(status_text), COLOR_ON, TextAlign::CENTER, "%s", label);
-        id(render_branch) = 2;
+        // ON CALM ROWS TOO, which it was not before. The busy branch carried this mark and
+        // the two calm branches carried nothing, so a calm row on a dead link looked exactly
+        // like a calm row on a healthy one. The colour panel has always hatched both
+        // (D-91/D-82); this board simply never caught up.
+        if (view.unrefreshed) it.print(64, 46, id(status_text), ink, TextAlign::BASELINE_CENTER, "NO LINK");
+        id(render_branch) = (int) view.shape;
       }
 
       // Last statement on every path: proves the panel repainted.

@@ -5408,3 +5408,50 @@ else (state, light control, API) lives on the receiver.
   "the primary" could not be told from "whichever is first", and the unhandled-rejection claim
   had no test at all - a dead secondary taking the daemon down with it is a false OFF caused
   by the least important panel in the house.
+- **D-148 (2026-09-03)** **The OLED stops drawing shapes for calm rows, and the mono panel
+  says NO LINK like the colour one does.** Rocket, using the Elegoo as a bench monitor for the
+  wall panel, recognised its rendering as *"residuals of status indicators that we had built a
+  long time ago"* and asked for something closer to the CrowPanel.
+
+  He was right about the provenance. The ring, the double inset frame and the hatch band are
+  the 1-bit panel's substitute for colour, designed when the OLED was the ONLY renderer
+  (D-54/D-57). Next to a colour panel that just fills the glass with the row's `bgcolor` and
+  prints the label, they read as decoration.
+
+  **What changed:** `BUSY`, `CALM_HEAVY` and `CALM_LIGHT` collapse from three pictures to
+  **two**, and the label gets a middle font rung (20px) so the nine-character rows are not
+  drawn at the same size as the IP address below them. `render_branch` now reports
+  `(int) view.shape`, the same expression the CrowPanel uses.
+
+  **What did NOT change, and why the obvious version is wrong.** `it.fill(bg); print(label)` -
+  the CrowPanel's whole known-row branch - cannot be ported to this glass. The SH1106 is
+  monochrome, and the row colours do not survive being reduced to ink: **AVAILABLE `#0b6e2e`
+  is luminance 73 and ON AIR `#c1121f` is luminance 71**, two apart out of 255. Drawing "the
+  operator's colours" here would render *in a call* and *not in a call* as the same field with
+  a different word in it. So BUSY keeps the ink - solid field, words knocked out - and calm is
+  the plain field. That difference is legible across a room; nine characters of text is not.
+  **False OFF is worse than false ON (D-6/D-63), and this is where that invariant lands on the
+  mono panel.**
+
+  The CALM_HEAVY/CALM_LIGHT split still HAPPENS in `compute_view` and is still reported over
+  HTTP - it just no longer changes the picture. That is deliberate: the CrowPanel's own comment
+  already said both boards must keep reporting the same vocabulary, *"which is what makes two
+  panels comparable at all"*.
+
+  **A gap closed on the way past:** the unrefreshed `NO LINK` mark was on the BUSY branch only,
+  so a calm row on a dead link looked exactly like a calm row on a healthy one. The colour panel
+  has hatched both since D-91/D-82; this board had never caught up. It marks both now.
+
+  **A DISABLED DEVICE STILL FOLLOWS THE SERVER**, and this surprised the test that found it.
+  `enabled: false` in the device list stops the server PUSHING to a panel; it does not stop the
+  panel POLLING. `PollIntervalMs` is 1000 ms and the poll adopts the key straight into
+  `presence_key` (`onair-core.yaml:743`), so a write made directly to a "disabled" panel is
+  overwritten within a second. **"Disabled" means the server does not drive it, never that the
+  panel goes quiet.** Verified by isolating the bench board onto a throwaway server on 8585 -
+  which is also how every render branch was exercised without lighting the real light.
+
+  **Field note that cost a cycle.** `curl -d ''` adds
+  `Content-Type: application/x-www-form-urlencoded`, and the device then answers **200 and
+  applies nothing**. The driver sends `Content-Length: 0` with **no** Content-Type
+  (`esphome-driver.ts:236`). This is a second silent-200 next to the documented 411: use
+  `-X POST -H 'Content-Length: 0' -H 'Content-Type:'`.
