@@ -553,19 +553,72 @@ test('a FAILED poll is what starts the clock - the console notices the service i
   check(marked.hidden === false, 'the liveness timer did not keep the band up on its own clock');
 }
 
+// ---------------------------------------------------------------------------
+// THE DEVICE LIST (#57, D-87).
+//
+// `light` is a read-only projection of whichever row is primary, so these tests drive
+// `draft.devices` and read what the page draws from it. The two shapes that used to be one
+// pair of fields - "which box does the service reach" and "which box does a link point at" -
+// are now per row, and only the PRIMARY row can be overridden by the environment.
+
+const seedDevices = (devices, env) =>
+  page.evaluate(({ devices, env }) => {
+    editing = {};
+    draft.devices = devices;
+    envInfo = env || { overrides: [], effective: {} };
+    syncLight();
+    renderDevices();
+  }, { devices, env });
+
+const aDevice = (over) => ({
+  id: 'panel', label: 'Studio panel', host: '10.42.12.77', entity: 'PresenceKey',
+  username: null, password: null, enabled: true, primary: true, order: 0, ...over,
+});
+
+const deviceLinks = () => page.$$eval('#device-fields .panel-link', (as) =>
+  as.map((a) => ({ href: a.getAttribute('href'), target: a.target, rel: a.rel, text: a.textContent.trim() })));
+
+const deviceRow = (n) => page.locator('#device-fields .row').nth(n);
+const openEditor = async (n) => {
+  await deviceRow(n).locator('.row-actions button:text-is("Edit")').click();
+  await deviceRow(n).locator('.row-edit').waitFor();
+};
+const editorInput = (n, label) =>
+  deviceRow(n).locator('.row-edit .field')
+    .filter({ has: page.locator(`label:text-is("${label}")`) }).locator('input');
+
+// The per-row fields live in that row's OPEN EDITOR, so an override assertion has to open
+// one first - there is no longer a set of singular fields sitting on the section.
+const editorFields = (n) => page.evaluate((idx) => {
+  const out = {};
+  document.querySelectorAll('#device-fields .row')[idx].querySelectorAll('.row-edit .field').forEach((f) => {
+    const l = f.querySelector('label');
+    const i = f.querySelector('input');
+    const nag = f.querySelector('.nag');
+    if (l && i) {
+      out[l.textContent.trim()] =
+        { value: i.value, placeholder: i.placeholder, readOnly: i.readOnly, type: i.type,
+          checked: i.checked, nag: nag ? nag.textContent : '' };
+    }
+  });
+  return out;
+}, n);
+
+const deviceState = () => page.evaluate(() => ({
+  draft: draft.devices.map((d) => ({ id: d.id, label: d.label, host: d.host, primary: d.primary, enabled: d.enabled })),
+  live: live.devices.map((d) => ({ id: d.id, label: d.label, host: d.host, primary: d.primary, enabled: d.enabled })),
+  light: draft.light,
+  staged: stagedDeviceIds(),
+}));
+
 test('the Device connection section links to the panel, in a new tab (#55)');
 {
   await page.click('#view-advanced');
   await page.click('#rail button[data-sec="device"]');
-  // The throwaway config has no device address - correctly, a fresh install has not been
-  // pointed at a light yet - so give it one before asking what it links to.
-  await page.evaluate(() => {
-    draft.light.host = '10.42.12.77';
-    envInfo = { overrides: [], effective: { host: '10.42.12.77' } };
-    renderFields();
-  });
-  const links = await page.$$eval('#device-fields .panel-link', (as) =>
-    as.map((a) => ({ href: a.getAttribute('href'), target: a.target, rel: a.rel, text: a.textContent.trim() })));
+  // The throwaway config has no device at all - correctly, a fresh install has not been
+  // pointed at a panel yet - so give it one before asking what it links to.
+  await seedDevices([aDevice()], { overrides: [], effective: { host: '10.42.12.77' } });
+  const links = await deviceLinks();
 
   check(links.length === 2, `expected two panel links, got ${links.length}`);
   check(links.every((l) => l.target === '_blank'), 'a link does not open in a new tab');
@@ -580,17 +633,19 @@ test('the Device connection section links to the panel, in a new tab (#55)');
 
 test('with NO device address configured, no link is emitted at all');
 {
-  const emitted = await page.evaluate(() => {
-    const keptEnv = envInfo;
-    const keptHost = draft.light.host;
-    envInfo = { overrides: [], effective: {} };
-    draft.light.host = null;
-    renderFields();
-    const n = document.querySelectorAll('#device-fields .panel-link').length;
-    envInfo = keptEnv; draft.light.host = keptHost; renderFields();
-    return n;
-  });
-  check(emitted === 0, `a dead link was emitted for an unset host: ${emitted}`);
+  await seedDevices([aDevice({ host: null })], { overrides: [], effective: {} });
+  const forHostless = (await deviceLinks()).length;
+  check(forHostless === 0, `a dead link was emitted for an unset host: ${forHostless}`);
+
+  // And an EMPTY list is legal - it is what a fresh install has - so it must not be an
+  // error, an empty row, or a link to nowhere.
+  await seedDevices([], { overrides: [], effective: {} });
+  const forEmpty = await page.evaluate(() => ({
+    links: document.querySelectorAll('#device-fields .panel-link').length,
+    rows: document.querySelectorAll('#device-fields .row').length,
+  }));
+  check(forEmpty.links === 0, `an empty list emitted ${forEmpty.links} links`);
+  check(forEmpty.rows === 0, `an empty list drew ${forEmpty.rows} rows`);
 }
 
 test('a host that is not host-shaped never reaches an href');
@@ -598,77 +653,66 @@ test('a host that is not host-shaped never reaches an href');
   // The value is operator-set and lands in an href. The SCHEME is ours and only the
   // authority comes from config, but a string that is not host-shaped must not be linked
   // at all rather than trusted to be harmless once prefixed.
-  const emitted = await page.evaluate(() => {
-    const keptEnv = envInfo;
-    const keptHost = draft.light.host;
-    envInfo = { overrides: [], effective: { host: 'javascript:alert(1)' } };
-    draft.light.host = 'javascript:alert(1)';
-    renderFields();
-    const hrefs = [...document.querySelectorAll('#device-fields .panel-link')].map((a) => a.getAttribute('href'));
-    envInfo = keptEnv; draft.light.host = keptHost; renderFields();
-    return hrefs;
-  });
-  check(emitted.length === 0, `a non-host was linked: ${emitted.join(', ')}`);
+  await seedDevices([aDevice({ host: 'javascript:alert(1)' })],
+    { overrides: [], effective: { host: 'javascript:alert(1)' } });
+  const hrefs = (await deviceLinks()).map((l) => l.href);
+  check(hrefs.length === 0, `a non-host was linked: ${hrefs.join(', ')}`);
 }
 
 test('an ENV-OVERRIDDEN field is read-only and names the variable winning (D-79)');
 {
-  const shown = await page.evaluate(() => {
-    const keptEnv = envInfo;
-    envInfo = { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], effective: { host: '10.0.0.99' } };
-    renderFields();
-    const input = document.querySelector('#device-fields input');
-    const nag = document.querySelector('#device-fields .nag');
-    const out = { readOnly: input.readOnly, value: input.value, nag: nag ? nag.textContent : '' };
-    envInfo = keptEnv; renderFields();
-    return out;
-  });
-  check(shown.readOnly, 'an overridden field is still editable - saving it would change nothing');
-  check(shown.value === '10.0.0.99', `the field should show the EFFECTIVE value, got "${shown.value}"`);
-  check(/ONAIR_LIGHT_HOST/.test(shown.nag), `the note should name the variable: "${shown.nag}"`);
-  check(/config\.env/.test(shown.nag), `the note should name the file: "${shown.nag}"`);
+  await seedDevices([aDevice({ host: '10.0.0.1' })],
+    { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], effective: { host: '10.0.0.99' } });
+  await openEditor(0);
+  const f = await editorFields(0);
+
+  check(f.Address && f.Address.readOnly, 'an overridden field is still editable - saving it would change nothing');
+  check(f.Address && f.Address.value === '10.0.0.99',
+        `the field should show the EFFECTIVE value, got "${f.Address && f.Address.value}"`);
+  check(/ONAIR_LIGHT_HOST/.test(f.Address ? f.Address.nag : ''), `the note should name the variable: "${f.Address && f.Address.nag}"`);
+  check(/config\.env/.test(f.Address ? f.Address.nag : ''), `the note should name the file: "${f.Address && f.Address.nag}"`);
+}
+
+test('but a SECONDARY row is never overridden - the overlay names the primary only');
+{
+  await seedDevices(
+    [aDevice({ host: '10.0.0.1' }), aDevice({ id: 'bench', label: 'Bench board', host: '10.0.0.5', primary: false, order: 1 })],
+    { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], effective: { host: '10.0.0.99' } },
+  );
+  await openEditor(1);
+  const f = await editorFields(1);
+  check(f.Address && !f.Address.readOnly, 'a secondary address was locked by a variable that does not name it');
+  check(f.Address && f.Address.value === '10.0.0.5',
+        `a secondary should show its own address, got "${f.Address && f.Address.value}"`);
+  check(f.Address && f.Address.nag === '', `a secondary claims an override: "${f.Address && f.Address.nag}"`);
 }
 
 test('and the link follows the OVERRIDE, not the document - a link gets clicked');
 {
-  const href = await page.evaluate(() => {
-    const keptEnv = envInfo;
-    const keptHost = draft.light.host;
-    draft.light.host = '10.0.0.1';
-    envInfo = { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], effective: { host: '10.0.0.99' } };
-    renderFields();
-    const a = document.querySelector('#device-fields .panel-link');
-    const out = a ? a.getAttribute('href') : null;
-    envInfo = keptEnv; draft.light.host = keptHost; renderFields();
-    return out;
-  });
-  check(
-    href === 'http://10.0.0.99/onair',
-    `the link must name the box the service drives, got "${href}"`,
+  await seedDevices(
+    [aDevice({ host: '10.0.0.1' }), aDevice({ id: 'bench', label: 'Bench board', host: '10.0.0.5', primary: false, order: 1 })],
+    { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], effective: { host: '10.0.0.99' } },
   );
+  const hrefs = await page.$$eval('#device-fields .row', (rows) =>
+    rows.map((r) => {
+      const a = r.querySelector('.panel-link');
+      return a ? a.getAttribute('href') : null;
+    }));
+  check(hrefs[0] === 'http://10.0.0.99/onair', `the primary link must name the box the service drives, got "${hrefs[0]}"`);
+  check(hrefs[1] === 'http://10.0.0.5/onair', `a secondary link followed the primary's override: "${hrefs[1]}"`);
 }
 
 test('an overridden NON-credential shows its effective value; a credential does not');
 {
-  const seen = await page.evaluate(() => {
-    const keptEnv = envInfo;
-    envInfo = {
-      overrides: [
-        { key: 'light.entity', variable: 'ONAIR_LIGHT_ENTITY' },
-        { key: 'light.password', variable: 'ONAIR_LIGHT_PASS' },
-      ],
-      effective: { host: '10.0.0.99', entity: 'RealEntity' },
-    };
-    renderFields();
-    const byLabel = {};
-    document.querySelectorAll('#device-fields .field').forEach((f) => {
-      const l = f.querySelector('label');
-      const i = f.querySelector('input');
-      if (l && i) byLabel[l.textContent.trim()] = { value: i.value, placeholder: i.placeholder };
-    });
-    envInfo = keptEnv; renderFields();
-    return byLabel;
+  await seedDevices([aDevice()], {
+    overrides: [
+      { key: 'light.entity', variable: 'ONAIR_LIGHT_ENTITY' },
+      { key: 'light.password', variable: 'ONAIR_LIGHT_PASS' },
+    ],
+    effective: { host: '10.0.0.99', entity: 'RealEntity' },
   });
+  await openEditor(0);
+  const seen = await editorFields(0);
 
   check(
     seen['Entity name'] && seen['Entity name'].value === 'RealEntity',
@@ -682,6 +726,146 @@ test('an overridden NON-credential shows its effective value; a credential does 
     seen['Device password'] && seen['Device password'].placeholder === 'not shown',
     'an empty credential box must say why it is empty, not read as unconfigured',
   );
+  check(
+    seen['Device password'] && seen['Device password'].type === 'password',
+    'the device password is not masked',
+  );
+}
+
+test('a device row SURVIVES a poll - the same node, still attached (#50, #54)');
+{
+  // The same defect, in the second list. A poll must never rebuild these nodes: typing goes
+  // into an input that no longer exists, and a click lands on a button detached between
+  // mousedown and click. Identity is the test - everything else about the page looks right.
+  await seedDevices([aDevice()], { overrides: [], effective: {} });
+  await page.evaluate(() => {
+    const n = document.querySelector('#device-fields .row');
+    n.dataset.marked = 'original';
+    window.__dev = n;
+  });
+  await page.evaluate(() => refreshStatus());
+  await page.evaluate(() => refreshStatus());
+  await page.waitForTimeout(100);
+
+  const verdict = await page.evaluate(() => ({
+    sameObject: document.querySelector('#device-fields .row') === window.__dev,
+    stillAttached: document.contains(window.__dev),
+    markSurvived: window.__dev.dataset.marked === 'original',
+  }));
+  check(verdict.stillAttached, 'the device row was detached from the document by a poll');
+  check(verdict.sameObject, 'the device row was replaced by a different node - this IS the bug');
+  check(verdict.markSurvived, 'the node lost its identity across the poll');
+
+  // And the listener came with it: Edit still opens the editor after two polls.
+  await deviceRow(0).locator('.row-actions button:text-is("Edit")').click();
+  await page.waitForTimeout(100);
+  const opened = await deviceRow(0).locator('.row-edit').count();
+  check(opened === 1, 'Edit did nothing after a poll - the handler was lost with the node');
+  await deviceRow(0).locator('.row-edit button:text-is("Cancel")').click();
+}
+
+test('a SECOND device can be added and saved, and `light` follows the primary (#57)');
+{
+  await page.evaluate(() => { resetDraft(); editing = {}; renderAll(); });
+
+  await page.click('#add-device');
+  await deviceRow(0).locator('.row-edit').waitFor();
+  await editorInput(0, 'Label').fill('Studio panel');
+  await editorInput(0, 'Address').fill('10.42.12.77');
+  // The first device seeds itself primary and enabled, or the list is unsaveable from the
+  // moment it is created.
+  const seeded = await editorFields(0);
+  check(seeded.Primary && seeded.Primary.checked, 'the first device was not seeded primary');
+  check(seeded.Enabled && seeded.Enabled.checked, 'the first device was not seeded enabled');
+  await deviceRow(0).locator('.row-edit button:text-is("Save device")').click();
+
+  await page.click('#add-device');
+  await deviceRow(1).locator('.row-edit').waitFor();
+  await editorInput(1, 'Label').fill('Bench board');
+  await editorInput(1, 'Address').fill('10.42.12.78');
+  await deviceRow(1).locator('.row-edit button:text-is("Save device")').click();
+
+  const staged = await page.textContent('#staged-count');
+  check(/2 staged/.test(staged), `two new rows should be two staged changes, got "${staged}"`);
+  const where = await page.textContent('#staged-where');
+  check(/2 in Device connection/.test(where), `the commit bar does not name where: "${where}"`);
+  const badges = await page.$$eval('#device-fields .badge.staged', (bs) => bs.map((b) => b.textContent));
+  check(badges.length === 2 && badges.every((b) => b === 'NEW'), `staged badges: [${badges.join(', ')}]`);
+
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/admin/config') && r.request().method() === 'PUT'),
+    page.click('#save-all'),
+  ]);
+  check(res.status() === 200, `the save was refused: ${res.status()} ${JSON.stringify(await res.json())}`);
+
+  await page.waitForTimeout(200);
+  const after = await deviceState();
+  check(after.live.length === 2, `live carries ${after.live.length} devices`);
+  check(
+    JSON.stringify(after.live.map((d) => d.id)) === JSON.stringify(['studio-panel', 'bench-board']),
+    `live ids: [${after.live.map((d) => d.id).join(', ')}]`,
+  );
+  check(after.live.filter((d) => d.primary).length === 1, 'live does not carry exactly one primary');
+  check(after.light.host === '10.42.12.77', `light did not follow the primary: ${JSON.stringify(after.light)}`);
+  const drawn = await page.$$eval('#device-fields .row .row-id span', (ss) => ss.map((s) => s.textContent.trim()));
+  check(drawn.includes('bench-board'), `the saved row is not on screen: [${drawn.join(', ')}]`);
+  check(after.staged.length === 0, `something stayed staged after a clean save: [${after.staged.join(', ')}]`);
+}
+
+test('making a SECONDARY primary clears the old one - exactly one is allowed');
+{
+  await openEditor(1);
+  await editorInput(1, 'Primary').check();
+  await deviceRow(1).locator('.row-edit button:text-is("Save device")').click();
+  await page.waitForTimeout(100);
+
+  const s = await deviceState();
+  const primaries = s.draft.filter((d) => d.primary).map((d) => d.id);
+  check(
+    JSON.stringify(primaries) === JSON.stringify(['bench-board']),
+    `expected bench-board alone to be primary, got [${primaries.join(', ')}]`,
+  );
+  // `light` is the projection, and the server refuses a payload where the two disagree.
+  check(s.light.host === '10.42.12.78', `light did not follow the new primary: ${JSON.stringify(s.light)}`);
+  check(s.staged.length === 2, `promoting one row should stage two, got [${s.staged.join(', ')}]`);
+
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/admin/config') && r.request().method() === 'PUT'),
+    page.click('#save-all'),
+  ]);
+  check(res.status() === 200, `the promotion was refused: ${res.status()} ${JSON.stringify(await res.json())}`);
+}
+
+test('a staged DELETION stays on screen, struck through, with an Undo');
+{
+  await page.waitForTimeout(200);
+  // studio-panel is the secondary now, so deleting it promotes nobody - the row simply goes.
+  await deviceRow(0).locator('.row-actions button:text-is("Delete")').click();
+  await page.waitForSelector('#modal:not([hidden])');
+  await page.click('#modal-ok');
+  await page.waitForTimeout(100);
+
+  const deleted = await page.$$eval('#device-fields .row.deleted', (rows) =>
+    rows.map((r) => ({
+      id: r.querySelector('.row-id span').textContent.trim(),
+      staged: /\bstaged\b/.test(r.className),
+      undo: [...r.querySelectorAll('.row-actions button')].map((b) => b.textContent.trim()),
+    })));
+  check(deleted.length === 1, `expected one struck-through row, got ${deleted.length}`);
+  check(deleted[0] && deleted[0].id === 'studio-panel', `the wrong row was struck: ${JSON.stringify(deleted[0])}`);
+  check(deleted[0] && deleted[0].staged, 'a staged deletion is not badged as staged');
+  check(
+    deleted[0] && JSON.stringify(deleted[0].undo) === JSON.stringify(['Undo delete']),
+    `the deleted row's actions are [${deleted[0] ? deleted[0].undo.join(', ') : ''}]`,
+  );
+  const count = await page.textContent('#staged-count');
+  check(/1 staged/.test(count), `a deletion should count once, got "${count}"`);
+
+  await page.click('#device-fields .row.deleted .row-actions button');
+  await page.waitForTimeout(100);
+  const back = await deviceState();
+  check(back.draft.some((d) => d.id === 'studio-panel'), 'Undo delete did not put the row back');
+  check(back.staged.length === 0, `undoing left something staged: [${back.staged.join(', ')}]`);
 }
 
 test('no page errors were raised at any point');

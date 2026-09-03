@@ -149,7 +149,11 @@ function railSignal(id) {
     var n = stagedRowIds().length;
     return n ? { text: n + ' staged', cls: 'staged' } : null;
   }
-  if (id === 'network' || id === 'device' || id === 'admin') {
+  if (id === 'device') {
+    var d = stagedDeviceIds().length;
+    return d ? { text: d + ' staged', cls: 'staged' } : null;
+  }
+  if (id === 'network' || id === 'admin') {
     return sectionDirty(id) ? { text: 'staged', cls: 'staged' } : null;
   }
   if (id === 'status') {
@@ -224,11 +228,30 @@ function stagedRowIds() {
   return out;
 }
 
+// The device list diffs exactly like the state table, and for the same reason: dirtiness is
+// COMPUTED from live, never tracked alongside it. `draft.light` is deliberately NOT diffed -
+// it is derived from the primary row by syncLight(), so counting it would count one edit
+// twice and a device edit that happens to leave the primary alone would count zero.
+function stagedDeviceIds() {
+  if (!draft || !live) return [];
+  var out = [];
+  var liveById = {};
+  live.devices.forEach(function (r) { liveById[r.id] = r; });
+  draft.devices.forEach(function (r) {
+    var l = liveById[r.id];
+    if (!l || JSON.stringify(l) !== JSON.stringify(r)) out.push(r.id);
+  });
+  live.devices.forEach(function (r) {
+    if (!draft.devices.some(function (d) { return d.id === r.id; })) out.push(r.id);
+  });
+  return out;
+}
+
 // Which SECTION a settings change belongs to, so the rail can point at it.
 function sectionDirty(id) {
   if (!draft || !live) return false;
   if (id === 'admin') return JSON.stringify(draft.auth) !== JSON.stringify(live.auth);
-  if (id === 'device') return JSON.stringify(draft.light) !== JSON.stringify(live.light);
+  if (id === 'device') return stagedDeviceIds().length > 0;
   if (id === 'network') {
     return ['port', 'bind'].some(function (k) { return draft[k] !== live[k]; }) ||
       JSON.stringify(draft.shortcuts) !== JSON.stringify(live.shortcuts);
@@ -236,9 +259,11 @@ function sectionDirty(id) {
   return false;
 }
 function settingsChanged() {
-  return sectionDirty('admin') || sectionDirty('device') || sectionDirty('network');
+  return sectionDirty('admin') || sectionDirty('network');
 }
-function stagedCount() { return stagedRowIds().length + (settingsChanged() ? 1 : 0); }
+function stagedCount() {
+  return stagedRowIds().length + stagedDeviceIds().length + (settingsChanged() ? 1 : 0);
+}
 
 // ---------------------------------------------------------------- contrast
 //
@@ -266,6 +291,9 @@ function slugify(label) {
   return String(label).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
 }
 var HEX = /^#[0-9a-f]{6}$/;
+// The server's default entity name. Held here too, so the projection this page computes for
+// an empty list is byte-identical to the one the server computes for it.
+var DEFAULT_ENTITY = 'PresenceKey';
 
 // ---------------------------------------------------------------- the busy rule, drawn
 //
@@ -473,7 +501,9 @@ function renderCommit() {
   var where = [];
   var rows = stagedRowIds().length;
   if (rows) where.push(rows + ' in States');
-  ['admin', 'network', 'device'].forEach(function (id) {
+  var devs = stagedDeviceIds().length;
+  if (devs) where.push(devs + ' in Device connection');
+  ['admin', 'network'].forEach(function (id) {
     if (sectionDirty(id)) {
       where.push('1 in ' + SECTIONS.filter(function (s) { return s.id === id; })[0].label);
     }
@@ -851,33 +881,283 @@ function renderFields() {
   shortcut(net, 'POST /on sets', 'on');
   shortcut(net, 'POST /off sets', 'off');
 
-  // "Device connection", not "Light" (D-78). The four fields are about how the server
-  // REACHES the on-air light, not about the light; the glossary keeps "on-air light" for
-  // the object and the JSON key stays `light`.
-  var device = $('device-fields'); clear(device);
-  textField(device, 'Address', function () { return draft.light.host || ''; },
-    function (v) { draft.light.host = v || null; saveDraft(); },
-    { override: overriddenBy('light.host'), overrideValue: envInfo.effective.host });
-  textField(device, 'Entity name', function () { return draft.light.entity; },
-    function (v) { draft.light.entity = v; saveDraft(); },
-    { override: overriddenBy('light.entity'), overrideValue: envInfo.effective.entity });
-  textField(device, 'Device user', function () { return draft.light.username || ''; },
-    function (v) { draft.light.username = v || null; saveDraft(); },
-    { override: overriddenBy('light.username') });
-  textField(device, 'Device password', function () { return draft.light.password || ''; },
-    function (v) { draft.light.password = v || null; saveDraft(); },
-    { type: 'password', override: overriddenBy('light.password') });
+}
+
+// ---------------------------------------------------------------- the device list
+//
+// "Device connection", not "Light" (D-78): these rows are about how the server REACHES the
+// on-air lights, not about the lights. The glossary keeps "on-air light" for the object and
+// the JSON key stays `light`.
+//
+// ONE LIST EDITOR, NOT TWO. This is the state table's row editor applied to a second list -
+// the same three commit levels, the same computed dirtiness, the same numeric `order` and
+// deliberately no second reordering gesture.
+
+// `light` IS A PROJECTION OF THE PRIMARY ROW (D-87), and the server refuses a payload whose
+// `light` contradicts its own `devices`. So every mutation of the list recomputes it here
+// rather than leaving the two halves to be reconciled at save time, where the only symptom
+// would be a 400 naming a key nothing on screen edits any more.
+function syncLight() {
+  var p = draft.devices.filter(function (d) { return d.primary; })[0];
+  draft.light = p
+    ? { host: p.host, entity: p.entity || DEFAULT_ENTITY, username: p.username, password: p.password }
+    : { host: null, entity: DEFAULT_ENTITY, username: null, password: null };
+}
+
+// Device ids and state ids live in one `editing` map and could collide, so devices are
+// namespaced. The poll's "is anything open?" guard then still covers both lists at once.
+function deviceKey(id) { return 'device:' + id; }
+
+// EXACTLY ONE PRIMARY, held true by construction rather than checked after the fact. Every
+// path that can produce a second one - staging a row, reverting one, undoing a delete -
+// comes through here.
+function makePrimary(id) {
+  draft.devices.forEach(function (d) { d.primary = d.id === id; });
+}
+
+// ENV OVERRIDES REACH THE PRIMARY ROW ONLY. The overlay is written over `light.*`, and
+// `light` is the primary row projected, so a secondary is never what those variables name.
+function deviceOverride(row, key) {
+  return row.primary ? overriddenBy(key) : null;
+}
+
+function deviceNode(row, isNew) {
+  var node = el('div', 'row');
+  var staged = stagedDeviceIds();
+  var isStaged = staged.indexOf(row.id) !== -1;
+  var liveRow = live.devices.filter(function (r) { return r.id === row.id; })[0];
+  var key = deviceKey(row.id);
+  if (isStaged) node.className += ' staged';
+
+  var head = el('div', 'row-head');
+  head.appendChild(el('div', 'swatch plain', row.label || '(unnamed)'));
+
+  var meta = el('div', 'row-meta');
+  var idLine = el('div', 'row-id');
+  idLine.appendChild(el('span', null, row.id));
+  idLine.appendChild(el('span', 'lock', ' \u{1F512}'));
+  meta.appendChild(idLine);
+
+  var line = el('div');
+  line.appendChild(el('span', 'mono', row.host || 'no address'));
+  if (row.primary) {
+    line.appendChild(document.createTextNode(' '));
+    line.appendChild(el('span', 'badge primary', 'PRIMARY'));
+  }
+  if (!row.enabled) {
+    line.appendChild(document.createTextNode(' '));
+    line.appendChild(el('span', 'badge off', 'DISABLED'));
+  }
+  if (isStaged) {
+    line.appendChild(document.createTextNode(' '));
+    line.appendChild(el('span', 'badge staged', isNew ? 'NEW' : 'STAGED'));
+  }
+  meta.appendChild(line);
+  head.appendChild(meta);
+
+  var actions = el('div', 'row-actions');
+  var edit = el('button', 'btn small', editing[key] ? 'Editing' : 'Edit');
+  edit.disabled = !!editing[key];
+  edit.addEventListener('click', function () {
+    editing[key] = JSON.parse(JSON.stringify(row));
+    renderDevices();
+  });
+  actions.appendChild(edit);
+  if (isStaged) {
+    var revert = el('button', 'btn small', 'Revert');
+    revert.addEventListener('click', function () {
+      delete editing[key];
+      if (liveRow) {
+        var back = JSON.parse(JSON.stringify(liveRow));
+        draft.devices = draft.devices.map(function (r) { return r.id === row.id ? back : r; });
+        // Reverting the row that WAS primary has to demote whoever took over, or the list
+        // carries two primaries and the server refuses the save.
+        if (back.primary) makePrimary(back.id);
+      } else {
+        draft.devices = draft.devices.filter(function (r) { return r.id !== row.id; });
+      }
+      syncLight(); saveDraft(); renderDevices(); renderCommit(); renderRail();
+    });
+    actions.appendChild(revert);
+  }
+  var del = el('button', 'btn small danger-btn', 'Delete');
+  del.addEventListener('click', function () { confirmDeleteDevice(row); });
+  actions.appendChild(del);
+  head.appendChild(actions);
+  node.appendChild(head);
 
   // THE LINKS NAME THE HOST THE SERVICE IS ACTUALLY DRIVING, not the document's. A field
   // that lies can be re-read; a link that lies gets clicked. `deploy/onair`'s cmd_ui
-  // resolves the overlay first for exactly this reason (D-79, #55).
-  var host = envInfo.effective.host || draft.light.host;
+  // resolves the overlay first for exactly this reason (D-79, #55). Only the primary row
+  // can be overridden, so only its link follows the overlay.
+  var host = row.primary ? (envInfo.effective.host || row.host) : row.host;
   if (host && HOSTISH.test(host)) {
     var links = el('div', 'links');
     panelLink(links, 'Open the panel', host, '/onair');
     panelLink(links, 'Panel settings', host, '/onair/config');
-    device.appendChild(links);
+    node.appendChild(links);
   }
+
+  if (editing[key]) node.appendChild(deviceEditorNode(row, isNew));
+  return node;
+}
+
+function deviceEditorNode(row, isNew) {
+  var key = deviceKey(row.id);
+  var work = editing[key];
+  var box = el('div', 'row-edit');
+  var grid = el('div', 'edit-grid');
+
+  function field(label, prop, opts) {
+    opts = opts || {};
+    var f = el('div', 'field');
+    f.appendChild(el('label', null, label));
+    var input = el('input');
+    input.type = opts.type || 'text';
+    input.value = work[prop] === null || work[prop] === undefined ? '' : String(work[prop]);
+    // AN OVERRIDDEN FIELD IS NOT EDITABLE, and says who is winning (D-79). Leaving it
+    // editable is what made saving a new address succeed and change nothing.
+    if (opts.override) {
+      input.readOnly = true;
+      // A credential's effective value is deliberately not sent (D-79), so the box stays
+      // empty and the note beneath it is the whole answer. A non-credential shows what is
+      // actually in force - an empty box would read as "not configured", which is a
+      // different and wrong claim.
+      input.value = opts.overrideValue === undefined || opts.overrideValue === null
+        ? '' : String(opts.overrideValue);
+      if (input.value === '') input.placeholder = 'not shown';
+    } else {
+      input.addEventListener('input', function () {
+        if (opts.type === 'number') work[prop] = Number(input.value);
+        else if (opts.nullable) work[prop] = input.value || null;
+        else work[prop] = input.value;
+        // A new row's id auto-slugs from the label as it is typed, and freezes on stage.
+        if (prop === 'label' && isNew) work.id = slugify(input.value);
+      });
+    }
+    f.appendChild(input);
+    if (opts.override) {
+      f.appendChild(el('div', 'nag', 'Set by ' + opts.override + ' in ~/.onair/config.env.'));
+    }
+    grid.appendChild(f);
+  }
+
+  function toggle(label, prop) {
+    var f = el('div', 'field');
+    f.appendChild(el('label', null, label));
+    var input = el('input');
+    input.type = 'checkbox';
+    input.checked = !!work[prop];
+    input.addEventListener('change', function () { work[prop] = input.checked; });
+    f.appendChild(input);
+    grid.appendChild(f);
+  }
+
+  field('Label', 'label');
+  field('Address', 'host', { nullable: true, override: deviceOverride(row, 'light.host'),
+                             overrideValue: envInfo.effective.host });
+  field('Entity name', 'entity', { override: deviceOverride(row, 'light.entity'),
+                                   overrideValue: envInfo.effective.entity });
+  field('Device user', 'username', { nullable: true, override: deviceOverride(row, 'light.username') });
+  field('Device password', 'password', { type: 'password', nullable: true,
+                                         override: deviceOverride(row, 'light.password') });
+  field('Order', 'order', { type: 'number' });
+  // Primary is a radio spread across rows rather than a control of its own: staging one
+  // demotes the others, below, since exactly one is allowed and a list with none is refused.
+  toggle('Primary', 'primary');
+  toggle('Enabled', 'enabled');
+  box.appendChild(grid);
+
+  var actions = el('div', 'edit-actions');
+  var err = el('span', 'err');
+  var save = el('button', 'btn primary small', 'Save device');
+  save.addEventListener('click', function () {
+    var problems = validateDevice(work, isNew, row.id);
+    if (problems.length) { err.textContent = problems.join('; '); return; }
+    var frozen = JSON.parse(JSON.stringify(work));
+    // An empty entity is the default on the server, so it is made the default here too -
+    // otherwise the row comes back from a save looking edited when nothing moved.
+    frozen.entity = frozen.entity || DEFAULT_ENTITY;
+    var exists = draft.devices.some(function (r) { return r.id === row.id; });
+    if (exists) draft.devices = draft.devices.map(function (r) { return r.id === row.id ? frozen : r; });
+    else draft.devices.push(frozen);
+    if (isNew && frozen.id !== row.id) {
+      draft.devices = draft.devices.filter(function (r) { return r.id !== row.id; });
+      if (!draft.devices.some(function (r) { return r.id === frozen.id; })) draft.devices.push(frozen);
+    }
+    if (frozen.primary) makePrimary(frozen.id);
+    delete editing[key];
+    syncLight(); saveDraft(); renderDevices(); renderCommit(); renderRail();
+  });
+  var cancel = el('button', 'btn small', 'Cancel');
+  cancel.addEventListener('click', function () {
+    // Back to the LAST STAGED value, not to live - see the comment on the commit levels.
+    delete editing[key];
+    if (isNew) draft.devices = draft.devices.filter(function (r) { return r.id !== row.id; });
+    syncLight(); saveDraft(); renderDevices(); renderCommit(); renderRail();
+  });
+  actions.appendChild(save); actions.appendChild(cancel); actions.appendChild(err);
+  box.appendChild(actions);
+  return box;
+}
+
+// Mirrors the server's rules, so a mistake is named where it was made rather than arriving
+// as a 400 after every other staged change has already been sent with it.
+function validateDevice(row, isNew, rowId) {
+  var p = [];
+  var others = draft.devices.filter(function (r) { return r.id !== rowId; });
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(row.id)) p.push('id must be lower-case letters, digits and dashes');
+  if (!row.label || row.label.length > 64) p.push('label must be 1-64 characters');
+  if (!(Number.isInteger(row.order) && row.order >= 0 && row.order <= 999)) p.push('order must be 0-999');
+  // Only a new row's id can still move, so only a new row can collide with one already there.
+  if (isNew && others.some(function (r) { return r.id === row.id; })) p.push('that id is already taken');
+  if (row.primary && !row.enabled) p.push('the primary device cannot be disabled');
+  if (!row.primary && !others.some(function (r) { return r.primary; })) p.push('one device must be primary');
+  return p;
+}
+
+function renderDevices() {
+  var box = $('device-fields');
+  clear(box);
+  var liveIds = live.devices.map(function (r) { return r.id; });
+  var sorted = draft.devices.slice().sort(function (a, b) { return a.order - b.order || a.id.localeCompare(b.id); });
+  sorted.forEach(function (r) { box.appendChild(deviceNode(r, liveIds.indexOf(r.id) === -1)); });
+  // Rows staged for deletion still have to be visible, or the staged count names something
+  // the page does not show.
+  live.devices.forEach(function (r) {
+    if (draft.devices.some(function (d) { return d.id === r.id; })) return;
+    var n = deviceNode(r, false);
+    n.className += ' deleted staged';
+    var undo = el('button', 'btn small', 'Undo delete');
+    undo.addEventListener('click', function () {
+      var back = JSON.parse(JSON.stringify(r));
+      draft.devices.push(back);
+      if (back.primary) makePrimary(back.id);
+      syncLight(); saveDraft(); renderDevices(); renderCommit(); renderRail();
+    });
+    clear(n.querySelector('.row-actions'));
+    n.querySelector('.row-actions').appendChild(undo);
+    box.appendChild(n);
+  });
+  // An empty list is legal and means the service drives nothing.
+  if (sorted.length === 0 && liveIds.length === 0) box.appendChild(el('div', 'muted', 'No device configured.'));
+}
+
+function confirmDeleteDevice(row) {
+  var rest = draft.devices.filter(function (r) { return r.id !== row.id; })
+    .sort(function (a, b) { return a.order - b.order || a.id.localeCompare(b.id); });
+  var heir = rest.filter(function (r) { return r.enabled; })[0] || rest[0] || null;
+  var consequences = ['The service stops writing to ' + (row.host || 'this device') + '.'];
+  if (row.primary && heir) consequences.push('"' + heir.label + '" becomes the primary, and is switched on.');
+  if (row.primary && !heir) consequences.push('Nothing is left to drive, and "confirmed" goes quiet.');
+  openModal('Delete ' + row.id + '?', consequences, 'Stage the delete', null, function () {
+    draft.devices = rest;
+    delete editing[deviceKey(row.id)];
+    // A list with no primary is refused, so deleting the primary promotes its successor here
+    // rather than leaving a draft that cannot be saved and does not say why.
+    if (row.primary && heir) { heir.enabled = true; makePrimary(heir.id); }
+    syncLight(); saveDraft(); renderDevices(); renderCommit(); renderRail();
+  });
 }
 
 function renderAll() {
@@ -887,6 +1167,7 @@ function renderAll() {
   markChips();
   renderStatus();
   renderRows();
+  renderDevices();
   renderFields();
   renderRail();
 }
@@ -1079,6 +1360,20 @@ $('add-row').addEventListener('click', function () {
   draft.states.push(row);
   editing[id] = JSON.parse(JSON.stringify(row));
   saveDraft(); renderRows(); renderCommit(); renderRail();
+});
+$('add-device').addEventListener('click', function () {
+  var id = 'new-device';
+  var n = 1;
+  while (draft.devices.some(function (r) { return r.id === id; })) { id = 'new-device-' + (++n); }
+  // THE FIRST DEVICE IS THE PRIMARY, and it is enabled. A non-empty list with no enabled
+  // primary is refused by the server, so seeding one any other way makes a list that cannot
+  // be saved from the moment it is created.
+  var first = draft.devices.length === 0;
+  var row = { id: id, label: '', host: null, entity: DEFAULT_ENTITY, username: null, password: null,
+              enabled: true, primary: first, order: draft.devices.length };
+  draft.devices.push(row);
+  editing[deviceKey(id)] = JSON.parse(JSON.stringify(row));
+  syncLight(); saveDraft(); renderDevices(); renderCommit(); renderRail();
 });
 $('factory-reset').addEventListener('click', factoryReset);
 

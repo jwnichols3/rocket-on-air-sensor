@@ -180,6 +180,13 @@ h3 { margin: 0 0 10px; font-size: 15px; }
       display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px;
       overflow: hidden; white-space: nowrap; margin-top: 4px; }
 
+/* ---- device rows: the same row, with a name where the colour pair goes ---- */
+.swatch.plain { background: var(--bg); color: var(--text); }
+.badge.primary { color: var(--ok); }
+.badge.off { color: var(--muted); }
+.row .links { padding: 0 12px 12px; }
+.field input[type="checkbox"] { width: auto; justify-self: start; }
+
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
          align-items: center; justify-content: center; z-index: 50; padding: 20px; }
 .modal-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;

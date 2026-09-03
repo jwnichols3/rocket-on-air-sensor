@@ -304,9 +304,29 @@ test('factory reset restores the shipped defaults', async (t) => {
 test('factory reset KEEPS the device credentials - they are compiled into the firmware', async (t) => {
   const h = await boot(t);
   const cfg = (await json(await fetch(`${h.base}/admin/config`))).config as OnAirConfig;
+  // Configured through `devices`, not `light`: `light` is a read-only projection of the
+  // primary device now, and a payload carrying both a device list and a contradicting
+  // `light` is refused rather than quietly resolved. The subject of this test is the
+  // factory reset, not which key the address arrives in.
   await fetch(`${h.base}/admin/config`, {
     method: 'PUT',
-    body: JSON.stringify({ ...cfg, light: { host: '10.0.0.9', entity: 'PresenceKey', username: 'onair', password: 'dev' } }),
+    body: JSON.stringify({
+      ...cfg,
+      devices: [
+        {
+          id: 'primary',
+          label: 'On-air light',
+          host: '10.0.0.9',
+          entity: 'PresenceKey',
+          username: 'onair',
+          password: 'dev',
+          enabled: true,
+          primary: true,
+          order: 0,
+        },
+      ],
+      light: { host: '10.0.0.9', entity: 'PresenceKey', username: 'onair', password: 'dev' },
+    }),
   });
   const res = await fetch(`${h.base}/admin/factory-reset`, {
     method: 'POST',
@@ -314,7 +334,10 @@ test('factory reset KEEPS the device credentials - they are compiled into the fi
   });
   // Not ours to reset: they were compiled into the firmware (D-17), and forgetting them
   // would take the light offline with no error - the opposite of what a reset is reached for.
-  assert.equal(((await json(res)).config as OnAirConfig).light.host, '10.0.0.9');
+  const after = (await json(res)).config as OnAirConfig;
+  assert.equal(after.light.host, '10.0.0.9');
+  assert.equal(after.devices.length, 1, 'the device list itself was reset');
+  assert.equal(after.devices[0]!.password, 'dev', 'the device credentials were reset');
 });
 
 test('factory reset ends every session', async (t) => {

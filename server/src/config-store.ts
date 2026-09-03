@@ -21,8 +21,20 @@ export interface OnAirConfig {
   states: StateRow[];
   /** Which rows `/on` and `/off` resolve to. */
   shortcuts: Shortcuts;
-  /** The device the server drives. Credentials live here rather than in the env (D-36). */
-  light: { host: string | null; entity: string; username: string | null; password: string | null };
+  /**
+   * Every device the server drives (D-87, stage 3 of #57). Credentials live here rather
+   * than in the env (D-36).
+   */
+  devices: DeviceRow[];
+  /**
+   * THE PRIMARY DEVICE, PROJECTED. Read-only: `devices` is the truth and this is derived
+   * from whichever row is `primary`, on every validate.
+   *
+   * It is kept because 43 source references and every existing test read it, and because
+   * the env overlay (D-14/D-79) is written over `light.host` and friends. Deleting it would
+   * turn a contained change into a rewrite of the whole surface for no behavioural gain.
+   */
+  light: LightBlock;
   /** The passphrase and the admin credentials (D-35, D-43). Why this file is 0600. */
   auth: AuthBlock;
 }
@@ -37,6 +49,52 @@ export interface OnAirConfig {
  */
 export type BindMode = 'all' | 'loopback' | `iface:${string}`;
 
+export interface LightBlock {
+  host: string | null;
+  entity: string;
+  username: string | null;
+  password: string | null;
+}
+
+/**
+ * One on-air light, as the config document holds it.
+ *
+ * Shaped like a state row on purpose - an immutable `id`, a freely editable `label`, and a
+ * presentation-only `order` - because the admin console's row editor is the only
+ * list-editing pattern this project has and a second one would be a second thing to learn.
+ */
+export interface DeviceRow {
+  /** Immutable slug, the only addressable handle. Never renamed (D-31/D-34). */
+  id: string;
+  /** Human phrase. Freely editable, never a key. */
+  label: string;
+  host: string | null;
+  entity: string;
+  username: string | null;
+  password: string | null;
+  /** Written to only when true. An absent bench board is a normal condition (D-87). */
+  enabled: boolean;
+  /**
+   * Exactly one row is the primary, and it is the one `confirmed` describes.
+   *
+   * D-87: `confirmed` cannot mean "every panel agreed" - a bench board that is off for
+   * weeks would make an AND over all panels permanently false and the system would report a
+   * fault as its resting state.
+   */
+  primary: boolean;
+  /** Display sort hint. Presentation only, never an address (D-31/D-34). */
+  order: number;
+}
+
+const DEFAULT_ENTITY = 'PresenceKey';
+
+/** The primary device, as a `light` block. The one place that projection is expressed. */
+export function projectLight(devices: DeviceRow[]): LightBlock {
+  const p = devices.find((d) => d.primary);
+  if (!p) return { host: null, entity: DEFAULT_ENTITY, username: null, password: null };
+  return { host: p.host, entity: p.entity, username: p.username, password: p.password };
+}
+
 export const DEFAULT_PORT = 8484;
 
 export function defaultConfig(): OnAirConfig {
@@ -46,7 +104,8 @@ export function defaultConfig(): OnAirConfig {
     bind: 'all',
     states: SEED_ROWS.map((r) => ({ ...r })),
     shortcuts: { ...SEED_SHORTCUTS },
-    light: { host: null, entity: 'PresenceKey', username: null, password: null },
+    devices: [],
+    light: { host: null, entity: DEFAULT_ENTITY, username: null, password: null },
     auth: defaultAuth(),
   };
 }
@@ -84,18 +143,67 @@ export function validateConfig(raw: unknown): Validated {
   const shortcuts = validateShortcuts(c.shortcuts, states, fail);
 
   const lightRaw = (typeof c.light === 'object' && c.light !== null ? c.light : {}) as Record<string, unknown>;
-  const light = {
+  const light: LightBlock = {
     host: strOrNull(lightRaw.host),
     entity: typeof lightRaw.entity === 'string' && lightRaw.entity !== '' ? lightRaw.entity : d.light.entity,
     username: strOrNull(lightRaw.username),
     password: strOrNull(lightRaw.password),
   };
+
+  // THE ONE PRECEDENCE RULE, and it is also the migration.
+  //
+  //   `devices` ABSENT  -> an old client or an old file. One row is synthesised from `light`.
+  //   `devices` PRESENT -> `devices` is the truth and `light` is recomputed from the primary.
+  //
+  // and, because `light` is still a writable-looking key on a document every client
+  // round-trips: a payload whose `light` CONTRADICTS its own `devices` is refused rather
+  // than quietly resolved either way.
+  //
+  // That third rule is not defensive programming, it is the whole point. `GET /admin/config`
+  // returns `devices` now, so any old client that fetches, edits `light` and puts it back
+  // would otherwise get a 200 and no change - the exact silent-success failure this project
+  // keeps being bitten by (D-79's overridden field, D-100's stale binary). Guessing which
+  // half the caller meant would be worse: it makes the outcome depend on a heuristic nobody
+  // can see. A 400 that names the fix cannot be misread.
+  //
+  // No version branch is needed, and that matters: `config.version` is a SAVE COUNTER, not
+  // a schema version, and nothing in this file has ever branched on it.
+  //
+  // An EMPTY `devices` cannot contradict anything - it names no primary to disagree with -
+  // so it falls back to the `light` projection rather than being treated as "no devices,
+  // and I mean it". That is what lets index.ts's first-boot `seedConfig` keep folding
+  // ONAIR_LIGHT_* into a default document without tripping the check below.
+  const declared = Array.isArray(c.devices) ? validateDevices(c.devices, fail) : null;
+  const devices = declared !== null && declared.length > 0 ? declared : deviceFromLight(light, d.light);
+  if (declared !== null && declared.length > 0 && c.light !== undefined) {
+    const projected = projectLight(devices);
+    const disagrees = (Object.keys(projected) as Array<keyof LightBlock>).filter((k) => projected[k] !== light[k]);
+    if (disagrees.length > 0) {
+      fail(
+        `light.${disagrees.join(', light.')} disagrees with the primary device - ` +
+          '`light` is a read-only projection of the primary row, so edit `devices` instead ' +
+          '(or omit `light` and it will be recomputed)',
+      );
+    }
+  }
+
   const auth = validateAuth(c.auth, fail);
 
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
-    config: { version: version!, port: port!, bind: bind!, states: states!, shortcuts: shortcuts!, light, auth },
+    config: {
+      version: version!,
+      port: port!,
+      bind: bind!,
+      states: states!,
+      shortcuts: shortcuts!,
+      devices: devices!,
+      // Derived, never stored independently. Two representations of one truth is how they
+      // drift; this makes drift impossible by construction.
+      light: projectLight(devices!),
+      auth,
+    },
   };
 }
 
@@ -143,6 +251,94 @@ export function parseBind(v: unknown): BindMode | null {
   if (v === 'all' || v === 'loopback') return v;
   if (typeof v === 'string' && v.startsWith('iface:') && v.length > 'iface:'.length) return v as BindMode;
   return null;
+}
+
+/**
+ * An old document, or an old client, that knows only `light`.
+ *
+ * A WHOLLY DEFAULT `light` yields NO devices, which is the correct reading of a fresh
+ * install: `light.host: null` has always meant "no light", `makeDriver` returns undefined
+ * and `NoopDriver` takes over. Any non-default field yields one row, so an operator who set
+ * only a custom entity name does not silently lose it.
+ */
+function deviceFromLight(light: LightBlock, dflt: LightBlock): DeviceRow[] {
+  const untouched =
+    light.host === dflt.host &&
+    light.entity === dflt.entity &&
+    light.username === dflt.username &&
+    light.password === dflt.password;
+  if (untouched) return [];
+  return [
+    {
+      id: 'primary',
+      label: 'On-air light',
+      host: light.host,
+      entity: light.entity,
+      username: light.username,
+      password: light.password,
+      enabled: true,
+      primary: true,
+      order: 0,
+    },
+  ];
+}
+
+/**
+ * Unlike `light`, which cannot produce an error at all, a device row is validated properly.
+ * A typo in a device list is a thing an operator can now make, so it has to be catchable.
+ */
+function validateDevices(v: unknown[], fail: (m: string) => void): DeviceRow[] {
+  const rows: DeviceRow[] = [];
+  const seen = new Set<string>();
+  for (const [i, raw] of v.entries()) {
+    if (typeof raw !== 'object' || raw === null) {
+      fail(`devices[${i}] must be an object`);
+      continue;
+    }
+    const r = raw as Record<string, unknown>;
+    const id = typeof r.id === 'string' ? r.id : '';
+    if (!ID_PATTERN.test(id)) {
+      fail(`devices[${i}].id must match ${ID_PATTERN.source}`);
+      continue;
+    }
+    if (seen.has(id)) {
+      fail(`devices[${i}].id "${id}" is a duplicate`);
+      continue;
+    }
+    seen.add(id);
+    const label = typeof r.label === 'string' ? r.label : '';
+    if (label.length < 1 || label.length > 64) fail(`devices[${i}].label must be 1..64 characters`);
+    if (r.enabled !== undefined && typeof r.enabled !== 'boolean') fail(`devices[${i}].enabled must be a boolean`);
+    if (r.primary !== undefined && typeof r.primary !== 'boolean') fail(`devices[${i}].primary must be a boolean`);
+    const order = typeof r.order === 'number' && Number.isInteger(r.order) && r.order >= 0 && r.order <= 999 ? r.order : null;
+    if (order === null) fail(`devices[${i}].order must be an integer 0-999`);
+    rows.push({
+      id,
+      label,
+      host: strOrNull(r.host),
+      entity: typeof r.entity === 'string' && r.entity !== '' ? r.entity : DEFAULT_ENTITY,
+      username: strOrNull(r.username),
+      password: strOrNull(r.password),
+      enabled: r.enabled !== false,
+      primary: r.primary === true,
+      order: order ?? 0,
+    });
+  }
+
+  // AN EMPTY LIST IS LEGAL and means no light - today's behaviour when `light.host` is null.
+  // Requiring a primary unconditionally would make a fresh install fail validation before
+  // its first device has been typed in.
+  if (rows.length === 0) return rows;
+
+  const primaries = rows.filter((r) => r.primary);
+  if (primaries.length === 0) fail('exactly one device must be primary - it is the one `confirmed` describes');
+  else if (primaries.length > 1)
+    fail(`exactly one device must be primary, got ${primaries.length}: ${primaries.map((r) => r.id).join(', ')}`);
+  // A DISABLED PRIMARY IS A CONTRADICTION, not a preference: it is the row `confirmed`
+  // describes, so switching it off would leave `confirmed` describing a panel the server has
+  // agreed never to write to.
+  else if (!primaries[0]!.enabled) fail(`the primary device "${primaries[0]!.id}" cannot be disabled`);
+  return rows;
 }
 
 function validateStates(v: unknown, fail: (m: string) => void): StateRow[] | null {

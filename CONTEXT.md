@@ -5315,3 +5315,96 @@ else (state, light control, API) lives on the receiver.
   `auth-routes.test.ts` now wraps every status assertion in a helper that prints the route, the
   content type and the body, so the next stray response names its owner instead of printing
   `403 !== 401`.
+- **D-147 (2026-09-03)** **Several on-air lights, one authoritative - and the seam is the
+  DRIVER, not the state model.** Implements **stage 3 of
+  [#57](https://github.com/jwnichols3/rocket-on-air-sensor/issues/57)**, the only stage of
+  that ticket never built, under the ruling **D-87** already recorded. Spec:
+  `docs/superpowers/specs/2026-09-03-multi-device-design.md`.
+
+  `config.devices` is a list of rows shaped like state rows - immutable `id`, freely editable
+  `label`, presentation-only `order`, plus `host`/`entity`/`username`/`password`, `enabled`
+  and `primary`. Exactly one row is `primary`, it may not be disabled, and it is the one
+  `confirmed` describes. An **empty list is legal and means no light**, which is what
+  `light.host: null` has always meant.
+
+  **`FanOutDriver` is the whole design.** D-87 says one authoritative panel and the rest
+  best-effort, and that is expressible as a `LightDriver` that owns other `LightDriver`s:
+  `set()` writes to everyone and returns the PRIMARY's answer; `read`, `repainted` and
+  `glassDark` ask the primary and nobody else. So **`supervise.ts`, `state.ts` and the wire
+  contract did not change at all** - `confirmed` still means a genuine device read from the
+  panel that matters, rather than a quorum that can be gamed by plugging in more hardware.
+
+  **The fan-out is PARALLEL, and that is load-bearing rather than tidy.** `writeChain` is ONE
+  queue shared by every HTTP write and the supervisor tick, and #68 measured 6.4s for a write
+  against a dead panel. In series, each absent board would put that 6.4s inside the queue
+  every caller waits on - #68 reintroduced through the side door. `set()` resolves on the
+  primary and secondaries settle behind it; a device with a write still in flight is
+  **skipped**, not queued behind itself, so a board gone for a week holds at most one
+  outstanding call.
+
+  **`light` survives as a read-only PROJECTION of the primary row**, recomputed on every
+  validate. Keeping it is what made this a contained change rather than a rewrite: 43 source
+  references and every existing test read it, and the env overlay is written over
+  `light.host`. The precedence is one rule - `devices` absent means migrate from `light`;
+  `devices` present means `devices` wins - plus a third that is the actual point: **a payload
+  whose `light` contradicts its own non-empty `devices` is REFUSED**. `GET /admin/config`
+  returns `devices` now, so an old client that fetched, edited `light` and put it back would
+  otherwise get a `200` and no change. Guessing which half it meant would be worse, because
+  the outcome would depend on a heuristic nobody can see.
+
+  **`ONAIR_LIGHT_HOST` overrides the PRIMARY row and nothing else.** That is D-14's SSH escape
+  hatch kept intact: "the light" in that sentence has always meant the one that matters.
+  Applying it to every row would repoint a whole wall at one address.
+
+  **The latent defect this uncovered is the more important half.** `applyConfig` never
+  rebuilt the driver, so changing the device address in the admin console returned `200`,
+  persisted the file, and left the process talking to the old panel until somebody restarted
+  the daemon. Silently. That is the same shape as D-79's overridden field and D-100's stale
+  binary, and it has presumably been true since D-36. The fan-out **reconfigures in place** -
+  `driver` is captured by closure in `makeServer` and in the supervisor, so swapping the
+  object would leave both holding the old one - and it keeps the driver instance of any
+  device that did not move, so a save that renamed a label does not reset a panel's retry
+  ladder and frame counter. `driverFor` therefore builds a fan-out **even over zero devices**;
+  a `NoopDriver` there could never be reconfigured into a real one, so the first device added
+  on a fresh install would have needed a restart.
+
+  **Only the primary may stop the service.** A `DriverConfigError` from the authoritative
+  panel at boot is a deploy bug and stays loud. A secondary that is misconfigured is logged
+  and marked unreachable, because a typo typed into the console must not brick the daemon at
+  its next restart - a daemon that will not start is a false OFF caused by the panel that
+  matters least.
+
+  **`GET /admin/health` gained a `devices` array** (`reachable`, `lastOkAt`, `lastError`).
+  Before it, device reachability was exposed nowhere except `confirmed`, which describes the
+  primary alone; a console listing two panels with no way to say which one is dead is a
+  console that lies, which is
+  [#59](https://github.com/jwnichols3/rocket-on-air-sensor/issues/59)'s complaint. A disabled
+  or unaddressed row is **listed** (the operator put it there) and reports `reachable: null`
+  (nobody asked it anything).
+
+  **Two things the tests caught that reasoning had not.**
+  - **Reachability cannot be read from the call resolving.** `EsphomeTextDriver` never throws
+    - a switched-off board answers `unknown` (D-92) - so "it resolved" marked a dead panel
+    healthy. The verdict is read from the RESULT. And `setTableVersion` returns void and
+    swallows its own errors, so it carries no evidence at all and must record nothing: no
+    verdict means health is left exactly as it was.
+  - **Writing the `unknown` row proves nothing.** `unknown` is both a real row a panel can
+    display (D-34) and the sentinel a driver returns when it cannot reach the device - the
+    same string - so `set('unknown')` against a dead board reads back `unknown` and looks
+    like a perfect write. The boot re-apply writes the persisted state, which is `unknown` on
+    a fresh install, and it marked an absent bench board reachable with a `lastOkAt` it had
+    never earned.
+
+  **No firmware change.** `PresenceKey`, `TableVersion`, `Night` and `PanelSleep` are declared
+  in the shared `onair-core.yaml` with **un-interpolated** names, identical on both boards -
+  that asymmetry is what lets one driver class address N hosts, while only the diagnostic
+  sensors interpolate `${friendly_name}`. The device -> server leg is still configured on the
+  panel itself and the panel still pulls the table, so the server keeps no registry for the
+  pull direction (D-38 stands).
+
+  **Verified by mutation, not by reading.** 23 mutations across the fan-out, the schema, the
+  wiring and the health route; every one turns a **named** test red. Two did not, the first
+  time, and both were weak tests rather than weak code: one fixture put the primary first, so
+  "the primary" could not be told from "whichever is first", and the unhandled-rejection claim
+  had no test at all - a dead secondary taking the daemon down with it is a false OFF caused
+  by the least important panel in the house.

@@ -25,8 +25,12 @@ The firmware half needs `npm run firmware:setup` and a `firmware/configs/secrets
 (gitignored) once per machine. Without them `verify` fails and says which is missing; it
 does not skip quietly.
 
-**There is a live device.** A real ESP32 drives a real light, supervised by a
-LaunchDaemon on 8484. `onair restart` needs sudo with a TTY, so an agent cycles the
+**There are live devices.** Real ESP32s drive a real light, supervised by a
+LaunchDaemon on 8484. Since D-147 the server drives a LIST (`config.devices`): the CrowPanel
+at `10.42.14.239` is the **primary**, and `confirmed` describes it and nothing else; the
+Elegoo at `10.42.12.77` is a best-effort secondary and is normally off (D-87). An absent
+secondary is a normal condition, never a fault - check `GET /admin/health`'s `devices` array
+before concluding a panel is broken. `onair restart` needs sudo with a TTY, so an agent cycles the
 daemon by killing the process **listening** on 8484 and letting `KeepAlive` respawn it
 against a rebuilt `server/dist/`. Use `lsof -ti :8484 -sTCP:LISTEN` and nothing else:
 a bare `lsof -ti :8484` also lists every CLIENT with a socket open to it, so

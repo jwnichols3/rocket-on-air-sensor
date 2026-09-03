@@ -15,6 +15,7 @@ import {
 import { envOverrides, effectiveLight } from './config.js';
 import { validateConfig, type OnAirConfig } from './config-store.js';
 import type { LightDriver } from './driver.js';
+import { FanOutDriver } from './fanout-driver.js';
 import { DISPLAY_HTML } from './display.js';
 import { DOCS_HTML } from './docs-page.js';
 import { escapeHtml, repairHtml } from './repair.js';
@@ -100,6 +101,46 @@ const ROUTES: Record<string, string[]> = {
  * not appear. It is one file and a handful of requests a day.
  */
 const ADMIN_BUNDLE = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'admin', 'index.html');
+
+/**
+ * Per-device reachability, for the admin console's device list.
+ *
+ * WHY THIS EXISTS AT ALL: `confirmed` and `confirmedReason` describe the PRIMARY panel and
+ * only the primary (D-87), so before this route there was no way for any surface to learn
+ * that a secondary had gone away. A console that lists two panels and cannot say which one
+ * is dead is a console that lies - and #59 is the ticket about exactly that blindness.
+ *
+ * It joins two sources on purpose. The driver knows reachability but nothing about labels or
+ * disabled rows; the config knows the rows but nothing about whether they answer. A device
+ * that is DISABLED, or has no address, therefore appears here with `reachable: null` - it is
+ * listed, because the operator put it there, and it makes no claim, because nobody asked it
+ * anything.
+ */
+function deviceHealth(deps: ServerDeps): unknown[] {
+  const rows = deps.config?.().devices ?? [];
+  const driven = new Map(
+    (deps.driver instanceof FanOutDriver ? deps.driver.health() : []).map((h) => [h.id, h]),
+  );
+  return rows
+    .slice()
+    .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))
+    .map((row) => {
+      const h = driven.get(row.id);
+      return {
+        id: row.id,
+        label: row.label,
+        // The driver's host, when there is one, because that is the address actually being
+        // driven - the env overlay outranks the document for the primary (D-79) and a
+        // console that reported the document's value would be back to lying about it.
+        host: h?.host ?? row.host,
+        primary: row.primary,
+        enabled: row.enabled,
+        reachable: h?.reachable ?? null,
+        lastOkAt: h?.lastOkAt ?? null,
+        lastError: h?.lastError ?? null,
+      };
+    });
+}
 
 function serveAdminBundle(res: ServerResponse): void {
   let html: string;
@@ -518,6 +559,7 @@ async function handle(
       nodeVersion: process.version,
       port: boundPort(server),
       stateFileWritable: isStateFileWritable(deps.stateFile),
+      devices: deviceHealth(deps),
     });
     return;
   }

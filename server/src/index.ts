@@ -2,9 +2,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from './app.js';
-import { effectiveLight, loadEnvOverlay } from './config.js';
-import type { OnAirConfig } from './config-store.js';
-import { EsphomeTextDriver } from './esphome-driver.js';
+import { loadEnvOverlay } from './config.js';
 
 /**
  * `config.env` has RETIRED as the config source (D-36). `~/.onair/config.json` holds the
@@ -33,31 +31,11 @@ if (token !== undefined && token.trim() === '') {
   process.exit(1);
 }
 
-/**
- * The env overlay, applied over the config document's `light` block. A host in the
- * environment still wins - that is the SSH escape hatch, and it is why these are read here
- * rather than being folded into the document on load.
- */
-function makeDriver(config: OnAirConfig): EsphomeTextDriver | undefined {
-  // effectiveLight() is the ONE expression of this precedence (D-79). It used to be written
-  // out here and nowhere else, so the admin console had no way to know what the driver had
-  // resolved and rendered the document's value as if it were in effect.
-  const light = effectiveLight(config.light);
-  if (!light.host) return undefined;
-  return new EsphomeTextDriver({
-    host: light.host,
-    entity: light.entity,
-    username: light.username ?? undefined,
-    password: light.password ?? undefined,
-  });
-}
-
 const app = await createApp({
   configFile,
   stateFile,
   port: parsePort(process.env.ONAIR_PORT),
   token,
-  makeDriver,
   // On a host upgrading from config.env, the first boot lifts the device settings out of
   // the env file and into the document, which is where they live from now on (D-36). The
   // env file keeps working as an overlay, so nothing breaks if this is wrong.

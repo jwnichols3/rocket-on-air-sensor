@@ -9,8 +9,10 @@ import {
   type OnAirConfig,
 } from './config-store.js';
 import { rotate, SessionStore } from './auth.js';
+import { deviceSpecs } from './config.js';
 import { NoopDriver, type LightDriver } from './driver.js';
 import { EsphomeTextDriver } from './esphome-driver.js';
+import { FanOutDriver } from './fanout-driver.js';
 import { loadState, saveState } from './persist.js';
 import { createApiServer, errorMessage } from './server.js';
 import { createSseHub } from './sse.js';
@@ -30,9 +32,8 @@ export interface AppOptions {
    * the break-glass path for a box you can only reach over SSH.
    */
   token?: string;
+  /** Built from the config's `devices` list when not supplied, and never reconfigured. */
   driver?: LightDriver;
-  /** Built from the config's `light` block when not supplied. */
-  makeDriver?: (config: OnAirConfig) => LightDriver | undefined;
   /**
    * Applied to the defaults when there is no config file yet, and then written out. This
    * is how `config.env`'s values become the document on an upgrading host - after which
@@ -175,8 +176,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
   // Annotated, not inferred: the inferred union includes NoopDriver, which has no
   // `setTableVersion`, and TypeScript refuses `?.` on a union where one member lacks the
   // property outright. The interface is what every caller here is entitled to assume.
-  const driver: LightDriver =
-    opts.driver ?? opts.makeDriver?.(config) ?? driverFor(config, log) ?? new NoopDriver(log);
+  const driver: LightDriver = opts.driver ?? driverFor(config, log);
 
   const stateLoaded = await loadState(opts.stateFile, log);
   const store = new StateStore(stateLoaded ?? defaultState(), new StateTable(config.states, config.version));
@@ -188,9 +188,31 @@ export async function createApp(opts: AppOptions): Promise<App> {
   // It checks that the entity EXISTS and nothing more. `select` could be asked for its
   // compiled option list; `text` has no such list by design (D-38), so a firmware/server
   // skew now surfaces as a read-back that does not match, i.e. `confirmed: unknown`.
-  if (driver instanceof EsphomeTextDriver) {
-    if ((await driver.verifyEntity()) === null) {
+  //
+  // ONLY THE PRIMARY MAY STOP THE SERVICE. A `DriverConfigError` from the authoritative
+  // panel is a deploy bug and stays loud, exactly as it was when there was one light. A
+  // secondary that is misconfigured is logged and marked unreachable instead: a typo typed
+  // into the admin console must not brick the daemon at its next restart, because a daemon
+  // that will not start is a false OFF with extra steps - caused by the panel that matters
+  // least.
+  const bootPrimary = driver instanceof FanOutDriver ? driver.primaryDriver() : driver;
+  if (bootPrimary instanceof EsphomeTextDriver) {
+    if ((await bootPrimary.verifyEntity()) === null) {
       log('[onair] light unreachable at boot; continuing with confirmed=unknown');
+    }
+  }
+  if (driver instanceof FanOutDriver) {
+    for (const s of driver.secondaryDrivers()) {
+      if (!(s.driver instanceof EsphomeTextDriver)) continue;
+      try {
+        if ((await s.driver.verifyEntity()) === null) {
+          log(`[onair] secondary ${s.host} unreachable at boot; it is best-effort, continuing`);
+        }
+      } catch (err) {
+        // Caught on purpose, and this catch IS the feature.
+        log(`[onair] secondary ${s.host} is misconfigured and will be skipped: ${errorMessage(err)}`);
+        driver.markUnreachable(s.id, errorMessage(err));
+      }
     }
   }
 
@@ -257,9 +279,20 @@ export async function createApp(opts: AppOptions): Promise<App> {
    * The device credentials are kept. They are not ours to reset - they were compiled into
    * the firmware (D-17) and a reset that silently forgot them would take the light offline
    * with no error, which is the opposite of what someone reaching for a factory reset wants.
+   *
+   * IT IS `devices` THAT IS CARRIED, NOT `light`. `light` is a projection of the primary
+   * device now, so carrying it forward over a default (empty) device list would recompute it
+   * straight back to `host: null` - a reset that forgets the light after all, by exactly the
+   * route this comment says not to take. Caught by "factory reset KEEPS the device
+   * credentials", which is what that test is for.
    */
   async function factoryReset(): Promise<void> {
-    const fresh = { ...defaultConfig(), version: config.version + 1, light: { ...config.light } };
+    const fresh = {
+      ...defaultConfig(),
+      version: config.version + 1,
+      devices: config.devices.map((d) => ({ ...d })),
+      light: { ...config.light },
+    };
     if (opts.configFile) await saveConfigFile(opts.configFile, fresh);
     config = fresh;
     problem = undefined;
@@ -304,6 +337,23 @@ export async function createApp(opts: AppOptions): Promise<App> {
     config = next;
     problem = undefined; // a successful save is the repair
     store.setTable(new StateTable(next.states, next.version));
+
+    // THE DEVICE LIST TAKES EFFECT NOW, NOT AT THE NEXT RESTART.
+    //
+    // Before this line existed, `applyConfig` saved the document, answered 200, and left the
+    // process talking to the old panel until somebody restarted the daemon. Change the
+    // address in the console and nothing happened, silently - the same shape as D-79's
+    // overridden field and D-100's stale binary, and the single most likely way to ship this
+    // feature broken.
+    //
+    // It reconfigures IN PLACE. `driver` is captured by closure in `makeServer` and in the
+    // supervisor, so replacing the object would leave both of them holding the old one; the
+    // fan-out swaps its contents instead and every holder keeps working. A driver injected
+    // through `opts.driver` is deliberately left alone - that is a test's own driver and
+    // reconfiguring it would be this function reaching into a seam that is not its business.
+    if (driver instanceof FanOutDriver) {
+      driver.reconfigure(deviceSpecs(next.devices));
+    }
     // Nudge here as well as on a state write (D-42). Without this a pure presentation
     // edit - renaming a row, changing a colour - reaches the panel only when the next
     // state write happens, which on a quiet afternoon is hours. The nudge is what makes
@@ -393,13 +443,33 @@ export async function createApp(opts: AppOptions): Promise<App> {
 }
 
 /** The device driver described by the config's `light` block, or nothing. */
-function driverFor(config: OnAirConfig, log: (line: string) => void): LightDriver | undefined {
-  if (!config.light.host) return undefined;
-  return new EsphomeTextDriver({
-    host: config.light.host,
-    entity: config.light.entity,
-    username: config.light.username ?? undefined,
-    password: config.light.password ?? undefined,
+/**
+ * The fan-out over every enabled, addressed device (D-87, stage 3 of #57).
+ *
+ * `undefined` when there is nothing to drive, so `NoopDriver` still takes over on a fresh
+ * install exactly as it did when this read `if (!config.light.host) return undefined`.
+ *
+ * The env overlay is applied inside `deviceSpecs`, which is the one expression of that
+ * precedence (D-79). It used to be written out in index.ts's `makeDriver`, and having it in
+ * two places is what let the admin console render a value the driver had already overridden.
+ */
+function driverFor(config: OnAirConfig, log: (line: string) => void): FanOutDriver {
+  // ALWAYS a fan-out, even over zero devices. An empty one already behaves as a noop - it
+  // returns `unknown` and drives nothing - and building it unconditionally is what lets the
+  // FIRST device added on a fresh install take effect without a restart. A NoopDriver here
+  // could never be reconfigured into a real one, so that install would save, report success
+  // and go on driving nothing.
+  const specs = deviceSpecs(config.devices);
+  return new FanOutDriver({
+    specs,
+    make: (spec) =>
+      new EsphomeTextDriver({
+        host: spec.host,
+        entity: spec.entity,
+        username: spec.username ?? undefined,
+        password: spec.password ?? undefined,
+        log,
+      }),
     log,
   });
 }

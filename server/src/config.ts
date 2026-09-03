@@ -1,5 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { DeviceRow } from './config-store.js';
+import type { DeviceSpec } from './fanout-driver.js';
 
 /**
  * Loads ONAIR_* values from an env file into process.env, if present.
@@ -72,7 +74,12 @@ export function envOverrides(env: NodeJS.ProcessEnv = process.env): EnvOverride[
   }).map((o) => ({ key: o.key, variable: o.variable }));
 }
 
-type LightBlock = { host: string | null; entity: string; username: string | null; password: string | null };
+/**
+ * Re-exported from the config document rather than redeclared: two structurally identical
+ * types drift the moment one of them gains a field.
+ */
+export type { LightBlock } from './config-store.js';
+type LightBlock = import('./config-store.js').LightBlock;
 
 /**
  * The device settings the service is ACTUALLY using: the overlay over the document.
@@ -92,4 +99,32 @@ export function effectiveLight(light: LightBlock, env: NodeJS.ProcessEnv = proce
     username: pick('ONAIR_LIGHT_USER', light.username),
     password: pick('ONAIR_LIGHT_PASS', light.password),
   };
+}
+
+/**
+ * Every device the server should actually drive, with the env overlay applied.
+ *
+ * THE OVERLAY LANDS ON THE PRIMARY ROW AND NOWHERE ELSE. `ONAIR_LIGHT_HOST` is the
+ * documented way to point a box at a different light over SSH when its own UI cannot be
+ * reached (D-14), and "the light" in that sentence has always meant the one that matters.
+ * Applying it to every row would repoint an entire wall at one address; applying it to none
+ * would delete the escape hatch. Secondary devices are document-only.
+ *
+ * Rows with no address are dropped rather than driven, which is the list-shaped version of
+ * `if (!light.host) return undefined` - a device somebody added but has not addressed yet is
+ * not an error, it is an unfinished row.
+ */
+export function deviceSpecs(devices: DeviceRow[], env: NodeJS.ProcessEnv = process.env): DeviceSpec[] {
+  return devices
+    .filter((d) => d.enabled)
+    .map((d) => {
+      const conn = { host: d.host, entity: d.entity, username: d.username, password: d.password };
+      // Taken from the ROW, not from `config.light`. `light` is a projection of this same
+      // row so the two agree in any validated document - but deriving the primary's address
+      // from the projection would mean a bug that let them drift silently repointed the one
+      // panel that matters. The row is the truth; `light` is the view of it.
+      const resolved = d.primary ? effectiveLight(conn, env) : conn;
+      return { id: d.id, ...resolved, primary: d.primary };
+    })
+    .filter((s): s is DeviceSpec => s.host !== null && s.host !== '');
 }

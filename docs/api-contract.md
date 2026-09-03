@@ -673,6 +673,49 @@ driving.
 credential and are never reported as effective values; an overridden credential is named in
 `overrides` and nothing more, which is enough to say where it is set.
 
+**`config.light` is a read-only PROJECTION of the primary device (D-147).** The document's
+truth is `config.devices`, a list of rows; `light` is recomputed from whichever row is
+`primary` on every save. Two consequences worth stating on the wire:
+
+- `env.overrides` and `env.effective` describe **the primary row only**. `ONAIR_LIGHT_HOST`
+  is D-14's escape hatch for pointing a box at a different light over SSH, and "the light"
+  there has always meant the one that matters. Secondary devices are document-only.
+- A `PUT /admin/config` whose `light` **contradicts** its own non-empty `devices` is refused
+  with a `400` naming the offending fields. It is not resolved either way. Since this route
+  now returns `devices`, a client that fetched the document, edited `light` and put it back
+  would otherwise get a `200` and no change - and a save that reports success and changes
+  nothing is the failure this project keeps being bitten by. Edit `devices`, or omit `light`
+  and let it be recomputed.
+
+### `GET /admin/health` and the device list
+
+`GET /admin/health` carries a `devices` array, because reachability is exposed nowhere else:
+
+```json
+{
+  "uptime": 1234.5, "pid": 501, "port": 8484, "stateFileWritable": true,
+  "devices": [
+    { "id": "crow", "label": "CrowPanel", "host": "10.42.14.239", "primary": true,
+      "enabled": true, "reachable": true, "lastOkAt": "2026-09-03T16:35:29Z", "lastError": null },
+    { "id": "elegoo", "label": "Elegoo", "host": "10.42.12.77", "primary": false,
+      "enabled": true, "reachable": false, "lastOkAt": null,
+      "lastError": "asked for \"on-air\", device reported \"unknown\"" }
+  ]
+}
+```
+
+**`confirmed` still describes the PRIMARY panel and only the primary** (D-87). That is the
+whole reason this array exists: without it no surface could learn that a secondary had gone
+away, and a console listing two panels with no way to say which one is dead is a console that
+lies (#59).
+
+**`reachable: null` means nobody asked**, and is not a hedge. A device that is `enabled: false`
+or has no address is still **listed** - the operator put it there - and makes no claim. As
+everywhere else in this API, an absence of evidence is reported as an absence of evidence.
+
+**A dead secondary is not a failed write.** It never changes a `2xx`, never changes
+`confirmed`, and is not a fault: an absent bench board is a normal condition (D-87).
+
 ---
 
 ## 6. Lifecycle: what happens when the table changes under you
