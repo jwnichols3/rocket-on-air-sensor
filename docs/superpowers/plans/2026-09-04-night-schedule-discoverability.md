@@ -115,8 +115,9 @@ together as D-138 prescribes.
 - [x] Firmware page + tests (3222 checks, 0 failed)
 - [x] Console anchor link + tests
 - [x] D-151 recorded
-- [ ] `npm run verify` green
-- [ ] Commit + push
-- [ ] Server rebuilt and restarted
-- [ ] CrowPanel compiled via `make compile` (fresh timestamp), flashed, verified past 60 s
-- [ ] #95 closed again with transcripts
+- [x] `npm run verify` green (exit 0; console 131/131; firmware 3222 checks, 0 failed)
+- [x] Commit + push (`51c54c8`)
+- [x] Server rebuilt and restarted 22:30:06; `/admin` carries the `#night` anchor link
+- [x] CrowPanel compiled via `make compile` (built 2026-09-04 22:28:04), flashed 22:30:21,
+      verified at +81 s and later: bar on the default page between verdict and Clock
+- [x] #95 closed again with transcripts. Done.
