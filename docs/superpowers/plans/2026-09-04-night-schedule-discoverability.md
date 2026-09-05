@@ -97,3 +97,26 @@ now does). CLAUDE.md corrected; D-150 records it.
       21:28:01, verified at 21:29:23 and 21:29:53: Build moved, link on the verdict line,
       schedule intact at 23:00 / 07:00
 - [x] #95 and #96 closed with transcripts. Done.
+
+## Reopened 2026-09-04: the bar itself goes on the default page (D-151)
+
+Rocket on the D-149 fix: *"bad design - it is hard to see. Have the Night schedule show up by
+default."* Approach B after all; the byte argument yields to findability and the numbers move
+together as D-138 prescribes.
+
+- `render_settings()` renders the verdict line, then the Night bar, then Clock, Pages, Beta.
+- `?night=1`, the footer word and the verdict-line link removed; `config_page()` loses `show_night`.
+- Bar gets `id="night"`; console card link -> `/onair/config#night`.
+- Reserve 3000 -> 3600, fence 4400 -> 5000. Default page 3882 B, worst 4631 B.
+- Two tests corrected: the action allow-list gains `night`; the Clock radio checks name `clock`.
+
+### Checklist (rework)
+
+- [x] Firmware page + tests (3222 checks, 0 failed)
+- [x] Console anchor link + tests
+- [x] D-151 recorded
+- [ ] `npm run verify` green
+- [ ] Commit + push
+- [ ] Server rebuilt and restarted
+- [ ] CrowPanel compiled via `make compile` (fresh timestamp), flashed, verified past 60 s
+- [ ] #95 closed again with transcripts

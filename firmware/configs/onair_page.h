@@ -660,14 +660,13 @@ inline void render_bench(std::string &h) {
  *
  * "not asleep: the row is busy" and "not asleep: no time from the network" are the two
  * conditions somebody otherwise files a bug about. They cost about eighty bytes to answer
- * here and an afternoon to answer any other way, so they go on the default page while the
- * four controls stay behind `?night=1`.
+ * here and an afternoon to answer any other way. The controls sit directly under it (#95).
  *
  * Reads the snapshot the main loop leaves in `Held`, under the lock. This runs on the httpd
  * task and cannot reach an `id()`, which is also why the verdict is a shared pure function
  * rather than the seven-branch lambda it used to be.
  */
-inline void render_night_line(std::string &h, bool link_to_bar) {
+inline void render_night_line(std::string &h) {
   onair::NightInput in;
   {
     esphome::LockGuard guard(held().lock);
@@ -701,18 +700,16 @@ inline void render_night_line(std::string &h, bool link_to_bar) {
       h += "<strong>on</strong>. Refusing to darken: the row is busy, or there is no data.";
       break;
   }
-  // THE SENTENCE THAT NAMES THE SCHEDULE IS WHERE SOMEBODY LOOKS TO CHANGE IT (#95). The
-  // controls were one click away already, but the click was a footer word beside "Beta", and
-  // Rocket read this line and could not find them. About 60 bytes on the default page and
-  // none on the page that renders the bar - a link to a bar that is right below it is noise.
-  if (link_to_bar)
-    h += " <a href=\"/onair/config?night=1\">Change the schedule</a>";
   h += "</p>";
 }
 
-/// The night schedule's three controls (#81). Off the default page for the byte budget,
-/// exactly like the Beta bar - and like it, ALWAYS rendered when the override is actually in
-/// force, because a control that is holding the screen dark must never be the hidden one.
+/// The night schedule's three controls (#81), ON THE DEFAULT PAGE, first under the heading
+/// (#95). #81 put them behind `?night=1` for the byte budget and #95 first tried a link from
+/// the verdict line; Rocket, looking for where to change the times: "bad design - it is hard to
+/// see. Have the Night schedule show up by default." So the bar is always here, right under
+/// the sentence that names the schedule, and the reserve and fence grew by its size (D-151).
+///
+/// The `id` is the console's anchor: its device card links straight to this bar.
 ///
 /// Radios and not a checkbox, matching render_glass. An unchecked checkbox posts nothing at
 /// all, and "absent" already means "no override" everywhere else on this page - so a
@@ -723,7 +720,7 @@ inline void render_night(std::string &h) {
     esphome::LockGuard guard(held().lock);
     in = held().night_in;
   }
-  h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\">"
+  h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\" id=\"night\">"
        "<input type=\"hidden\" name=\"action\" value=\"night\">"
        "<strong>Night schedule</strong>"
        "<label><input type=\"radio\" name=\"night\" value=\"off\"";
@@ -746,25 +743,22 @@ inline void render_night(std::string &h) {
 }
 
 /// Everything you set once and then leave alone, in one place and below the table.
-inline void render_settings(std::string &h, bool show_bench, bool show_night) {
+inline void render_settings(std::string &h, bool show_bench) {
   h += "<h2>Panel settings</h2>";
-  // Same rule as the Beta bar below, same reason (#81). A dark panel always shows the bar
-  // that can undo it; a page without the bar links to it from the verdict line (#95).
-  bool night_bar = show_night || held().night_dark;
-  render_night_line(h, !night_bar);
+  // The verdict, then the controls that set it, always (#95). A dark panel therefore always
+  // shows the bar that can undo the darkness, which is the one rule #81 never bent.
+  render_night_line(h);
+  render_night(h);
   render_glass(h);
   render_appearance(h);
   // The Beta bar is off the default page for the byte budget, but an ACTIVE override always
   // renders: a hidden control holding the screen dark is the trap this whole thing avoids.
   if (show_bench || bench_active())
     render_bench(h);
-  if (night_bar)
-    render_night(h);
 }
 
 inline std::string config_page(const std::string &banner, Submitted outcome,
-                               const std::string &open_id, bool show_bench = false,
-                               bool show_night = false) {
+                               const std::string &open_id, bool show_bench = false) {
   Table table;
   Overlay overlay;
   bool have;
@@ -789,13 +783,13 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
   }
 
   std::string h;
-  // 3000 rather than 2600 since #81. THE FIXED HALF OF THIS PAGE GREW, so the fixed half of
-  // the reserve grows with it: the always-visible verdict line is 123 B, and the Night bar is
-  // another 545 B on the page a dark panel serves. Raising the fence alone would have paid for
-  // them out of the gap between fence and reserve, and that gap is the safety margin itself.
-  // The cost is 400 B of TRANSIENT heap while a page renders, on a board with a proven 24.7 kB
-  // contiguous floor - which is the cheap side of the trade against a reallocation.
-  h.reserve(3000 + rows * 420 + (open_id.empty() ? 0 : 2200));
+  // 3600 since #95, 3000 since #81, 2600 before. THE FIXED HALF OF THIS PAGE GREW, so the
+  // fixed half of the reserve grows with it: #81 added the 123 B verdict line and a 545 B
+  // Night bar on the dark page only; #95 puts that bar on EVERY page. Raising the fence alone
+  // would pay for it out of the gap between fence and reserve, and that gap is the safety
+  // margin itself. The cost is TRANSIENT heap while a page renders, on a board with a proven
+  // 24.7 kB contiguous floor - the cheap side of the trade against a reallocation.
+  h.reserve(3600 + rows * 420 + (open_id.empty() ? 0 : 2200));
 
   page_head(h, "On-Air panel - configuration", ip, db);
   h += "<h1>Panel configuration</h1>";
@@ -858,7 +852,7 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
     h += "<p class=\"banner err\">This panel has not received the list of states from the "
          "server, so there is nothing to change yet. Check the server address and password "
          "on the ESPHome dashboard, then press Refresh.</p>";
-    render_settings(h, show_bench, show_night);
+    render_settings(h, show_bench);
     page_foot(h);
     return h;
   }
@@ -907,12 +901,11 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
          "edited here. Edit them in the admin console instead.</p>";
   }
 
-  render_settings(h, show_bench, show_night);
+  render_settings(h, show_bench);
 
   // A LINK, because a query parameter nobody can see is a setting nobody can reach. The
   // bar is off the default page for bytes, not to hide it.
   h += "<p class=\"m\"><a href=\"/onair\">Status</a> &middot; "
-       "<a href=\"/onair/config?night=1\">Night schedule</a> &middot; "
        "<a href=\"/onair/config?bench=1\">Beta</a> &middot; "
        "<a href=\"/?esphome=1\">ESPHome dashboard, for the server address and "
        "password</a></p>";
@@ -1192,8 +1185,7 @@ class Page : public AsyncWebHandler {
     std::string open_id = trim(param(request, "edit"));
     if (open_id.size() > 32)
       open_id.clear();
-    std::string body = config_page(note, outcome, open_id, param(request, "bench") == "1",
-                                   param(request, "night") == "1");
+    std::string body = config_page(note, outcome, open_id, param(request, "bench") == "1");
     // PENDING wants 202, and this transport cannot say it: ESPHome's init_response_ maps
     // only 200/204/400/401/404/409/422 and sends 500 for anything else (measured on
     // 2026.8.0). A 500 would be a worse lie than a 200, because it claims the request

@@ -121,11 +121,6 @@ static std::string get_config_bench() {
   return onair::config_page("", onair::Submitted::APPLIED, "", true);
 }
 
-/// The page as `?night=1` serves it (#81).
-static std::string get_config_night() {
-  return onair::config_page("", onair::Submitted::APPLIED, "", false, true);
-}
-
 /// Put the night snapshot where the page will read it. The main loop does this every tick on
 /// the device; a host test has no main loop, so it writes the same field directly.
 static void set_night(const onair::NightInput &in) { onair::held().night_in = in; }
@@ -306,7 +301,7 @@ static void test_forbidden_markup() {
     std::string value = h.substr(vs, h.find('"', vs) - vs);
     CHECK_MSG(value == "save" || value == "clear" || value == "clearall" ||
                   value == "refresh" || value == "appearance" || value == "glass" ||
-                  value == "bench",
+                  value == "bench" || value == "night",
               "unrecognised action silently does nothing: " + value);
     at = vs;
   }
@@ -604,11 +599,12 @@ static void test_byte_budget() {
   // the reserve grew instead. Do the same next time: per-row growth adjusts `rows * 420`,
   // fixed growth adjusts the base, and the fence follows whichever moved.
   //
-  // #95 added 65 B to the default page (the verdict line's link and the footer word) and 18 B
-  // to the dark page, and moved neither number: the worst page went 4325 -> 4343 against the
-  // same 4400, so the gap to the reserve is untouched.
+  // 5000 since #95, and the reserve 3000 -> 3600 with it. The Night bar is now on EVERY page,
+  // not only the dark one, so the fixed half grew by the bar's ~550 B on the pages that did
+  // not have it: the banner case went 4182 -> ~4730. Same rule as #81: fixed growth adjusts
+  // the base, the fence follows, the gap stays 700.
   for (const auto &c : cases)
-    CHECK_MSG(c.bytes < 4400,
+    CHECK_MSG(c.bytes < 5000,
               std::string(c.name) + " = " + std::to_string(c.bytes) + " B");
   printf("        [budget]");
   for (const auto &c : cases)
@@ -921,16 +917,17 @@ static void test_glass_bar() {
   onair::publish_context("available", 1000, "10.42.14.239", "-52dBm", 60000, 1800000, true,
                          "5:48 PM");
   h = get_config();
-  CHECK(has(h, "value=\"on\" checked"));
-  CHECK(!has(h, "value=\"off\" checked"));
+  // Named radios: the Night bar beside this one has its own on/off pair since #95.
+  CHECK(has(h, "name=\"clock\" value=\"on\" checked"));
+  CHECK(!has(h, "name=\"clock\" value=\"off\" checked"));
   CHECK_MSG(has(h, "Showing <strong>5:48 PM</strong>"), "and says what is on the glass");
 
   begin("off is off, and says so rather than showing a stale time");
   onair::publish_context("available", 1000, "10.42.14.239", "-52dBm", 60000, 1800000, false,
                          "5:48 PM");
   h = get_config();
-  CHECK(has(h, "value=\"off\" checked"));
-  CHECK(!has(h, "value=\"on\" checked"));
+  CHECK(has(h, "name=\"clock\" value=\"off\" checked"));
+  CHECK(!has(h, "name=\"clock\" value=\"on\" checked"));
   CHECK(!has(h, "5:48 PM"));
 
   begin("ON WITH NO TIME is its own message - the state that looks like a wrong clock");
@@ -1166,31 +1163,30 @@ static void test_night_bar() {
   CHECK(has(h, "Sleep is pending"));
   CHECK_MSG(!has(h, "Darkens at"), "reporting the schedule here hides the press entirely");
 
-  begin("the bar is off the default page, but always one click away");
+  begin("THE BAR IS ON THE DEFAULT PAGE, directly under the verdict (#95)");
+  // #81 hid it behind ?night=1 and a footer word; a link from the verdict line was tried
+  // next. Rocket, looking for where to change the times: "bad design - it is hard to see.
+  // Have the Night schedule show up by default." The sentence that names the schedule and
+  // the controls that set it are one thing, in that order, on every load.
   seed_table();
   set_night(ok_at(12 * 60));
   onair::held().night_dark = false;
-  CHECK_MSG(!has(get_config(), "<strong>Night schedule</strong>"), "four set-once controls must not tax every page load");
-  CHECK_MSG(has(get_config(), "/onair/config?night=1"), "but a query parameter nobody can see is unreachable");
-  CHECK(has(get_config_night(), "<strong>Night schedule</strong>"));
-
-  begin("THE VERDICT LINE LINKS TO THE BAR - the sentence naming the schedule is where you look to change it (#95)");
-  // The footer link existed and was not found: "Night" beside "Beta" does not read as "edit
-  // the schedule". The verdict line is what an operator actually reads.
   h = get_config();
-  CHECK_MSG(has(h, "Change the schedule</a>"), "the default page must offer the change beside the verdict");
-  CHECK_MSG(has(h, "Screen: <strong>on</strong>. Darkens at 23:00. <a href=\"/onair/config?night=1\">Change the schedule</a></p>"),
-            "and the link must sit INSIDE the verdict sentence, not somewhere else on the page");
-  CHECK_MSG(has(h, "Night schedule</a>"), "the footer names the schedule, not a word beside Beta");
-  CHECK_MSG(!has(get_config_night(), "Change the schedule"),
-            "a link to a bar that is right below it is noise");
+  CHECK_MSG(has(h, "<strong>Night schedule</strong>"), "the controls must not need a query parameter");
+  size_t verdict = h.find("Screen: <strong>on</strong>. Darkens at 23:00.</p>");
+  size_t bar = h.find("<form method=\"post\" action=\"/onair/config\" class=\"bar\" id=\"night\">");
+  size_t clock = h.find("<strong>Clock</strong>");
+  CHECK_MSG(verdict != std::string::npos && bar != std::string::npos && clock != std::string::npos,
+            "verdict, night bar and clock bar must all be on the page");
+  CHECK_MSG(verdict < bar && bar < clock, "and in that order: the verdict, then its controls, then everything else");
+  CHECK_MSG(!has(h, "night=1"), "no link to a page that no longer differs from this one");
+  CHECK_MSG(!has(h, "Change the schedule"), "and no link to a bar that is right there");
 
   begin("A DARK PANEL ALWAYS SHOWS THE BAR - never a hidden control holding the screen off");
   seed_table();
   onair::held().night_dark = true;
   CHECK_MSG(has(get_config(), "<strong>Night schedule</strong>"),
             "the bar that can undo the darkness must appear however the page was reached");
-  CHECK_MSG(!has(get_config(), "Change the schedule"), "and the verdict line does not also link to it");
   onair::held().night_dark = false;
 
   begin("the bar shows the schedule the panel is actually running");
@@ -1199,7 +1195,7 @@ static void test_night_bar() {
   in.sleep_min = 22 * 60 + 30;
   in.wake_min = 6 * 60 + 15;
   set_night(in);
-  h = get_config_night();
+  h = get_config();
   CHECK(has(h, "value=\"22:30\""));
   CHECK(has(h, "value=\"06:15\""));
   CHECK(has(h, "value=\"on\" checked"));

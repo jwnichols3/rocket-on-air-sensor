@@ -628,7 +628,7 @@ test('the Device connection section links to the panel, in a new tab (#55)');
   );
   check(links.some((l) => /\/onair$/.test(l.href || '')), `no status link: ${links.map((l) => l.href).join(', ')}`);
   check(links.some((l) => /\/onair\/config$/.test(l.href || '')), 'no settings link');
-  check(links.some((l) => /\/onair\/config\?night=1$/.test(l.href || '')), 'no night schedule link (#95)');
+  check(links.some((l) => /\/onair\/config#night$/.test(l.href || '')), 'no night schedule link (#95)');
   check(links.every((l) => /^http:\/\//.test(l.href || '')), 'a link is not an http URL');
 }
 
@@ -712,7 +712,7 @@ test('the card names the night schedule and points at the panel page that edits 
     { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], effective: { host: '10.0.0.99' } });
   const night = (await deviceLinks()).filter((l) => l.text === 'Night schedule');
   check(night.length === 1, `expected one Night schedule link, got ${night.length}`);
-  check(night[0] && night[0].href === 'http://10.0.0.99/onair/config?night=1',
+  check(night[0] && night[0].href === 'http://10.0.0.99/onair/config#night',
     `the night link must open the bar on the box the service drives, got "${night[0] && night[0].href}"`);
 }
 

@@ -196,6 +196,7 @@ else (state, light control, API) lives on the receiver.
 > | **D-133** *"Two buttons, not one toggle"* | **Amended** by D-134. The reasoning was sound about a toggle that remembers its own PRESSES, and that toggle is still not built. `POST /panel/toggle` reads the glass on every press and holds no state, so the objection - that "asked to sleep" and "is asleep" come apart - does not reach it. Both one-way buttons survive unchanged. |
 > | **D-111 / D-133** the manual sleep is a deliberate act that only an explicit wake, the schedule, or a busy row ends | **Amended** by D-137, and one clause of it was **never true of the shipped firmware**. A busy row does not END a manual sleep, it SUPPRESSES it: `night_should_darken()` returns false while busy and the switch stays on, so the sleep is pending and lands the moment the call does. The firmware has always said so on its own `Night` sensor (`lit (sleep pending - busy or no data)`); the contract, the client guide and this log all said "ends". D-137 adds a third way that really does end it - a `human:` write that changes the row at a dark panel - and corrects the busy clause. |
 > | Every decision that **enumerates `hold` as a wire field** - D-30, D-32, D-35, D-36, D-48, D-51, D-52, D-63, D-75, D-91, D-121, D-122 | **Read them without it.** The bodies are left alone on purpose - a decision is a record of what was decided, not a description of today - but `hold` is off the wire, out of the state object and out of the persisted file since D-126, so every list of payload fields, every "factory reset clears the hold", and D-51's *"`/display` needs `message` and `hold`"* is one item shorter - D-52 had already taken the HELD badge off that page. Nothing else in any of them moves. |
+> | **D-138 / D-149** the night controls sit behind `?night=1`, reached from a footer word and then from a link on the verdict line | **Amended** by D-151. The bar renders on every load of `/onair/config`, directly under the verdict, and the reserve and fence moved together to pay for it (3000 -> 3600, 4400 -> 5000). `?night=1` no longer exists; the console links to the bar's anchor instead. D-138's refactor (one `night_why()` decision, two presentations) and its `make_call()` persistence rule stand untouched. |
 
 - **D-1 (2026-08-05)** Receiver is a Raspberry Pi hosting a REST API; the work Mac runs
   only a thin detector that calls that API. Rationale: light-control logic must not
@@ -5503,3 +5504,28 @@ else (state, light control, API) lives on the receiver.
 
   D-145 stands with this amendment: two discriminators, and the second one needs the cache
   cleared to be one.
+
+- **D-151 (2026-09-04)** **The Night bar is on the default page, first under Panel settings.
+  Amends D-138 and D-149.** #95, reopened. Rocket, shown the D-149 fix: *"bad design - it is
+  hard to see. Have the Night schedule show up by default."*
+
+  D-138 kept the three controls behind `?night=1` for the byte budget and D-149 added a link
+  to them from the verdict line. Both treated the schedule as set-once-and-leave-alone and
+  optimised the page for bytes over findability. The person who owns the panel disagreed, and
+  the byte argument was never a hard one: the fence and the reserve are numbers this repo moves
+  together whenever fixed content grows (D-138 said so itself). So the bar renders on every
+  load, directly under the sentence that names the schedule - verdict first, then its controls,
+  then Clock and Pages - and `?night=1`, the footer word and the verdict-line link are gone. The
+  bar carries `id="night"`; the console's `Night schedule` card link now points at that anchor
+  on the panel's own page, so D-133 still stands: the setting is device-local, the console
+  points at it.
+
+  **Numbers, moved together.** Reserve base 3000 -> 3600, fence 4400 -> 5000, gap 700 before
+  and after. Measured five-row pages: default 3433 -> 3882 B, worst (banner) 4182 -> 4631 B; the
+  dark page is unchanged at 4294 because it already rendered the bar. The 24-row page is 8121 B
+  against the 24.7 kB proven floor.
+
+  **Two tests were written against the bar's absence and had to be told.** The action allow-list
+  did not include `night` because no default page had ever posted it; the Clock bar's on/off
+  assertions matched any `value="on" checked` and now had two radio pairs to choose from. Both
+  now name what they mean.

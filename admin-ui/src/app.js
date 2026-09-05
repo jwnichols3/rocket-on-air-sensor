@@ -996,9 +996,9 @@ function deviceNode(row, isNew) {
     panelLink(links, 'Open the panel', host, '/onair');
     panelLink(links, 'Panel settings', host, '/onair/config');
     // The night schedule is device-local by decision (D-133) - the console cannot show or
-    // edit it - so the console POINTS at it. Rocket looked here first and found nothing
-    // that named it (#95).
-    panelLink(links, 'Night schedule', host, '/onair/config?night=1');
+    // edit it - so the console POINTS at it, by anchor, on the panel's own page. Rocket
+    // looked here first and found nothing that named it (#95).
+    panelLink(links, 'Night schedule', host, '/onair/config#night');
     node.appendChild(links);
   }
 
