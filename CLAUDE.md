@@ -61,11 +61,19 @@ curl -s -u rocket:ESP32 http://<device>/text_sensor/Build
 # 2026.8.0 (config hash 0x...., built 2026-08-31 13:47:22)
 ```
 
-The config hash moves when the YAML changes and the timestamp moves whenever anything is
-recompiled, so this identifies the RUNNING image - which is exactly what a successful-looking
-upload can leave stale. Record it BEFORE the flash and compare after: a marker you only ever
-observe afterwards proves the page renders, not that anything moved. And look again past the
-60s window, because an image inside it is `PENDING_VERIFY` and any reset silently reverts it.
+The config hash moves when the YAML changes, and this identifies the RUNNING image - which is
+exactly what a successful-looking upload can leave stale. Record it BEFORE the flash and compare
+after: a marker you only ever observe afterwards proves the page renders, not that anything
+moved. And look again past the 60s window, because an image inside it is `PENDING_VERIFY` and
+any reset silently reverts it.
+
+**The timestamp does NOT move on its own for a header-only change (#96).** ESPHome regenerates
+it only when the config hash or the ESPHome version changes; a change to `onair_page.h` or
+`onair_table.h` moves neither, and the recompiled image carries the OLD timestamp. Compile with
+`make -C firmware compile CONFIG=configs/<board>.yaml`, which removes the cached
+`build_info.json` first so the timestamp is fresh - or remove it yourself before a bare
+`esphome compile`. A compile whose `INFO Build Info:` line matches the panel's current `Build`
+has produced an image the marker cannot distinguish from the running one; do not flash it.
 
 ## Agent skills
 

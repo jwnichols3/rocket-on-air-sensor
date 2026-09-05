@@ -620,7 +620,7 @@ test('the Device connection section links to the panel, in a new tab (#55)');
   await seedDevices([aDevice()], { overrides: [], effective: { host: '10.42.12.77' } });
   const links = await deviceLinks();
 
-  check(links.length === 2, `expected two panel links, got ${links.length}`);
+  check(links.length === 3, `expected three panel links, got ${links.length}`);
   check(links.every((l) => l.target === '_blank'), 'a link does not open in a new tab');
   check(
     links.every((l) => /noopener/.test(l.rel) && /noreferrer/.test(l.rel)),
@@ -628,6 +628,7 @@ test('the Device connection section links to the panel, in a new tab (#55)');
   );
   check(links.some((l) => /\/onair$/.test(l.href || '')), `no status link: ${links.map((l) => l.href).join(', ')}`);
   check(links.some((l) => /\/onair\/config$/.test(l.href || '')), 'no settings link');
+  check(links.some((l) => /\/onair\/config\?night=1$/.test(l.href || '')), 'no night schedule link (#95)');
   check(links.every((l) => /^http:\/\//.test(l.href || '')), 'a link is not an http URL');
 }
 
@@ -700,6 +701,19 @@ test('and the link follows the OVERRIDE, not the document - a link gets clicked'
     }));
   check(hrefs[0] === 'http://10.0.0.99/onair', `the primary link must name the box the service drives, got "${hrefs[0]}"`);
   check(hrefs[1] === 'http://10.0.0.5/onair', `a secondary link followed the primary's override: "${hrefs[1]}"`);
+}
+
+test('the card names the night schedule and points at the panel page that edits it (#95)');
+{
+  // The schedule is device-local (D-133): the console cannot show it or change it, and a
+  // card with "Open the panel" and "Panel settings" gave no hint that it existed. The link
+  // follows the same host rule as the other two - the primary's follows the override.
+  await seedDevices([aDevice({ host: '10.0.0.1' })],
+    { overrides: [{ key: 'light.host', variable: 'ONAIR_LIGHT_HOST' }], effective: { host: '10.0.0.99' } });
+  const night = (await deviceLinks()).filter((l) => l.text === 'Night schedule');
+  check(night.length === 1, `expected one Night schedule link, got ${night.length}`);
+  check(night[0] && night[0].href === 'http://10.0.0.99/onair/config?night=1',
+    `the night link must open the bar on the box the service drives, got "${night[0] && night[0].href}"`);
 }
 
 test('an overridden NON-credential shows its effective value; a credential does not');

@@ -603,6 +603,10 @@ static void test_byte_budget() {
   // have shrunk the margin to 375 B while looking like a one-line change, so the fixed part of
   // the reserve grew instead. Do the same next time: per-row growth adjusts `rows * 420`,
   // fixed growth adjusts the base, and the fence follows whichever moved.
+  //
+  // #95 added 65 B to the default page (the verdict line's link and the footer word) and 18 B
+  // to the dark page, and moved neither number: the worst page went 4325 -> 4343 against the
+  // same 4400, so the gap to the reserve is untouched.
   for (const auto &c : cases)
     CHECK_MSG(c.bytes < 4400,
               std::string(c.name) + " = " + std::to_string(c.bytes) + " B");
@@ -1166,15 +1170,27 @@ static void test_night_bar() {
   seed_table();
   set_night(ok_at(12 * 60));
   onair::held().night_dark = false;
-  CHECK_MSG(!has(get_config(), "<strong>Night</strong>"), "four set-once controls must not tax every page load");
+  CHECK_MSG(!has(get_config(), "<strong>Night schedule</strong>"), "four set-once controls must not tax every page load");
   CHECK_MSG(has(get_config(), "/onair/config?night=1"), "but a query parameter nobody can see is unreachable");
-  CHECK(has(get_config_night(), "<strong>Night</strong>"));
+  CHECK(has(get_config_night(), "<strong>Night schedule</strong>"));
+
+  begin("THE VERDICT LINE LINKS TO THE BAR - the sentence naming the schedule is where you look to change it (#95)");
+  // The footer link existed and was not found: "Night" beside "Beta" does not read as "edit
+  // the schedule". The verdict line is what an operator actually reads.
+  h = get_config();
+  CHECK_MSG(has(h, "Change the schedule</a>"), "the default page must offer the change beside the verdict");
+  CHECK_MSG(has(h, "Screen: <strong>on</strong>. Darkens at 23:00. <a href=\"/onair/config?night=1\">Change the schedule</a></p>"),
+            "and the link must sit INSIDE the verdict sentence, not somewhere else on the page");
+  CHECK_MSG(has(h, "Night schedule</a>"), "the footer names the schedule, not a word beside Beta");
+  CHECK_MSG(!has(get_config_night(), "Change the schedule"),
+            "a link to a bar that is right below it is noise");
 
   begin("A DARK PANEL ALWAYS SHOWS THE BAR - never a hidden control holding the screen off");
   seed_table();
   onair::held().night_dark = true;
-  CHECK_MSG(has(get_config(), "<strong>Night</strong>"),
+  CHECK_MSG(has(get_config(), "<strong>Night schedule</strong>"),
             "the bar that can undo the darkness must appear however the page was reached");
+  CHECK_MSG(!has(get_config(), "Change the schedule"), "and the verdict line does not also link to it");
   onair::held().night_dark = false;
 
   begin("the bar shows the schedule the panel is actually running");

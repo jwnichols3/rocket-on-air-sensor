@@ -5455,3 +5455,51 @@ else (state, light control, API) lives on the receiver.
   applies nothing**. The driver sends `Content-Length: 0` with **no** Content-Type
   (`esphome-driver.ts:236`). This is a second silent-200 next to the documented 411: use
   `-X POST -H 'Content-Length: 0' -H 'Content-Type:'`.
+
+- **D-149 (2026-09-04)** **The night schedule stays on the panel; both surfaces now point at
+  it.** #95. Rocket: *"there is a setting somewhere that says to turn the screen dark at a time
+  and turn it back on at another time ... I don't see where to make the changes to the
+  start/stop time in either the on-air admin panel or the esp32 interface."*
+
+  **The setting existed and was in force.** `NightMode ON`, 23:00 to 07:00, editable on the
+  Night bar at `/onair/config?night=1` since #81 (D-138). It could not be found because the
+  only path to it was the footer word `Night`, sitting beside `Beta`, while the sentence that
+  actually names the schedule - `Screen: on. Darkens at 23:00.` - offered nothing. The admin
+  console's device card linked `Open the panel` and `Panel settings` and named the schedule
+  nowhere, because the schedule is not on the wire (D-133) and the console had nothing of it
+  to show.
+
+  **The fix is two links, not a surface.** The verdict line ends in `Change the schedule`,
+  linking to the bar, whenever the bar is not already on the page - a link to a bar directly
+  below it is noise, and the dark page (the one at the fence) already renders the bar. The
+  footer word and the bar's heading both become `Night schedule`. The console card gets a
+  third link, `Night schedule`, to `/onair/config?night=1`, resolving the host the same way as
+  the other two. D-133 stands: the SETTING is still device-local, the console only points at it.
+
+  **Rejected: rendering the bar on every page** (+545 B fixed, which D-138 already declined for
+  the fence and reserve it would move), and **putting the schedule on the wire** so the console
+  could edit it (a new endpoint, driver methods and contract text for a set-once setting, and
+  under D-147 a per-device form). 65 B on the default page and 18 B on the dark page; the worst
+  page went 4325 -> 4343 against an unmoved 4400 fence.
+
+- **D-150 (2026-09-04)** **The standing Build marker does not move for a header-only change,
+  and `make compile` now forces it to.** #96, found flashing #95. D-145 said the timestamp
+  moves "whenever anything recompiles". It does not: ESPHome 2026.8.0's `copy_src_tree()`
+  tracks only its own component tree, `defines.h`, `esphome.h` and `version.h`, and rewrites
+  `build_info_data.cpp` only when one of those changed, the config hash moved, or the cached
+  `build_info.json` is missing or unreadable. Our `includes:` headers land at `src/onair_page.h`
+  and are tracked by none of that, and `CORE.config_hash` hashes the parsed config - YAML lambda
+  text yes, header contents no. So the first compile of #95 reported
+  `config_hash=0x765af209 build_time_str=2026-08-31 13:49:54 -0700`, the running panel's exact
+  marker, while the image it produced carried the new strings. A flash of it would have been
+  unverifiable by the one instrument built to verify flashes.
+
+  **The fix is to delete the cache, not to move the hash.** Removing `build_info.json` before
+  `esphome compile` takes the "missing or unreadable" branch: the timestamp regenerates, one
+  generated `.cpp` recompiles, the image relinks - seconds. `make -C firmware compile` does it;
+  CLAUDE.md now says a compile whose `INFO Build Info:` line equals the panel's `Build` must not
+  be flashed. Folding a header hash into the config was considered and declined: the hash is
+  meant to be reproducible from the YAML alone, and the device builder compares it.
+
+  D-145 stands with this amendment: two discriminators, and the second one needs the cache
+  cleared to be one.

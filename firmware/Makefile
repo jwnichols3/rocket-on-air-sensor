@@ -31,7 +31,15 @@ config:
 # Kept as an alias: `validate` is what the lab repo called this.
 validate: config
 
+# The `Build` text_sensor (D-145) is the standing marker for "is the panel running what I just
+# flashed". ESPHome 2026.8.0 regenerates its timestamp ONLY when the config hash or the
+# ESPHome version changes (writer.py, copy_src_tree): a change to one of our `includes:`
+# headers - onair_page.h, onair_table.h - moves neither, so the recompiled image carries the
+# OLD timestamp and the marker cannot tell it from the running one. Measured 2026-09-04 (#96).
+# Removing the cached build_info.json makes the writer regenerate it; that recompiles one
+# generated .cpp and relinks, seconds not minutes.
 compile:
+	rm -f configs/.esphome/build/*/build_info.json
 	$(ESPHOME) compile $(CONFIG)
 
 dashboard:

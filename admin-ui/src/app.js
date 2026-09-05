@@ -995,6 +995,10 @@ function deviceNode(row, isNew) {
     var links = el('div', 'links');
     panelLink(links, 'Open the panel', host, '/onair');
     panelLink(links, 'Panel settings', host, '/onair/config');
+    // The night schedule is device-local by decision (D-133) - the console cannot show or
+    // edit it - so the console POINTS at it. Rocket looked here first and found nothing
+    // that named it (#95).
+    panelLink(links, 'Night schedule', host, '/onair/config?night=1');
     node.appendChild(links);
   }
 

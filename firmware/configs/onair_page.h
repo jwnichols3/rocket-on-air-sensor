@@ -667,7 +667,7 @@ inline void render_bench(std::string &h) {
  * task and cannot reach an `id()`, which is also why the verdict is a shared pure function
  * rather than the seven-branch lambda it used to be.
  */
-inline void render_night_line(std::string &h) {
+inline void render_night_line(std::string &h, bool link_to_bar) {
   onair::NightInput in;
   {
     esphome::LockGuard guard(held().lock);
@@ -701,6 +701,12 @@ inline void render_night_line(std::string &h) {
       h += "<strong>on</strong>. Refusing to darken: the row is busy, or there is no data.";
       break;
   }
+  // THE SENTENCE THAT NAMES THE SCHEDULE IS WHERE SOMEBODY LOOKS TO CHANGE IT (#95). The
+  // controls were one click away already, but the click was a footer word beside "Beta", and
+  // Rocket read this line and could not find them. About 60 bytes on the default page and
+  // none on the page that renders the bar - a link to a bar that is right below it is noise.
+  if (link_to_bar)
+    h += " <a href=\"/onair/config?night=1\">Change the schedule</a>";
   h += "</p>";
 }
 
@@ -719,7 +725,7 @@ inline void render_night(std::string &h) {
   }
   h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\">"
        "<input type=\"hidden\" name=\"action\" value=\"night\">"
-       "<strong>Night</strong>"
+       "<strong>Night schedule</strong>"
        "<label><input type=\"radio\" name=\"night\" value=\"off\"";
   if (!in.enabled)
     h += " checked";
@@ -742,15 +748,17 @@ inline void render_night(std::string &h) {
 /// Everything you set once and then leave alone, in one place and below the table.
 inline void render_settings(std::string &h, bool show_bench, bool show_night) {
   h += "<h2>Panel settings</h2>";
-  render_night_line(h);
+  // Same rule as the Beta bar below, same reason (#81). A dark panel always shows the bar
+  // that can undo it; a page without the bar links to it from the verdict line (#95).
+  bool night_bar = show_night || held().night_dark;
+  render_night_line(h, !night_bar);
   render_glass(h);
   render_appearance(h);
   // The Beta bar is off the default page for the byte budget, but an ACTIVE override always
   // renders: a hidden control holding the screen dark is the trap this whole thing avoids.
   if (show_bench || bench_active())
     render_bench(h);
-  // Same rule, same reason (#81). A dark panel always shows the bar that can undo it.
-  if (show_night || held().night_dark)
+  if (night_bar)
     render_night(h);
 }
 
@@ -904,7 +912,7 @@ inline std::string config_page(const std::string &banner, Submitted outcome,
   // A LINK, because a query parameter nobody can see is a setting nobody can reach. The
   // bar is off the default page for bytes, not to hide it.
   h += "<p class=\"m\"><a href=\"/onair\">Status</a> &middot; "
-       "<a href=\"/onair/config?night=1\">Night</a> &middot; "
+       "<a href=\"/onair/config?night=1\">Night schedule</a> &middot; "
        "<a href=\"/onair/config?bench=1\">Beta</a> &middot; "
        "<a href=\"/?esphome=1\">ESPHome dashboard, for the server address and "
        "password</a></p>";
