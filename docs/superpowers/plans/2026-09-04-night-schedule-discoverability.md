@@ -90,8 +90,10 @@ now does). CLAUDE.md corrected; D-150 records it.
 - [x] Console link + test
 - [x] D-149 recorded
 - [x] #96 opened; Makefile, CLAUDE.md, D-150
-- [ ] `npm run verify` green
-- [ ] Commit + push
-- [ ] Server rebuilt and restarted, `/admin/` verified
-- [ ] CrowPanel compiled, image checked, flashed, verified past 60 s
-- [ ] #95 closed with transcripts; this checklist finished
+- [x] `npm run verify` green (exit 0; console 131/131; firmware 3224 checks, 0 failed)
+- [x] Commit + push (`ed27d9c`)
+- [x] Server rebuilt and restarted 21:27:43, `GET /admin` serves the `Night schedule` link
+- [x] CrowPanel compiled (build 2026-09-04 21:25:46), image checked with `strings`, flashed
+      21:28:01, verified at 21:29:23 and 21:29:53: Build moved, link on the verdict line,
+      schedule intact at 23:00 / 07:00
+- [x] #95 and #96 closed with transcripts. Done.
