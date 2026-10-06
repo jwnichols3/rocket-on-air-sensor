@@ -517,7 +517,7 @@ else (state, light control, API) lives on the receiver.
   integration later as a separate module/plugin"): there is no detector module in this repo
   at all, later or otherwise. Consequence: `docs/api-contract.md` must be legible enough to
   be written against by a client whose source we are not reading - the contract is the only
-  coupling. `CONTEXT.md`'s open question on the sensing mechanism, and issue #5, leave this
+  coupling. `GLOSSARY.md`'s open question on the sensing mechanism, and issue #5, leave this
   repo's scope. `source` on a write keeps its meaning (an automated writer vs a human), which
   is what hold semantics are defined over; that is now the only trace the detector leaves
   here.
@@ -837,7 +837,7 @@ else (state, light control, API) lives on the receiver.
   [#24](https://github.com/jwnichols3/rocket-on-air-sensor/issues/24). **Implements D-28;
   amends D-10 and D-13.**
   ```
-  /                     CONTEXT.md  CLAUDE.md  README.md  package.json (workspaces)  docs/  deploy/
+  /                     GLOSSARY.md  CLAUDE.md  README.md  package.json (workspaces)  docs/  deploy/
     server/             the Node service - package "onair-api", bin, src/ test/ dist/ tsconfig*.json
     admin-ui/           the SPA - package "onair-admin-ui", builds to server/public/admin/
     firmware/           ESPHome - pyproject.toml uv.lock Makefile configs/
@@ -854,7 +854,7 @@ else (state, light control, API) lives on the receiver.
   hardware and no flash. Today's `npm test` (145 server tests) becomes `npm test -w server`
   and is included.
   **What moves:** `src/`, `test/`, `dist/`, `tsconfig.json`, `tsconfig.test.json` -> `server/`.
-  **What stays:** `CONTEXT.md`, `CLAUDE.md`, `README.md`, `INSTALL.md`, `docs/`, `deploy/` -
+  **What stays:** `GLOSSARY.md`, `CLAUDE.md`, `README.md`, `INSTALL.md`, `docs/`, `deploy/` -
   repo-wide by nature.
   **The installer promise, and what breaking it costs.** D-13's plist supervises
   `node dist/index.js` from a checkout at `~/code/rocket-on-air-sensor`, and D-14 built the
