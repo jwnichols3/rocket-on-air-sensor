@@ -25,7 +25,7 @@ at every step boundary, not at the end.
 | 10 | `npm run firmware:compile` green | done - flash 60.5% |
 | 11 | OTA flash + capture the real page from the device | done - `shots/live-*.png` |
 | 12 | Prove the light still works | done - `confirmed:"on-air"`, Render=BUSY |
-| 13 | Decisions into `CONTEXT.md` | done - D-68..D-72 |
+| 13 | Decisions into `GLOSSARY.md` | done - D-68..D-72 |
 | 14 | Discord DM readout | kickoff + four variations sent; winner and final readout pending |
 
 ## Artifacts
@@ -65,7 +65,7 @@ Copied from #50 so this file stands alone:
   kind of confident lie this page must never tell. The corrected figures also now agree with
   the display lambda's own comment (AVAILABLE 73, INTERRUPTIBLE 167).
 
-## Decisions taken (mirror of the `CONTEXT.md` entries)
+## Decisions taken (mirror of the `GLOSSARY.md` entries)
 
 _none yet_
 

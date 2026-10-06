@@ -2,7 +2,7 @@
 
 Run the on-air API on the Mac Mini as a supervised background service that
 survives reboots and crashes with no GUI login required. Decision record:
-`CONTEXT.md` D-13 (issue #12 has the full bakeoff verdict).
+`GLOSSARY.md` D-13 (issue #12 has the full bakeoff verdict).
 
 The supervisor is a macOS **LaunchDaemon** (`com.rocket.onair`, system domain,
 `UserName=john`, `KeepAlive=true`, `RunAtLoad=true`) running `node

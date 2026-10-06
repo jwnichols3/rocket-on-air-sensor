@@ -11,13 +11,13 @@ This is the first file in `docs/research/` - there is no established research-no
 convention in this repo yet. This file establishes one for this task; adjust the
 pattern later if it doesn't fit.
 
-Scope: hardware for the "on-air light" open question in `CONTEXT.md` (research ticket,
-GitHub issue #1). Requirements pulled from `CONTEXT.md`: no GPIO wiring (Wi-Fi or
+Scope: hardware for the "on-air light" open question in `GLOSSARY.md` (research ticket,
+GitHub issue #1). Requirements pulled from `GLOSSARY.md`: no GPIO wiring (Wi-Fi or
 Bluetooth/BLE only), battery preferred, status feedback preferred (so the API's
 `confirmed` field per D-8 can reflect reality), binary on/off is the floor, RGB is a
 nice-to-have, driver is Node.js (D-8) behind a pluggable `LightDriver` interface, and
 Wi-Fi is scored above BLE because Node's BLE ecosystem (noble/bleno) is thinner than
-its Wi-Fi/HTTP ecosystem. The invariants section of `CONTEXT.md` also states: "Local
+its Wi-Fi/HTTP ecosystem. The invariants section of `GLOSSARY.md` also states: "Local
 network only is acceptable for v1; no cloud dependency required" - so cloud-required
 control paths are a discriminator, not an automatic disqualifier, but score worse.
 
@@ -229,5 +229,5 @@ addition to a bulb, and is also mains-powered.
 - https://api.github.com/repos/TheSylex/ELK-BLEDOM-bluetooth-led-strip-controller/commits?per_page=1
 - https://github.com/abandonware/noble
 - https://api.github.com/repos/abandonware/noble/commits?per_page=1
-- CONTEXT.md (this repo) - problem statement, architecture sketch, glossary, D-8, and
+- GLOSSARY.md (this repo) - problem statement, architecture sketch, glossary, D-8, and
   invariant "Local network only is acceptable for v1; no cloud dependency required"

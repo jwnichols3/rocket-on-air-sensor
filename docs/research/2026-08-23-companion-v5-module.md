@@ -659,6 +659,6 @@ Registry / API:
 - `https://raw.githubusercontent.com/bitfocus/companion-module-generic-websocket/master/package.json` (accessed 2026-08-23)
 - `https://raw.githubusercontent.com/bitfocus/companion-module-generic-websocket/master/companion/HELP.md` (accessed 2026-08-23)
 
-This repo: `CONTEXT.md` (D-5, D-7, D-11, D-17, D-18, D-19, D-23),
+This repo: `GLOSSARY.md` (D-5, D-7, D-11, D-17, D-18, D-19, D-23),
 `docs/companion-setup.md`, `docs/research/2026-08-05-companion-integration.md`,
 `docs/2026-08-23-onair-v2-wayfinder-brief.md`, `src/server.ts`, `src/ws.ts`, `src/state.ts`.

@@ -82,7 +82,7 @@ Commit.
 
 **Files:** Modify `INSTALL.md`, `docs/mac-setup.md`, `docs/pi-setup.md`,
 `README.md`.
-**Spec section:** Deliverable 6. STE + CONTEXT.md glossary (the repo standard
+**Spec section:** Deliverable 6. STE + GLOSSARY.md glossary (the repo standard
 for these files); document only what the scripts actually do - cross-check
 every command against the final `deploy/onair`, `deploy/bootstrap`, unit
 template. Commit.

@@ -61,7 +61,7 @@ Verified against the live CrowPanel (`10.42.14.239`, build `2026-08-31 13:49:54 
 **Tests, `admin-ui/test/browser.mjs`**
 - A device card carries a `Night schedule` link whose href is `http://<host>/onair/config?night=1`.
 
-**Decision**: D-149 in `CONTEXT.md`.
+**Decision**: D-149 in `GLOSSARY.md`.
 
 ## Verification plan
 

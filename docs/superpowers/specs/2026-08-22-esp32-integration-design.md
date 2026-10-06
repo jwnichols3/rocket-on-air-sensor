@@ -18,14 +18,14 @@ src/test file:line below resolves.
 > the code and the wire; each renderer polls and judges its own connection, marking itself
 > unrefreshed after **1 minute** and falling to NO DATA after **30 minutes**. Treat every
 > normative `90` below as historical. The false-green invariant it was protecting is intact
-> and is now enforced at the renderer. See CONTEXT.md D-90/D-91/D-92 and
+> and is now enforced at the renderer. See GLOSSARY.md D-90/D-91/D-92 and
 > `docs/api-contract.md` §3.
 
 > **Superseded on the transport, 2026-08-24 (D-46).** This spec describes the device's
 > state entity as a `select` named `Presence`, driven by `EsphomeSelectDriver`. That is no
 > longer true: the entity is a `text` named `PresenceKey`, the driver is `EsphomeTextDriver`,
 > and the `select` has been removed from the firmware. Read `docs/api-contract.md` and
-> CONTEXT.md D-38/D-44/D-46 for the current transport. Everything else here - the false-green
+> GLOSSARY.md D-38/D-44/D-46 for the current transport. Everything else here - the false-green
 > invariant, the frame counter, the respond-before-apply gap - still holds.
 
 # ESP32 -> on-air API integration spec (2026-08-22)
@@ -57,9 +57,9 @@ src/test file:line below resolves.
 | `i2c:` sets no `frequency:` | `:34-37` [FACT] | `i2c/__init__.py` `SplitDefault(CONF_FREQUENCY, esp32="50kHz")` [FACT, read today]. Full-framebuffer SH1106 writes at 50 kHz are ~200-220 ms/frame — already over ESPHome's 50 ms blocking warn threshold. **We must add `frequency: 400kHz`.** |
 | Display lambda draws title + IP + dBm | `:60-80` [FACT] | Those three readouts are load-bearing for field debugging; the new lambda preserves all three in a reserved bottom band with **no early `return`**. |
 | GPIO2 switch `restore_mode: ALWAYS_OFF` | `:87-91` [FACT] | **Left alone.** Rocket says the hardware is done; flipping a strapping-pin LED is cosmetic churn. |
-| `CONTEXT.md:56` defines Call state as boolean | [FACT] | Superseded by this work. |
-| D-6 (`CONTEXT.md:125-129`), D-9 (`:138-144`), D-12 (`:157-166`) all encode the boolean/no-driver world | [FACT] | Three decisions get amended, not one. See "Repo delta / docs". |
-| D-11 (`CONTEXT.md:151-156`) = hand-roll rather than add a dep, *because the thing is small* | [FACT] | Authorises hand-rolling a server-push WebSocket. It does **not** authorise hand-rolling a Noise handshake. HTTP wins on D-11's own terms. |
+| `GLOSSARY.md:56` defines Call state as boolean | [FACT] | Superseded by this work. |
+| D-6 (`GLOSSARY.md:125-129`), D-9 (`:138-144`), D-12 (`:157-166`) all encode the boolean/no-driver world | [FACT] | Three decisions get amended, not one. See "Repo delta / docs". |
+| D-11 (`GLOSSARY.md:151-156`) = hand-roll rather than add a dep, *because the thing is small* | [FACT] | Authorises hand-rolling a server-push WebSocket. It does **not** authorise hand-rolling a Noise handshake. HTTP wins on D-11's own terms. |
 | `/Users/john/code/esp32` is not a git repo | [FACT] | Noted as a risk. **Out of scope for this change** — see Open questions. |
 
 **Requirement change in scope:** three states (green/available, yellow/interruptible, red/dnd), rendered by a device that may or may not be the mono OLED. The state model names rungs semantically and knows nothing about colour.
@@ -210,7 +210,7 @@ One `select:` entity, `Presence`, options `["dnd","interruptible","available"]`.
 
 `docs/api-contract.md:15` fixes last-write-wins with no source precedence. With a boolean, D-6's 60 s heartbeat is harmless. With three states, a detector that can only distinguish call/no-call will re-write `dnd` every 60 s and **silently destroy any manual `interruptible` within a minute**. The middle rung is the one Rocket sets by hand; the heartbeat is the thing that erases it.
 
-**Call for v1** [JUDGEMENT]: the detector does not exist yet (`CONTEXT.md:74`, D-2), so shape it rather than patch around it — **the detector writes `level` explicitly and only ever `dnd` or `available`; it never writes `interruptible`.** Accept the clobbering, document it at `docs/api-contract.md:15`, file a follow-up for a manual-hold flag. Do not build source precedence in v1: a forgotten hold is a stuck light, which D-6's "no stuck-on light" clause cares about.
+**Call for v1** [JUDGEMENT]: the detector does not exist yet (`GLOSSARY.md:74`, D-2), so shape it rather than patch around it — **the detector writes `level` explicitly and only ever `dnd` or `available`; it never writes `interruptible`.** Accept the clobbering, document it at `docs/api-contract.md:15`, file a follow-up for a manual-hold flag. Do not build source precedence in v1: a forgotten hold is a stuck light, which D-6's "no stuck-on light" clause cares about.
 
 ---
 
@@ -955,12 +955,12 @@ Set these in `~/.onair/config.env` (D-14: the service reads it at startup; the p
 
 ### j. Docs, decisions, tests
 
-**Docs:** `docs/api-contract.md:11-17` (field table; mark `intended` **derived, read-only, retained for compatibility**), `:15` (document the heartbeat clobbering the middle rung), `:19-22`, `:28-40`, `:42-56`, `:157`; `CONTEXT.md:56` glossary (Call state is no longer a boolean); `CONTEXT.md:93` open question -> **closed**. `docs/companion-setup.md` needs **no change to keep working**; add the optional `level` feedback as a note.
+**Docs:** `docs/api-contract.md:11-17` (field table; mark `intended` **derived, read-only, retained for compatibility**), `:15` (document the heartbeat clobbering the middle rung), `:19-22`, `:28-40`, `:42-56`, `:157`; `GLOSSARY.md:56` glossary (Call state is no longer a boolean); `GLOSSARY.md:93` open question -> **closed**. `docs/companion-setup.md` needs **no change to keep working**; add the optional `level` feedback as a note.
 
-**Decisions — three are amended, not one** (`CLAUDE.md` and `docs/agents/domain.md` make `CONTEXT.md ## Decisions` the ADR record):
-- **D-6** (`CONTEXT.md:125-129`) — restate on the ladder. New text: *"The server never lowers `level`, and never asserts a lower rung to the light, without fresh evidence (`ageSeconds <= 90`). Raising or matching is always allowed. Staleness remains visible and never acted on."*
-- **D-9** (`CONTEXT.md:138-144`) — the safety rule gains a fourth appearance (`unknown`) and the message rule extends to it.
-- **D-12** (`CONTEXT.md:157-166`) — **superseded.** Light hardware is no longer on hold; `confirmed` is no longer permanently `"unknown"`; status feedback keys off `level`, with `intended` retained for compatibility.
+**Decisions — three are amended, not one** (`CLAUDE.md` and `docs/agents/domain.md` make `GLOSSARY.md ## Decisions` the ADR record):
+- **D-6** (`GLOSSARY.md:125-129`) — restate on the ladder. New text: *"The server never lowers `level`, and never asserts a lower rung to the light, without fresh evidence (`ageSeconds <= 90`). Raising or matching is always allowed. Staleness remains visible and never acted on."*
+- **D-9** (`GLOSSARY.md:138-144`) — the safety rule gains a fourth appearance (`unknown`) and the message rule extends to it.
+- **D-12** (`GLOSSARY.md:157-166`) — **superseded.** Light hardware is no longer on hold; `confirmed` is no longer permanently `"unknown"`; status feedback keys off `level`, with `intended` retained for compatibility.
 - **New decision** recording: three-state ladder, HTTP/`web_server` transport, `select` entity, basic auth, index-0-is-dnd.
 
 **Tests that break and must move:** `test/state.test.ts:5-14,16-25,49-54`; `test/persist.test.ts:40-45,47-56,58-69`; `test/server.test.ts` (**29** lines matching `onAir|intended` — the draft said 32; verify with `grep -c`); `test/app.test.ts:12-14,26,35` **plus the three stub class bodies** (see 4c); `test/ws.test.ts:13-14,185,194-203,252`; `test/sse.test.ts:39-41,53-56`; `test/driver.test.ts:8-10`.
@@ -978,7 +978,7 @@ Set these in `~/.onair/config.env` (D-14: the service reads it at startup; the p
 
 ## Making `confirmed` genuine
 
-**What it reads.** The device's own `current_option()` (`select/select.h:43`), fetched with `GET /select/Presence` and parsed from `state`. `web_server.cpp:1483` is `obj->has_state() ? obj->current_option() : StringRef()` — **not an echo of the last write.** [FACT] This is the "extra credit" criterion in `CONTEXT.md:41-42` that every purpose-built battery busylight failed.
+**What it reads.** The device's own `current_option()` (`select/select.h:43`), fetched with `GET /select/Presence` and parsed from `state`. `web_server.cpp:1483` is `obj->has_state() ? obj->current_option() : StringRef()` — **not an echo of the last write.** [FACT] This is the "extra credit" criterion in `GLOSSARY.md:41-42` that every purpose-built battery busylight failed.
 
 **Plus a frame counter, because a variable is not a pixel.** [added by review] `select_json_` reads a member set in the same call chain as the POST; the display is a separate `PollingComponent` writing over I2C. If the bus wedges, the SH1106 NAKs, or the display component faults, `current_option()` still returns `dnd`, the GET still returns `{"state":"dnd"}`, and a naive `confirmed` **vouches with total confidence for a frozen panel**. A frozen panel showing `free` from ten minutes ago is then indistinguishable from a correct `free`. The `frames` global (device delta 3f) bumped as the last statement of every display path, exposed as `sensor: Frames`, and checked by `driver.repainted()` closes this: a stalled counter forces `confirmed: 'unknown'` regardless of what the select says. [JUDGEMENT]
 
@@ -1233,8 +1233,8 @@ Nine substantive reversals. Each one was a defect that would have shipped.
 `components/web_server_base/__init__.py:14-19`, `components/web_server_base/web_server_base.h:133`; `components/web_server_idf/__init__.py:6-9`, `web_server_idf.cpp:150-152,184-189,242-256,694-935`; `components/web_server/__init__.py:49-55,94-122,259-263,392-424`, `web_server.cpp:167,510,610-621,1462-1468,1483-1496,2429-2470`, `web_server/ota/ota_web_server.cpp:33-56`; `components/captive_portal/__init__.py:28-32`; `components/api/__init__.py:292-294`, `api/api_server.cpp:143-158`; `components/wifi/__init__.py:486-497`; `components/i2c/__init__.py` (`SplitDefault(CONF_FREQUENCY, esp32="50kHz")`); `components/select/select.h:25-70`, `select.cpp:15-40`, `select_call.cpp:66-121`, `select/automation.h:9-14`; `components/template/select/__init__.py:63-68`, `template_select.h:32-59`, `template_select.cpp:22-45`; `components/globals/globals_component.h:20`; `components/esp32/preferences.cpp:271-291`; `components/ssd1306_i2c/ssd1306_i2c.cpp:41-61`; `components/http_request/__init__.py:120-124,144-147,343-350`; `core/config.py:309-313`; `core/base_automation.h:134-141`; `core/component.h:37-59,100,165`; `display/display.h:320,369,386,395,513`.
 
 **Repo** (`/Users/john/code/rocket-on-air-sensor` @ `2105e61`, all read 2026-08-22):
-`src/state.ts:1-70`, `src/persist.ts:1-22`, `src/driver.ts:1-14`, `src/app.ts:23-64`, `src/server.ts:27-38,52-57,126-133,153-169,232-236,285-355`, `src/display.ts:21-31,39-44,74-87`, `src/ui.ts:62-63,130,179-180,220,231-232,283,531-593`, `src/sse.ts`, `src/ws.ts`, `dist/state.js` (shipped `write()` spread), `package.json:11-25`, `CONTEXT.md:33,41-42,56,74,93,109-196` (D-1..D-15), `docs/api-contract.md:1-60`, `docs/companion-setup.md:41`, `docs/mac-setup.md:113,129,228`, `INSTALL.md:73,114`, `deploy/onair:728-740`, `test/app.test.ts:10-45,87-93`, `test/server.test.ts:13-28,233-277`, `test/persist.test.ts:40-69`, `docs/research/2026-08-20-esp32-diy-light.md`, `docs/superpowers/plans/2026-08-20-esp32-onair-light.md` (both informative, not binding).
+`src/state.ts:1-70`, `src/persist.ts:1-22`, `src/driver.ts:1-14`, `src/app.ts:23-64`, `src/server.ts:27-38,52-57,126-133,153-169,232-236,285-355`, `src/display.ts:21-31,39-44,74-87`, `src/ui.ts:62-63,130,179-180,220,231-232,283,531-593`, `src/sse.ts`, `src/ws.ts`, `dist/state.js` (shipped `write()` spread), `package.json:11-25`, `GLOSSARY.md:33,41-42,56,74,93,109-196` (D-1..D-15), `docs/api-contract.md:1-60`, `docs/companion-setup.md:41`, `docs/mac-setup.md:113,129,228`, `INSTALL.md:73,114`, `deploy/onair:728-740`, `test/app.test.ts:10-45,87-93`, `test/server.test.ts:13-28,233-277`, `test/persist.test.ts:40-69`, `docs/research/2026-08-20-esp32-diy-light.md`, `docs/superpowers/plans/2026-08-20-esp32-onair-light.md` (both informative, not binding).
 
 **Device** (`/Users/john/code/esp32`, read 2026-08-22): `configs/elegoo-esp32.yaml:1-91`, `Makefile`, `pyproject.toml`.
 
-**Measurements** (2026-08-22): orchestrator's `ping`/`nc`/`curl`/mDNS on `10.42.12.77`; draft author's `esphome compile` (EXIT=0, Flash 51.2%) and `ping -c 20`; reviewers' independent re-reads of every ESPHome path cited above; this author's re-reads of `i2c/__init__.py`, `select/select.cpp`, `select/automation.h`, `template_select.cpp`, `core/base_automation.h:134`, `core/component.h:37-59`, `core/config.py:309-313`, `dist/state.js`, `src/*.ts`, `CONTEXT.md`, `docs/api-contract.md`.
+**Measurements** (2026-08-22): orchestrator's `ping`/`nc`/`curl`/mDNS on `10.42.12.77`; draft author's `esphome compile` (EXIT=0, Flash 51.2%) and `ping -c 20`; reviewers' independent re-reads of every ESPHome path cited above; this author's re-reads of `i2c/__init__.py`, `select/select.cpp`, `select/automation.h`, `template_select.cpp`, `core/base_automation.h:134`, `core/component.h:37-59`, `core/config.py:309-313`, `dist/state.js`, `src/*.ts`, `GLOSSARY.md`, `docs/api-contract.md`.

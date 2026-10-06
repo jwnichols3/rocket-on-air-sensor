@@ -42,7 +42,7 @@ Rocket's instruction, confirmed in session:
 > want to take this input as the new direction."
 
 **Reading (confirmed): do not re-litigate.** Where this memo conflicts with a recorded
-decision in `CONTEXT.md`, the memo wins and the old decision gets superseded or amended
+decision in `GLOSSARY.md`, the memo wins and the old decision gets superseded or amended
 in the `## Decisions` section. Do not re-open settled questions to ask him again.
 
 Two exceptions he chose deliberately in session, listed under "Decisions that survive".
@@ -281,7 +281,7 @@ Explicitly confirmed in session, despite the standing ruling above:
 - **Config poll interval** on the ESP32, and whether it shares a request with state polls.
 - **Detector integration.** The memo never mentions it. The detector still has to map
   Zoom/Meet call state onto a now-arbitrary state table, and the sensing mechanism is
-  still an open question in `CONTEXT.md`.
+  still an open question in `GLOSSARY.md`.
 - **Migration.** There is a live, accepted, running system (D-22). Nothing in the memo
   says what happens to it during this change.
 - **Everything from the two lost walks.** "There's way more than this than that."

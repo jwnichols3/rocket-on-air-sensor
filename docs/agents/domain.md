@@ -4,8 +4,8 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root — problem statement, glossary, invariants, open questions.
-- **`CONTEXT.md` → `## Decisions`** — this repo records decisions as D-rows in that section
+- **`GLOSSARY.md`** at the repo root — problem statement, glossary, invariants, open questions.
+- **`GLOSSARY.md` → `## Decisions`** — this repo records decisions as D-rows in that section
   instead of a `docs/adr/` tree (same pattern as vcrec's `DECISIONS.md`). When a skill says
   "read the ADRs" or "record an ADR", that section is the ADR record.
 
@@ -17,7 +17,7 @@ Single-context repo:
 
 ```
 /
-├── CONTEXT.md        ← glossary, invariants, open questions, ## Decisions (ADR record)
+├── GLOSSARY.md        ← glossary, invariants, open questions, ## Decisions (ADR record)
 ├── docs/agents/      ← this folder
 └── (source TBD — stack not yet chosen)
 ```
@@ -26,7 +26,7 @@ If the decision log outgrows the section, promote it to a root `DECISIONS.md` (v
 
 ## Use the glossary's vocabulary
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md` — Detector, Receiver, On-air light, Call state (ON_AIR / OFF_AIR). Don't drift to synonyms the glossary explicitly avoids.
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md` — Detector, Receiver, On-air light, Call state (ON_AIR / OFF_AIR). Don't drift to synonyms the glossary explicitly avoids.
 
 If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
 

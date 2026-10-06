@@ -244,7 +244,7 @@ lumens** for this application.
 
 Eight states render identically under that scheme - dead board, crashed firmware, unplugged
 USB, tripped breaker, Wi-Fi down, receiver down, detector stopped, and actually-free. Seven
-of the eight are wrong in the direction `CONTEXT.md:67` explicitly forbids.
+of the eight are wrong in the direction `GLOSSARY.md:67` explicitly forbids.
 
 It also strands the API's `unknown` state: the one thing the architecture went to trouble to
 model would have no visual expression.
@@ -436,7 +436,7 @@ mounting heights - IRC stair limits. *Blocked:* ITE chromaticity standard (paywa
 Printables/MakerWorld HTML (used their APIs instead); Reddit unfetchable, so no Reddit
 content appears anywhere in this research.
 
-**This repo** - `CONTEXT.md` (glossary, invariants, `:67`) -
+**This repo** - `GLOSSARY.md` (glossary, invariants, `:67`) -
 `docs/research/2026-08-20-esp32-diy-light.md` - `/Users/john/code/esp32/configs/elegoo-esp32.yaml`
 
 ---

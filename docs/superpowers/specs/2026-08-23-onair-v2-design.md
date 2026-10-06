@@ -1,7 +1,7 @@
 # On-Air v2 design
 
 **Status:** decided. Every question on map [#19](https://github.com/jwnichols3/rocket-on-air-sensor/issues/19) is answered; nothing here is waiting on a conversation.
-**Decisions:** D-28..D-44 in `CONTEXT.md`. **Wire contract:** `docs/api-contract.md` (v2).
+**Decisions:** D-28..D-44 in `GLOSSARY.md`. **Wire contract:** `docs/api-contract.md` (v2).
 **Source memo:** `docs/2026-08-23-onair-v2-wayfinder-brief.md`.
 
 This document is what the SDD pipeline writes per-part implementation specs from. It fixes
@@ -11,7 +11,7 @@ does not implement anything.
 
 > **How this was decided.** Rocket delegated the whole map to one autonomous agent run and
 > waived the usual grilling conversations. Every choice here is the agent's, recorded in
-> `CONTEXT.md` as normal and Rocket's to overturn. Taste calls are flagged inline as
+> `GLOSSARY.md` as normal and Rocket's to overturn. Taste calls are flagged inline as
 > **[taste]** and collected in §10.
 
 ---
@@ -124,7 +124,7 @@ Every load-bearing word in D-6/D-18's staleness rule was an ordering word ("lowe
 > **renderers**. Everything before it does not: the server latches, `STALE_AFTER_S` and
 > `stale` are gone, and no server path reads a clock to decide what the state IS. Each
 > renderer polls and judges its own **connection** instead, marking itself unrefreshed after
-> a minute and falling to NO DATA after thirty. See CONTEXT.md D-90/D-91/D-92 and
+> a minute and falling to NO DATA after thirty. See GLOSSARY.md D-90/D-91/D-92 and
 > `docs/api-contract.md` §3, which are the current specification.
 
 Note what stopped needing a rule. D-18 had to special-case `dnd -> interruptible` decay as a
@@ -230,7 +230,7 @@ and scoped, not overlooked.
 ## 4. Monorepo layout
 
 ```
-/                     CONTEXT.md  CLAUDE.md  README.md  INSTALL.md
+/                     GLOSSARY.md  CLAUDE.md  README.md  INSTALL.md
                       package.json (workspaces)  docs/  deploy/
   server/             package "onair-api" - bin, src/ test/ dist/ tsconfig*.json
   admin-ui/           package "onair-admin-ui" - builds to server/public/admin/

@@ -38,7 +38,7 @@ Raspberry Pi (systemd); single owner, home LAN.
 - **Ansible, Nix, Docker, and systemd portable services are all ceremony at this scale**, though
   Ansible is the only one that structurally solves the evolvability problem and is worth revisiting
   if the host count or plist count grows.
-- **An architectural finding that should be recorded in `CONTEXT.md` before any tooling is chosen:**
+- **An architectural finding that should be recorded in `GLOSSARY.md` before any tooling is chosen:**
   a LaunchDaemon has no user session, so it cannot run AppleScript against the logged-in user's apps
   and cannot hold TCC (camera/mic) grants. The future Detector almost certainly needs a
   **LaunchAgent**, alongside the LaunchDaemon for the API. That means the Mac will need *two* job
@@ -748,7 +748,7 @@ the port, survives logout) **plus a LaunchAgent for the Detector** (has session 
 grants), talking over localhost.
 
 That doubles the templating requirement on the Mac and is a larger evolvability pressure than the
-three env vars this research started from. It is worth recording in `CONTEXT.md` as a decision input
+three env vars this research started from. It is worth recording in `GLOSSARY.md` as a decision input
 before the tooling is finalised - and it is the main thing that would eventually justify Ansible.
 
 ### Smaller items

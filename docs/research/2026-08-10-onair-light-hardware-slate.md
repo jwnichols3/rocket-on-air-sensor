@@ -16,7 +16,7 @@ Scope: GitHub issue #1. Relevant decisions: D-5 (`intended` vs `confirmed`), D-9
 
 ## Requirements
 
-Restated from `CONTEXT.md` plus two Rocket added on 2026-08-10 (R3, and R4 sharpened
+Restated from `GLOSSARY.md` plus two Rocket added on 2026-08-10 (R3, and R4 sharpened
 from "reports status" to "can be polled"):
 
 - **R1 (MUST)** Wireless - Wi-Fi or Bluetooth/BLE. No GPIO wiring to the receiver.
@@ -518,5 +518,5 @@ Displays:
 - https://www.raspberrypi.com/products/touch-display-2/ , .../raspberry-pi-zero-2-w/ , https://www.pishop.us/product/raspberry-pi-zero-2-w/
 
 Repo:
-- `CONTEXT.md` (D-5, D-6, D-9, D-11, D-12, D-13, D-14; invariants), `docs/api-contract.md`,
+- `GLOSSARY.md` (D-5, D-6, D-9, D-11, D-12, D-13, D-14; invariants), `docs/api-contract.md`,
   `docs/research/2026-08-05-light-hardware.md`, `docs/research/2026-08-05-companion-integration.md`

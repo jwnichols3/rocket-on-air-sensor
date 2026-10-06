@@ -2,7 +2,7 @@
 
 > **STATUS: COMPLETE (2026-08-23).** All ten steps executed and accepted; transcript on
 > issue #6, which is closed. Outcome and the three decisions it forced are recorded as
-> **D-22** in `CONTEXT.md`. This document is kept as the record of what was handed over,
+> **D-22** in `GLOSSARY.md`. This document is kept as the record of what was handed over,
 > not as outstanding work. Note that section "The manual hold" below was amended in
 > practice: a manual write to a rung *below* the floor releases the floor (D-21), because
 > "applies its level as given" left `level` and `hold` able to contradict each other.
@@ -36,7 +36,7 @@ This brief records only what changed *after* that spec was written.
 | Device | Elegoo `esp32dev`, `framework: esp-idf`, SH1106 128x64 mono OLED, live at **10.42.12.77** |
 | ESPHome | **2026.8.0** in `/Users/john/code/esp32/.venv`, driven by that repo's `Makefile` |
 | Ports today | 6053 open (native API), **80 dead** (no `web_server:` yet) |
-| Decisions | `CONTEXT.md` **D-16 .. D-20**, recorded 2026-08-23 |
+| Decisions | `GLOSSARY.md` **D-16 .. D-20**, recorded 2026-08-23 |
 
 ## The five open questions, answered
 

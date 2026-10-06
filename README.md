@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/mai
   2026-08-23). The `/display` browser page is a second renderer of the same state, not
   the light itself.
 
-`CONTEXT.md` holds the glossary, the invariants, and all decisions. Start at the
+`GLOSSARY.md` holds the glossary, the invariants, and all decisions. Start at the
 **Supersession index** at the top of its `## Decisions` section - several older
 decisions are written in a vocabulary the system no longer uses.
 
@@ -129,7 +129,7 @@ the install path.
 
 | Document | Content |
 |---|---|
-| `CONTEXT.md` | Problem, glossary, invariants, decisions |
+| `GLOSSARY.md` | Problem, glossary, invariants, decisions |
 | `INSTALL.md` | Install instructions by layer |
 | `docs/api-contract.md` | The On-air API contract |
 | `docs/mac-setup.md` | Mac service setup and the `onair` CLI |

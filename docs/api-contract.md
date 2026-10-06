@@ -8,7 +8,7 @@ source.** VCREC - the external detector (D-30) - is exactly that reader: this re
 imports it, never names it in code, and never depends on its shape. Anything a client
 needs to know has to be here.
 
-Decisions: D-31..D-44 and D-126 in `CONTEXT.md`. Design: `docs/superpowers/specs/2026-08-23-onair-v2-design.md`.
+Decisions: D-31..D-44 and D-126 in `GLOSSARY.md`. Design: `docs/superpowers/specs/2026-08-23-onair-v2-design.md`.
 
 > **What changed from v1.** `level` and the three-rung ladder are gone, replaced by a
 > user-editable **state table**. `onAir`, `POST /on`, `POST /off` and the five hardcoded

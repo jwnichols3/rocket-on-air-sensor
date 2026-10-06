@@ -2,7 +2,7 @@
 
 Detect Zoom/Google Meet call state on the Mac and drive a remote on-air light.
 
-Read `CONTEXT.md` first, starting at the **Supersession index** at the top of its
+Read `GLOSSARY.md` first, starting at the **Supersession index** at the top of its
 `## Decisions` section - several older decisions are written in a vocabulary the system
 no longer uses. The v2 architecture is settled in
 `docs/superpowers/specs/2026-08-23-onair-v2-design.md` and `docs/api-contract.md`; do not
@@ -89,7 +89,7 @@ Canonical five roles (`needs-triage`, `needs-info`, `ready-for-agent`,
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` at root; decisions recorded in its `## Decisions` section
+Single-context: `GLOSSARY.md` at root; decisions recorded in its `## Decisions` section
 (the ADR record). See `docs/agents/domain.md`.
 
 ### Sideloading the Companion module

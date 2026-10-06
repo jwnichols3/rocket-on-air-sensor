@@ -352,7 +352,7 @@ the IP may have changed), `captive_portal:` so credentials change without a refl
 lines of hand-rolled MD5 in the driver for no gain on a LAN.
 
 **Fail-safe direction:** hold last state and degrade visibly. STAC fails to green / "not on
-air", which is exactly backwards for `CONTEXT.md:67`; copy Tally Arbiter's hold-last-state.
+air", which is exactly backwards for `GLOSSARY.md:67`; copy Tally Arbiter's hold-last-state.
 
 ### Acceptance - four transcripts, none needing hands at the board
 
@@ -378,7 +378,7 @@ count of `unknown` intervals reported honestly rather than hidden.
 
 Then:
 - `docs/api-contract.md` gains a "Device protocol" section and the `confirmed` decay rule.
-- `CONTEXT.md` gains **D-16..D-19** plus the **D-6 and D-12 amendments** (drafted in
+- `GLOSSARY.md` gains **D-16..D-19** plus the **D-6 and D-12 amendments** (drafted in
   `docs/research/2026-08-20-esp32-diy-light.md` §7).
 - `docs/firmware-setup.md` gains the ESPHome install + first-flash + OTA runbook, mirroring
   `docs/pi-setup.md`'s role.

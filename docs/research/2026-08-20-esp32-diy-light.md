@@ -101,7 +101,7 @@ shipping a dim disappointment.
 The relay is the only in-box path to a room-visible light, with three cautions:
 1. **[UNRESOLVED]** driving a 5 V-coil module from a 3.3 V GPIO is undocumented behaviour.
 2. **A crashed ESP32 de-energises the relay - which is a false OFF**, precisely the
-   invariant this project exists to protect (`CONTEXT.md`).
+   invariant this project exists to protect (`GLOSSARY.md`).
 3. Do not switch mains on a breadboard.
 
 ### Shopping list to make it real - $13.40
@@ -385,7 +385,7 @@ multicast frames.
 
 **[FACT] Fail-safe direction is a real fork, and two mature projects chose opposite
 defaults without reasoning about it.** STAC deliberately fails to green / "not on air" -
-exactly backwards for `CONTEXT.md:67`. **Copy Tally Arbiter's hold-last-state instead, plus
+exactly backwards for `GLOSSARY.md:67`. **Copy Tally Arbiter's hold-last-state instead, plus
 a visible degradation blip.**
 
 ---
@@ -538,7 +538,7 @@ path of D-15's one-line installer for no benefit.
    since the 10 s re-assert makes the window small - but test it and record the answer.
 6. **`web_server` heap cost on an ESP32-WROOM-32.** Docs warn it "will take up *a lot* of
    memory"; no ESP32 figure is published. Log free heap after Phase 2. **[UNRESOLVED]**
-7. **Light behaviour: binary, or colours/states?** Still open at `CONTEXT.md:86`, and now
+7. **Light behaviour: binary, or colours/states?** Still open at `GLOSSARY.md:86`, and now
    nearly free - a NeoPixel stick gives colour for the same $5.95. Decide before Phase 2 so
    the entity shape does not churn. If colour becomes the signal, **re-check that the
    attribute encoding ON AIR is the one `GET` returns** (AWTRIX's write-only
@@ -549,7 +549,7 @@ path of D-15's one-line installer for no benefit.
    **[UNRESOLVED, not primary-sourced by anyone.]**
 
 Two off-segment findings worth keeping, both relevant to the still-open detector question
-(`CONTEXT.md:70`): the Home Assistant Companion App for macOS exposes
+(`GLOSSARY.md:70`): the Home Assistant Companion App for macOS exposes
 `binary_sensor.<mac>_camera_in_use` (a working zero-cloud detector not on the shortlist),
 and one prior-art project tapes a photocell over the webcam LED for spoof-proof detection.
 
@@ -597,7 +597,7 @@ github.com/deckerego/tally_circuitpy - github.com/AronHetLam/ATEM_tally_light_wi
 github.com/Den-Sec/busylight - github.com/brianmwhite/on-air-alert -
 github.com/theiltho/ms-teams-statuslight (no license; technique only)
 
-**This repo (read 2026-08-20)** - `CONTEXT.md` (D-1..D-15, invariants, open questions) -
+**This repo (read 2026-08-20)** - `GLOSSARY.md` (D-1..D-15, invariants, open questions) -
 `docs/api-contract.md` - `docs/agents/issue-tracker.md` -
 `docs/research/2026-08-10-onair-light-hardware-slate.md` (Tensions 1-3; Athom rows) -
 `src/driver.ts`, `src/state.ts`, `src/server.ts`, `src/sse.ts`, `src/display.ts`,
