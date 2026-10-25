@@ -6,11 +6,16 @@
 // is - the page has to render when the thing it would fetch assets from is the thing that
 // is broken.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const out = join(here, '..', 'server', 'public', 'admin', 'index.html');
+const args = process.argv.slice(2);
+if (args.length !== 0 && (args.length !== 2 || args[0] !== '--out-dir' || args[1].trim() === '')) {
+  throw new Error('usage: node admin-ui/build.mjs [--out-dir DIRECTORY]');
+}
+const outputDir = args.length ? resolve(args[1]) : join(here, '..', 'server', 'public', 'admin');
+const out = join(outputDir, 'index.html');
 
 const [html, css, js] = await Promise.all([
   readFile(join(here, 'src', 'index.html'), 'utf8'),

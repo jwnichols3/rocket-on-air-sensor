@@ -668,7 +668,7 @@ function editorNode(row, isNew) {
   var err = el('span', 'err');
   var save = el('button', 'btn primary small', 'Save row');
   save.addEventListener('click', function () {
-    var problems = validateRow(work, isNew);
+    var problems = validateRow(work, isNew, row.id);
     if (problems.length) { err.textContent = problems.join('; '); return; }
     var frozen = JSON.parse(JSON.stringify(work));
     var exists = draft.states.some(function (r) { return r.id === row.id; });
@@ -693,7 +693,7 @@ function editorNode(row, isNew) {
   return box;
 }
 
-function validateRow(row, isNew) {
+function validateRow(row, isNew, originalId) {
   var p = [];
   if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(row.id)) p.push('id must be lower-case letters, digits and dashes');
   if (!row.label || row.label.length > 64) p.push('label must be 1-64 characters');
@@ -701,7 +701,11 @@ function validateRow(row, isNew) {
   if (!HEX.test(row.bgcolor)) p.push('background must be #rrggbb, lower-case');
   if (!(Number.isInteger(row.order) && row.order >= 0 && row.order <= 999)) p.push('order must be 0-999');
   if (row.description && row.description.length > 200) p.push('description must be at most 200 characters');
-  if (isNew && draft.states.filter(function (r) { return r.id === row.id; }).length > 1) p.push('that id is already taken');
+  // The editor auto-slugs its copy while the draft still carries the placeholder id.
+  // Exclude that original row, then compare the id we are actually about to stage.
+  if (isNew && draft.states.some(function (r) { return r.id !== originalId && r.id === row.id; })) {
+    p.push('that id is already taken');
+  }
   return p;
 }
 
@@ -818,7 +822,7 @@ function renderFields() {
     }
     f.appendChild(input);
     if (opts.override) {
-      f.appendChild(el('div', 'nag', 'Set by ' + opts.override + ' in ~/.onair/config.env.'));
+      f.appendChild(el('div', 'nag', 'Set by ' + opts.override + ' in the environment or ~/.onair/config.env.'));
     }
     if (opts.nag) f.appendChild(el('div', 'nag', opts.nag));
     box.appendChild(f);
@@ -830,9 +834,11 @@ function renderFields() {
   // opposite jobs: this one is read off the page and typed into the ESP32 and Companion, so
   // masking it would add a reveal click to every client setup for no gain. The admin
   // password is typed in here and never read back, so masking costs nothing.
+  var passphraseOverride = overriddenBy('auth.passphrase');
   textField(admin, 'Passphrase (machine clients)', function () { return draft.auth.passphrase; },
     function (v) { draft.auth.passphrase = v; saveDraft(); },
-    { nag: nags.passphrase ? 'Currently set to the default.' : '' });
+    { override: passphraseOverride,
+      nag: !passphraseOverride && nags.passphrase ? 'Currently set to the default.' : '' });
   textField(admin, 'Admin user', function () { return draft.auth.adminUser; },
     function (v) { draft.auth.adminUser = v; saveDraft(); });
   textField(admin, 'Admin password', function () { return draft.auth.adminPassword; },
@@ -1255,6 +1261,7 @@ function factoryReset() {
   openModal('Factory reset', [
     'Credentials, the state table, the live state, the port and the bind mode all return to their defaults.',
     'The device address and its credentials are kept.',
+    'Environment overrides remain in effect.',
     'Every admin session ends, including this one.'
   ], 'Reset', 'Admin password', function (password, errLine) {
     api('/admin/factory-reset', { method: 'POST', body: JSON.stringify({ password: password }) }).then(function (r) {

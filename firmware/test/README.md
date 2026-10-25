@@ -21,13 +21,14 @@ defect these tests exist for.
 | | `run.sh` | `browser/test-page.mjs` |
 |---|---|---|
 | runs | `npm run test:firmware` | `npm run test:browser` |
-| in `npm run verify` | **yes** | no |
+| in `npm run verify` | **yes** | **yes, offline** |
 | needs | a C++ compiler | a downloaded Chromium |
 | asserts on | the bytes the firmware emits | what a browser does with them |
 
-**The host suite is in the gate; the browser suite is not.** `verify` must not fail on a
-machine that has not run `npx playwright install`, and this repo has no CI to guarantee one.
-Run the browser suite before shipping a change to `firmware/assets/`.
+Both suites are in the local gate. Install Chromium once with
+`npx playwright install chromium`. The admin console's browser tests already require it.
+The firmware browser suite also needs a C++ compiler because it renders fresh HTML for
+every run.
 
 ### `run.sh` - the emitted HTML and the POST contract
 
@@ -62,13 +63,33 @@ It also measures the glass geometry from the rendered box rather than from the C
 which is the check that would have caught `*` not matching pseudo-elements - the defect that
 inflated the ring to 58px and put lit pixels inside the reserved `y >= 49` band.
 
-It prefers the **live device** and falls back to the committed capture, and always prints
-which it used. It never silently skips.
+By default it compiles the current `onair_page.h` and `onair_table.h` against the host
+shim, seeds a deterministic state table, and sends a real GET through `Page::handleRequest`.
+`run.sh --browser-fixture` emits that handler's HTML. The browser loads that output with
+the current CSS and JavaScript. No historical capture or device request is involved.
+
+The suite verifies the current Night schedule form as well as the editor. This catches
+the old fixture problem: the historical capture did not contain the schedule controls,
+even while its browser checks passed.
 
 ```sh
-npm run test:browser                      # live device if reachable
-ONAIR_DEVICE=10.42.12.77 npm run test:browser
+npm run test:browser                      # deterministic, offline; included in verify
+bash firmware/test/run.sh --browser-fixture > /tmp/onair-config.html
 ```
+
+The separate live check is opt-in. Set `ONAIR_DEVICE`, `ONAIR_DEVICE_PASSWORD`, and
+optionally `ONAIR_DEVICE_USER` in your environment, then run `npm run test:browser:live`.
+It reads the selected device and tests a local copy of its page; it does not submit forms
+to the device. It requires the representative `interruptible` row used by these tests and
+fails if the device cannot be read, with no fallback to local HTML.
+
+### Configuration diagnostic tests
+
+`make -C firmware test-tools`, also in `verify`, exercises `tools/validate-config.py`
+with a fake ESPHome process. It checks that validation errors remain actionable while
+credentials from both stdout and stderr are redacted, that successful expanded configs
+are suppressed, and that malformed secret files do not leak their YAML exception text.
+It uses the firmware virtual environment installed by `make -C firmware setup`.
 
 ## `shim/`
 

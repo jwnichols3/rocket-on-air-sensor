@@ -1,139 +1,152 @@
 # rocket-on-air-sensor
 
-This system turns an on-air light on when Rocket is in a Zoom or Google Meet call.
-It turns the on-air light off when the call ends.
+A Receiver service and physical on-air displays for call state from an external
+Detector, with manual control from a browser, menu bar, and Stream Deck.
 
-Install the host with one command (it asks three setup questions, then starts the
-service):
+Install the host with one command:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
 ```
 
-`INSTALL.md` has the full instructions for every layer.
+[INSTALL.md](INSTALL.md) covers each layer. [Current architecture and operations](docs/architecture.md)
+is the short guide to how the parts fit together.
 
 ## Architecture
 
-```
-[work Mac] --detector--> [On-air API on the Receiver] --> [on-air light]
-                              ^
-                              | manual control: admin UI, curl, Stream Deck (Companion)
-```
-
-- The **Detector** runs on the work Mac. It senses the call state. It is not built
-  yet. GitHub issue #5 in this repo has the research.
-- The **Receiver** runs the **On-air API**. The On-air API is the source of truth for
-  the call state. The Receiver is a Mac Mini now. A Raspberry Pi can be the Receiver
-  later (D-4).
-- The **on-air light** is a DIY ESP32 driving an OLED panel (D-16, live since
-  2026-08-23). The `/display` browser page is a second renderer of the same state, not
-  the light itself.
-
-`GLOSSARY.md` holds the glossary, the invariants, and all decisions. Start at the
-**Supersession index** at the top of its `## Decisions` section - several older
-decisions are written in a vocabulary the system no longer uses.
-
-## Repo layout
-
-Four flat directories (D-37). Two are npm workspaces plus one placeholder; `firmware/`
-has its own toolchain and is driven from root scripts.
-
-```
-server/            the Node service - package "onair-api", the thing the daemon runs
-admin-ui/          the admin SPA (state table editor, settings) - built by #42
-firmware/          the ESPHome lab for the ESP32 panel - uv/esphome, not npm
-companion-module/  the Bitfocus Companion module - built by #44
-docs/  deploy/     repo-wide by nature, and stay at the root
+```text
+[work Mac: VCREC Detector] --> [On-air API on the Receiver] --> [primary on-air panel]
+                                         |                  [optional secondary panels]
+                                         ^
+                             admin UI, SwiftBar, Companion
 ```
 
-## Parts
+- The **Detector** is the separate VCREC project. It writes state through the API;
+  this repository does not implement call sensing. Detector writes identify their
+  source as `auto:vcrec`. Verify the complete chain with a real call when installing it.
+- The **Receiver** hosts the **On-air API**, the source of truth. It runs on macOS
+  or a Raspberry Pi with systemd (D-4).
+- The **on-air panels** run ESPHome. One enabled panel is primary, and `confirmed`
+  describes that panel only. Secondary panels are best effort (D-147). Firmware
+  configurations support CrowPanel and Elegoo ESP32 boards.
+- The **state table** defines stable row IDs, labels, colours, and the `busy` meaning.
+  The last valid write wins. A manual write lasts until the next writer changes it.
+  The Receiver latches state; each renderer judges its own connection health.
 
-| Part | What it does |
+[GLOSSARY.md](GLOSSARY.md) holds the vocabulary, invariants, and decision record.
+Read its **Supersession index** before relying on older decisions or design documents.
+
+## Repository layout
+
+Three npm workspaces and one firmware toolchain (D-37):
+
+```text
+server/            Node On-air API and browser display
+admin-ui/          admin console: state table, device list, settings
+companion-module/  Bitfocus Companion module and Stream Deck presets
+firmware/          ESPHome firmware, device pages, and host tests
+```
+
+`docs/` and `deploy/` are shared across the project.
+
+## Interfaces
+
+| Interface | Purpose |
 |---|---|
-| `GET /status`, `PUT /state`, `POST /available`, `POST /interruptible`, `POST /dnd` | Read and write the call state (three rungs; `POST /on` and `/off` still work and map to `dnd`/`available`) |
+| `GET /status`, `PUT /state`, `POST /state/{id}` | Read or write a state-table row; automated writes identify their source |
+| `POST /on`, `POST /off` | Write the configured shortcut rows |
+| `POST /cycle` | Advance through a caller-selected ring of rows |
+| `POST /panel/sleep`, `/panel/wake`, `/panel/toggle` | Request a manual panel sleep/wake change |
 | `PUT /message`, `DELETE /message` | Set or clear the display message |
-| `GET /events` (SSE), `GET /events/ws` (WebSocket) | Push status to clients |
-| `GET /display` | The on-air light: a fullscreen tally page, rendered from the state table |
-| `GET /public/status`, `GET /public/events` | Unauthenticated, deliberately thin - the current row resolved for rendering |
-| `GET /admin/health`, `POST /admin/restart` | Service health and remote restart |
-| `deploy/onair` | CLI that installs, configures (`setup`), updates, and controls the Mac service |
-| `deploy/bootstrap` | Builds and installs the host on either machine: `deploy/onair install` on the Mac, a rendered systemd unit on the Pi |
-| `deploy/get-onair` | Self-contained one-line install shim: clones (or reuses) the repo, then hands off to `deploy/bootstrap` |
-| `deploy/onair.service.template` | systemd unit template for the Raspberry Pi, rendered by `deploy/bootstrap` |
+| `GET /events` (SSE), `GET /events/ws` (WebSocket) | Push status to machine clients |
+| `GET /config/states` | Read the versioned state table |
+| `GET /`, `GET /admin` | Open the admin console |
+| `GET /admin/config`, `PUT /admin/config` | Read or save configuration with a version check |
+| `GET /display`, `GET /public/status`, `GET /public/events` | Public browser display and its rendering data |
+| `GET /admin/health` | Inspect service and per-device health |
+| `GET /docs` | Read the client API guide in the browser |
 
-The full On-air API contract is in `docs/api-contract.md`.
+The [API contract](docs/api-contract.md) specifies authentication, request bodies,
+response fields, and error handling. Restart the installed Mac service with
+`onair restart`; `POST /admin/restart` is retained but returns 403 in the shipped
+application.
 
-## Quick start
-
-Quick start runs the On-air API locally, for development or a first look. For a
-deployed Receiver, see `INSTALL.md`.
-
-```sh
-npm install                 # installs all workspaces from the root
-npm run build               # builds server/ into server/dist/
-npm start -w server         # or: npm run dev -w server
-```
-
-Then open `http://localhost:8484/display`.
-
-Configuration comes from environment variables: `ONAIR_PORT` (default 8484),
-`ONAIR_STATE_FILE` (default `~/.onair/state.json`), and `ONAIR_TOKEN` (optional
-bearer auth). It also reads `~/.onair/config.env` if present; a real environment
-variable always wins over the file (`server/src/config.ts`).
-
-## Install
+## Local development
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/main/deploy/get-onair | bash
+npm install
+npm run build
+npm start -w server          # or: npm run dev -w server
 ```
 
-`INSTALL.md` has the instructions for each layer:
+Open `http://localhost:8484/` for the console or `/display` for the tally.
+To develop alongside a running Receiver, use a different port and temporary
+`ONAIR_CONFIG_FILE` and `ONAIR_STATE_FILE` paths rather than the deployed files.
 
-1. **Host** - run the On-air API as a supervised service (Mac launchd or Pi systemd).
-2. **Client** - connect the on-air light, the control panel, and manual control.
-3. **Companion** - control the call state from a Stream Deck.
+Configuration lives in `~/.onair/config.json`. The console edits that document;
+`~/.onair/state.json` stores the last state write separately. `~/.onair/config.env`
+is an environment overlay for installation and recovery, and an already-set
+process variable wins over the same variable in the file.
 
-## Development
+Common overrides:
+
+| Variable | Purpose |
+|---|---|
+| `ONAIR_PORT` | Override the configured port (default 8484) |
+| `ONAIR_CONFIG_FILE` | Choose the config document path |
+| `ONAIR_STATE_FILE` | Choose the state file path |
+| `ONAIR_CONFIG` | Choose the environment-overlay file path |
+| `ONAIR_PASSPHRASE` | Override the machine-client passphrase |
+| `ONAIR_TOKEN` | Legacy passphrase override, used when `ONAIR_PASSPHRASE` is unset |
+| `ONAIR_LIGHT_HOST`, `ONAIR_LIGHT_ENTITY`, `ONAIR_LIGHT_USER`, `ONAIR_LIGHT_PASS` | Override the primary panel connection |
+
+Machine clients use the passphrase. Human administration uses a separate session
+credential. Same-origin local access has the documented loopback waiver; LAN
+clients still authenticate. See the contract for the exact conditions.
+
+## Verification
 
 ```sh
-npm run verify         # THE gate: every typecheck, every test, the deploy-path
-                       # tests, and `esphome config` on the firmware YAML
-npm test -w server     # just the server's typecheck + unit tests
-npm run dev -w server  # run from source with tsx
+npm run verify              # builds, typechecks, tests, generated-file and firmware checks
+npm test -w server          # server typechecks and tests
+npm test -w admin-ui        # real-browser console checks, after building
 ```
 
-`npm run verify` is what runs before any commit that touches source. There is no CI,
-deliberately (D-37) - this command is the gate, run by a human or an agent.
+`npm run verify` is the local gate before source commits. There is no CI,
+deliberately (D-37). Browser tests require Playwright's Chromium installation;
+run `npx playwright install chromium` once if it is missing.
 
-The firmware half of `verify` needs a one-time setup, since it shells out to a real
-`esphome`:
+Firmware validation needs its pinned toolchain and a local secrets file:
 
 ```sh
-npm run firmware:setup                                          # uv sync
-cp firmware/configs/secrets.yaml.example firmware/configs/secrets.yaml && $EDITOR $_
+npm run firmware:setup
+cp firmware/configs/secrets.yaml.example firmware/configs/secrets.yaml
+# Fill in the file, including a valid base64 API encryption key.
 ```
 
-Without them `verify` **fails** with a message saying which one is missing - it does
-not skip quietly.
+Missing prerequisites fail the gate explicitly. [firmware/README.md](firmware/README.md)
+explains board compilation, browser tests, and post-flash verification. A passing
+host test or YAML check does not establish which firmware is running on a device.
 
-Dependencies are **minimal, necessary and trusted - not zero** (D-29). Earlier docs in
-this repo assert a zero-production-dependency rule; it was never actually decided and
-was retired on 2026-08-23. The system requires Node.js 22 or later.
-
-**`npx github:jwnichols3/rocket-on-air-sensor` is retired.** The root package is
-`private` and has no `bin`, so that path no longer resolves an executable. D-15 had
-already demoted it to a throwaway demo; D-37 finished the job. `deploy/get-onair` is
-the install path.
+Dependencies are **minimal, necessary, and trusted** (D-29). Node.js 22 or later
+is required. Older documents' zero-production-dependency restriction is superseded.
+The former `npx github:jwnichols3/rocket-on-air-sensor` install path is retired;
+use `deploy/get-onair`.
 
 ## Documents
 
 | Document | Content |
 |---|---|
-| `GLOSSARY.md` | Problem, glossary, invariants, decisions |
-| `INSTALL.md` | Install instructions by layer |
-| `docs/api-contract.md` | The On-air API contract |
-| `docs/mac-setup.md` | Mac service setup and the `onair` CLI |
-| `docs/pi-setup.md` | Raspberry Pi service and kiosk setup |
-| `docs/companion-setup.md` | Bitfocus Companion configuration |
-| `docs/research/` | Research notes: light hardware, call detection, Companion |
-| `firmware/README.md` | The ESPHome lab: setup, the version pin, the state entity |
+| [Current architecture](docs/architecture.md) | Present model, configuration, health, and operating boundaries |
+| [GLOSSARY.md](GLOSSARY.md) | Vocabulary, invariants, and decisions |
+| [INSTALL.md](INSTALL.md) | Install instructions by layer |
+| [API contract](docs/api-contract.md) | The On-air API contract |
+| [Mac setup](docs/mac-setup.md) | Mac service setup and the `onair` CLI |
+| [Pi setup](docs/pi-setup.md) | Raspberry Pi service and kiosk setup |
+| [Companion setup](docs/companion-setup.md) | Bitfocus Companion configuration |
+| [Admin console](admin-ui/README.md) | Console behaviour and development |
+| [Next steps](docs/NEXT.md) | Current follow-up work and verification boundaries |
+
+Files under `docs/research/`, `docs/superpowers/`, and `docs/design/` capture their
+original research or implementation stage. Use the current contract and source to
+resolve differences.

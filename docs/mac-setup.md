@@ -93,10 +93,54 @@ standing grant. Remove it with `sudo rm /etc/sudoers.d/onair`.
 | `reset-state` | If the API responds: `POST /off` + `DELETE /message` over HTTP; else `rm` the state file directly. Then `kickstart -k` and health-poll. |
 | `disable` | `launchctl disable` (persists across reboot). Health-polls (failure expected/ignored). |
 | `enable` | `launchctl enable`, then runs `start`. |
-| `update [--check-only\|--dry-run] [--yes]` | Fetch, fast-forward the checkout, `npm ci`, rebuild, swap in the new `dist`, restart (reload if the node path changed), health-poll; rolls back to the previous build on failed health. `--check-only`/`--dry-run` only lists pending commits. `--yes` skips the confirm prompt (implied when stdin isn't a TTY). Refuses a dirty tree or a checkout with no upstream branch. |
+| `update [--check-only\|--dry-run] [--yes]` | Fetch, fast-forward the checkout, `npm ci`, stage the server and admin console, replace both, restart (reload if the node path changed), health-poll; restores both previous artifacts on failed health. `--check-only`/`--dry-run` only lists pending commits. `--yes` skips the confirm prompt (implied when stdin isn't a TTY). Refuses a dirty tree or a checkout with no upstream branch. |
 
 Every mutating verb polls `/admin/health` for up to 5s afterward and prints
 `health: PASS` or `health: FAIL`.
+
+## Update artifacts and recovery
+
+`onair update` builds the server in `server/.dist-next` and the console in
+`server/.admin-next` before replacing either active directory. The staged server
+also receives its build metadata. A console-only change or a change to the build
+metadata generator requires a rebuild even when the server sources are unchanged.
+
+The active paths remain `server/dist` and `server/public/admin`. Replacement keeps
+the previous pair in `server/dist.prev` and `server/admin.prev`. If a rename fails
+or an interrupt/termination signal arrives during replacement, both original
+paths are restored and the command reports failure. The candidate artifacts remain
+in the staging directories for diagnosis.
+
+If the restarted service fails its health check, both previous artifacts are
+restored. The failed pair is kept in `server/.dist-failed` and
+`server/.admin-failed`. If the original console directory was absent, the snapshot
+records that in `server/admin.prev.absent`; rollback restores the original server
+and console absence. An original console directory without a built bundle is also
+restored as it was. Forward updates always require a complete candidate pair. A
+missing previous server is reported as a recovery failure, never a successful rollback.
+
+The two active directories cannot be renamed in a single atomic filesystem
+operation. SIGKILL and machine power loss cannot run cleanup traps. If either
+interrupts the replacement, preserve the staged and previous directories and
+recover a matching server/console pair before restarting.
+
+## A powered panel is reported unreachable
+
+Inspect the primary device in `GET /admin/health` separately from intentionally
+disconnected secondary panels. `confirmedReason: unreachable` says the Receiver
+cannot obtain device evidence; it does not prove the panel lost power or Wi-Fi.
+
+On macOS, also check **System Settings > Privacy & Security > Local Network** for
+the `node` executable that actually runs the Receiver. A Homebrew Node change can
+change that executable and its permission context. Match the daemon's executable
+to the installed launchd configuration rather than assuming a successful request
+from an interactive terminal tests the same process.
+
+If the daemon reports `EHOSTUNREACH` while an interactive request succeeds, check for a
+Local Network permission prompt for `node`. Allow the Receiver's required local-network
+access through the normal system permission control, then verify primary reachability
+and confirmation again. Restarting or reflashing the panel does not fix a denied
+permission on the Receiver.
 
 ## Reload after host-layout changes
 

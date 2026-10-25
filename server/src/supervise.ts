@@ -16,13 +16,13 @@ export interface SuperviseOptions {
   log?: (line: string) => void;
 }
 
-export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
+export function startSupervisor(o: SuperviseOptions): { stop: () => void; resetEvidence: () => void } {
   const pollMs = o.pollMs ?? 5000;
   const reassertMs = o.reassertMs ?? 60000;
   const decayMs = o.decayMs ?? 30000;
   const log = o.log ?? console.log;
 
-  const host = o.driver.host ?? '(no host)';
+  let host = o.driver.host ?? '(no host)';
 
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
@@ -247,6 +247,18 @@ export function startSupervisor(o: SuperviseOptions): { stop: () => void } {
   // queue's promise chain is safe - tick() only mutates an in-memory store the process is
   // about to drop.
   return {
+    // Called inside the shared write queue after the authoritative driver changes. No
+    // in-flight tick can carry a reading across this boundary. Observations belong to
+    // one panel, so neither darkness nor a confirmation grace period transfers to another.
+    resetEvidence: () => {
+      lastAssertAt = 0;
+      lastGoodAt = 0;
+      lastGlass = null;
+      frozenSince = null;
+      frozenTicks = 0;
+      darkSince = null;
+      host = o.driver.host ?? '(no host)';
+    },
     stop: () => {
       stopped = true;
       if (timer) clearTimeout(timer);

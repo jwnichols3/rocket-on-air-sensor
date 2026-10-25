@@ -19,9 +19,29 @@ ok()   { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; [[ $# -gt 1 ]] && printf '       %s\n' "$2"; }
 check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1" "expected [$3], got [$2]"; fi; }
 
+echo "== About metadata =="
+# SwiftBar reads the version from the script, not its output or the Receiver.
+# Keep this check against the canonical product version so a later release cannot
+# leave About blank or advertise the previous plugin version.
+if python3 - "$HERE/../package.json" "$PLUGIN" <<'METADATA'
+import json, pathlib, re, sys
+version = json.loads(pathlib.Path(sys.argv[1]).read_text())["version"]
+plugin = pathlib.Path(sys.argv[2]).read_text()
+versions = re.findall(r"<xbar\.version>(.*?)</xbar\.version>", plugin)
+if versions != ["v" + version]:
+    print("expected exactly one xbar.version v%s, got %r" % (version, versions))
+    raise SystemExit(1)
+METADATA
+then
+  ok "About reports the canonical product version"
+else
+  bad "About reports the canonical product version"
+fi
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "deploy/test-swiftbar.sh: SKIPPED - the plugin targets macOS"
-  exit 0
+  [[ "$FAIL" -eq 0 ]]
+  exit $?
 fi
 
 SCRATCH="$(mktemp -d /tmp/onair-test-swiftbar.XXXXXX)"

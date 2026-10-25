@@ -2,10 +2,11 @@
 # files, not history (D-37) - that repo stays exactly as it is, as a lab.
 #
 # `config` is the target the root `npm run verify` calls: it validates the YAML with
-# no hardware attached and no flash. Everything else here needs the board.
-.PHONY: setup config validate compile dashboard flash logs clean
+# no hardware attached and no flash. Only upload/logging needs a connected board.
+.PHONY: setup config validate compile compile-all release-check test-tools dashboard flash logs clean
 
 ESPHOME := .venv/bin/esphome
+PYTHON := .venv/bin/python
 BUILDER := .venv/bin/esphome-device-builder
 # EVERY board YAML, not just the first one. A gate that validates half the firmware
 # while reporting success is worse than no gate (#57).
@@ -25,8 +26,13 @@ config:
 	@test -f configs/secrets.yaml || { \
 	  echo "firmware: configs/secrets.yaml missing - copy configs/secrets.yaml.example and fill it in." >&2; \
 	  echo "          It is gitignored; it holds the D-17 device credentials." >&2; exit 1; }
-	@for c in $(CONFIGS); do echo "--- $$c"; $(ESPHOME) config $$c >/dev/null || exit 1; done
+	@$(PYTHON) tools/validate-config.py --esphome "$(ESPHOME)" $(CONFIGS)
 	@echo "firmware: all board configs valid"
+
+test-tools:
+	@test -x $(PYTHON) || { \
+	  echo "firmware: $(PYTHON) not found - run 'make -C firmware setup' (needs uv)" >&2; exit 1; }
+	$(PYTHON) -m unittest discover -s test -p 'test_*.py'
 
 # Kept as an alias: `validate` is what the lab repo called this.
 validate: config
@@ -42,13 +48,24 @@ compile:
 	rm -f configs/.esphome/build/*/build_info.json
 	$(ESPHOME) compile $(CONFIG)
 
+# Release preparation only. No upload and no device restart.
+# Clear caches once so compiling the second board preserves the first board's marker.
+compile-all:
+	rm -f configs/.esphome/build/*/build_info.json
+	@for c in $(CONFIGS); do $(ESPHOME) compile "$$c" || exit 1; done
+
+release-check: config
+	$(MAKE) compile-all
+	@echo "firmware: both boards compiled. Before upload, record the running Build marker."
+	@echo "firmware: after upload, verify the new marker again beyond the 60-second rollback window."
+
 dashboard:
 	$(BUILDER) configs --host 127.0.0.1 --port 6052
 
 # NEVER run this from an agent turn - `esphome run` tails logs with no timeout and
 # hangs. Flash over the air with BOTH steps, in this order:
 #
-#   .venv/bin/esphome compile $(CONFIG)
+#   make compile CONFIG=$(CONFIG)
 #   .venv/bin/esphome upload --device <ip> $(CONFIG)
 #
 # `upload` ALONE DOES NOT COMPILE. It ships whatever binary is already in

@@ -1,6 +1,6 @@
 {
   "name": "rocket-on-air-sensor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Detect call state on the Mac and drive a remote on-air light. Four parts, one verify command.",
   "type": "module",
@@ -19,14 +19,18 @@
     "firmware:config": "make -C firmware config",
     "firmware:setup": "make -C firmware setup",
     "firmware:compile": "make -C firmware compile",
-    "verify": "npm run build --workspaces --if-present && npm run check --workspaces --if-present && npm run test --workspaces --if-present && npm run test:deploy && npm run test:firmware && npm run docs:page:check && npm run firmware:assets:check && npm run firmware:config",
+    "verify": "npm run version:check && npm run test:version && npm run build --workspaces --if-present && npm run check --workspaces --if-present && npm run test --workspaces --if-present && npm run test:deploy && npm run test:firmware && npm run test:browser && make -C firmware test-tools && npm run docs:page:check && npm run firmware:assets:check && npm run firmware:config",
     "test:deploy": "for f in deploy/test-*.sh; do bash \"$f\" || exit 1; done",
     "firmware:assets": "python3 firmware/tools/gen-assets.py",
     "firmware:assets:check": "python3 firmware/tools/gen-assets.py --check",
     "docs:page": "node server/tools/gen-docs.mjs",
     "docs:page:check": "node server/tools/gen-docs.mjs --check",
     "test:firmware": "bash firmware/test/run.sh",
-    "test:browser": "node firmware/test/browser/test-page.mjs"
+    "test:browser": "node firmware/test/browser/test-page.mjs",
+    "test:browser:live": "node firmware/test/browser/test-page.mjs --live",
+    "version:check": "node scripts/version.mjs check",
+    "version:set": "node scripts/version.mjs set",
+    "test:version": "node --test scripts/test/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22",

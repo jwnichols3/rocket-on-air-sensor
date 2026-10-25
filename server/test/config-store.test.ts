@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -217,4 +217,16 @@ test('but an EMPTY credential is still an error - that is someone typing nothing
     const v = validateConfig({ ...defaultConfig(), auth: { ...defaultConfig().auth, [key]: '  ' } });
     assert.equal(v.ok, false, key);
   }
+});
+
+
+test('concurrent atomic file writes use independent temporary files and leave whole documents', async (t) => {
+  const file = await tmpFile();
+  const dir = join(file, '..');
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const configs = ['A', 'B', 'C'].map((label) => ({ ...defaultConfig(), states: defaultConfig().states.map((r) => ({ ...r, label })) }));
+  await Promise.all(configs.map((config) => saveConfigFile(file, config)));
+  const saved = JSON.parse(await readFile(file, 'utf8'));
+  assert(configs.some((config) => JSON.stringify(config) === JSON.stringify(saved)));
+  assert.deepEqual(await readdir(dir), ['config.json']);
 });

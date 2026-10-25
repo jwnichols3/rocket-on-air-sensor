@@ -647,6 +647,22 @@ error. Unauthenticated.
 The admin surface. Session-token gated, never passphrase-gated. Specified in the design doc
 (§ Auth and § Config store), not here - it is the owner's console, not a client contract.
 
+`GET /admin/health` distinguishes a responding service from a ready primary panel. HTTP
+200 means the service answered. The additive `primary` object has `id` (or `null`), `ready`,
+and `status`: `not-configured`, `unreachable`, `asleep`, `unconfirmed`, or `ready`.
+`ready` is true for `ready` and `asleep`, because intentional darkness is healthy.
+An unavailable secondary does not make the primary unready.
+
+The additive `build` object identifies the running build with `version`, `commit`, `dirty`,
+and `builtAt`. These values are stamped at build time and loaded once at process startup.
+Missing provenance is `null`; the service never substitutes the checkout's current revision
+for an unknown running build.
+
+Configuration saves and factory reset serialize with state writes. A save's version
+comparison occurs inside that operation, so two editors sharing a base cannot both win.
+A failed listener rebind restores the previous configuration without applying the proposed
+device targets, state table, or session invalidation.
+
 One field of `GET /admin/config` is worth stating here, because it is about the wire and not
 about the console:
 
@@ -663,6 +679,11 @@ about the console:
 `env.overrides` names the config keys the **environment overlay is currently outranking**, and
 the variable doing it. **Names only, never values** - `ONAIR_LIGHT_PASS` is a device credential
 and a list of names serves every caller while a list of values serves none (D-79).
+
+When the data passphrase is overridden, this list also includes `auth.passphrase` and the
+winning variable, `ONAIR_PASSPHRASE` or `ONAIR_TOKEN`. The effective credential is not
+returned. `config.auth.passphrase` remains the persisted document value, which is inactive
+while the override is set.
 
 `env.effective` carries the device settings **actually in force** - the overlay over the
 document, the same resolution `makeDriver` uses. A consumer that wants to reach the panel must
@@ -763,6 +784,10 @@ Two credentials, two audiences, and **neither is accepted on the other's routes.
   remote kiosk navigation. `?token=` is accepted as a deprecated alias.
 - After a rotation, **the previous passphrase keeps working for 60 minutes**, so a client
   that has not been updated yet degrades on a schedule rather than instantly.
+- A configured `ONAIR_PASSPHRASE` overrides the document; legacy `ONAIR_TOKEN` is used when
+  the newer variable is absent. This override survives config saves and factory reset,
+  is never copied into the document, and does not accept the document's current or previous
+  credential. Without an override, the document's rotation grace period applies normally.
 - An empty configured passphrase is a startup error, never bypassable auth.
 
 **Admin credentials** (user + password) gate only `/admin/*`, via a session bearer token

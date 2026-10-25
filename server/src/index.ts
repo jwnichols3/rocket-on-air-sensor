@@ -25,9 +25,10 @@ function parsePort(raw: string | undefined): number | undefined {
   return Number(raw);
 }
 
-const token = process.env.ONAIR_TOKEN;
+const tokenVariable = process.env.ONAIR_PASSPHRASE !== undefined ? 'ONAIR_PASSPHRASE' : 'ONAIR_TOKEN';
+const token = process.env[tokenVariable];
 if (token !== undefined && token.trim() === '') {
-  console.error('[onair] ONAIR_TOKEN is set but empty - either unset it (no auth) or provide a real token');
+  console.error(`[onair] ${tokenVariable} is set but empty - unset it or provide a real passphrase`);
   process.exit(1);
 }
 
@@ -36,6 +37,7 @@ const app = await createApp({
   stateFile,
   port: parsePort(process.env.ONAIR_PORT),
   token,
+  tokenVariable,
   // On a host upgrading from config.env, the first boot lifts the device settings out of
   // the env file and into the document, which is where they live from now on (D-36). The
   // env file keeps working as an overlay, so nothing breaks if this is wrong.

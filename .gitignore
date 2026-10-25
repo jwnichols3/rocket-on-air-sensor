@@ -23,6 +23,11 @@ build/
 .dist-next/
 dist.prev/
 .dist-failed/
+.admin-next/
+admin.prev/
+.admin-failed/
+admin.prev.absent
+.admin-failed.absent
 
 # firmware/ (the ESPHome lab, imported by D-37). The build cache is large and
 # machine-local; secrets.yaml holds the D-17 device credentials and never lands
@@ -44,3 +49,6 @@ server/public/admin/index.html
 companion-module/src/.instance.generated.mjs
 companion-module/dist/
 companion-module/pkg/
+
+# Local assessments and deployment receipts may contain machine-specific observations.
+/docs/assessments/

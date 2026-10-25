@@ -138,3 +138,38 @@ test('the spawned service writes its config document where it is told, and nowhe
     await new Promise((resolve) => child.once('exit', resolve));
   }
 });
+
+test('the real entrypoint prefers ONAIR_PASSPHRASE over the legacy token without persisting either', async (t) => {
+  const dir = await tmpDir();
+  const configJson = join(dir, 'config.json');
+  const port = await freePort();
+  const { defaultConfig } = await import('../src/config-store.js');
+  await writeFile(configJson, JSON.stringify({ ...defaultConfig(), bind: 'loopback', port }));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('ONAIR_')));
+  const child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
+    cwd: pkgRoot,
+    env: { ...env, ONAIR_CONFIG: join(dir, 'none.env'), ONAIR_CONFIG_FILE: configJson,
+      ONAIR_STATE_FILE: join(dir, 'state.json'), ONAIR_PASSPHRASE: 'preferred-test-secret',
+      ONAIR_TOKEN: 'legacy-test-secret' },
+    stdio: 'ignore',
+  });
+  t.after(async () => {
+    if (child.exitCode === null) { child.kill('SIGTERM'); await new Promise((resolve) => child.once('exit', resolve)); }
+  });
+  const base = `http://127.0.0.1:${port}`;
+  let ready = false;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try { const res = await fetch(`${base}/status`); await res.text(); ready = res.ok; if (ready) break; } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert(ready, 'isolated service did not start');
+  for (const [secret, expected] of [['preferred-test-secret', 200], ['legacy-test-secret', 401], ['onair', 401]] as const) {
+    const res = await fetch(`${base}/status`, { headers: { origin: 'http://other.invalid', authorization: `Bearer ${secret}` } });
+    assert.equal(res.status, expected); await res.text();
+  }
+  const res = await fetch(`${base}/admin/config`);
+  const body = await res.json() as { config: { auth: { passphrase: string } }; env: { overrides: unknown[] } };
+  assert.equal(body.config.auth.passphrase, 'onair');
+  assert(body.env.overrides.some((o) => JSON.stringify(o) === JSON.stringify({ key: 'auth.passphrase', variable: 'ONAIR_PASSPHRASE' })));
+});

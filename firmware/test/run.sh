@@ -6,7 +6,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-OUT="${TMPDIR:-/tmp}/onair-page-tests"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/onair-page-tests.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+OUT="$WORK/onair-page-tests"
 CXX="${CXX:-c++}"
 
 # -fno-exceptions matches the device: ESP-IDF builds C++ with exceptions off, which is WHY a
@@ -17,4 +19,4 @@ CXX="${CXX:-c++}"
   -I shim -I ../configs \
   test_page.cpp -o "$OUT"
 
-"$OUT"
+"$OUT" "$@"

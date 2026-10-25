@@ -1,6 +1,6 @@
 {
   "name": "onair-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -13,7 +13,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node tools/gen-build-info.mjs",
     "prepare": "npm run build",
     "check": "tsc --noEmit -p tsconfig.test.json",
     "pretest": "npm run check",
