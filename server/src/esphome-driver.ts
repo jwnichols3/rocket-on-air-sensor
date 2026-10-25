@@ -539,5 +539,13 @@ export class EsphomeTextDriver implements LightDriver {
 }
 
 function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  if (!(err instanceof Error)) return String(err);
+  // fetch hides socket failures behind "fetch failed". Preserve the diagnostic code
+  // (for example EHOSTUNREACH from macOS Local Network denial), not a nested message
+  // which may contain request details or credentials.
+  const cause = err.cause;
+  const code = typeof cause === 'object' && cause !== null && 'code' in cause ? cause.code : undefined;
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(code)
+    ? `${err.message} (${code})`
+    : err.message;
 }

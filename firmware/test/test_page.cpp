@@ -86,8 +86,8 @@ static void begin(const char *name) {
 
 // ---- fixtures --------------------------------------------------------------------------
 //
-// The five real rows from the live server (profile v11), so a test that passes here is a
-// test about the table an operator actually has.
+// Representative state-table rows shared by host assertions and browser fixtures.
+// They are deterministic test data, not a claim about a live server's current profile.
 static void seed_table() {
   esphome::g_prefs.reset();
   onair::held().table = {
@@ -1587,7 +1587,30 @@ static void test_wake_handshake() {
             "and a wrapped counter must not read as 'the painter went backwards'");
 }
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 2 && std::strcmp(argv[1], "--browser-fixture") == 0) {
+    seed_table();
+    onair::NightInput night;
+    night.enabled = true;
+    night.clock_valid = true;
+    night.sleep_min = 23 * 60;
+    night.wake_min = 7 * 60;
+    set_night(night);
+    AsyncWebServerRequest request(HTTP_GET, "/onair/config");
+    request.set_param("edit", "interruptible");
+    onair::Page handler(true);
+    handler.handleRequest(&request);
+    if (request.status != 200) {
+      fprintf(stderr, "browser fixture: config handler returned %d\n", request.status);
+      return 1;
+    }
+    std::fwrite(request.body.data(), 1, request.body.size(), stdout);
+    return 0;
+  }
+  if (argc != 1) {
+    fprintf(stderr, "usage: onair-page-tests [--browser-fixture]\n");
+    return 2;
+  }
   printf("onair page tests\n\n");
   g_task_yield_hook = onair::pump;
 

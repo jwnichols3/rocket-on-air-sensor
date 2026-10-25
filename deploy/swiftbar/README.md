@@ -3,6 +3,22 @@
 `onair.5s.sh` is an ordinary script that prints text. SwiftBar runs it every 5 seconds and
 draws stdout. #18, D-26, D-63.
 
+## Version shown in About
+
+SwiftBar's **About** panel reads the script's `<xbar.version>` metadata. It shows the
+installed plugin's product release, such as `v0.2.0`. The canonical product version is
+the root `package.json`; the release tooling keeps the plugin metadata and the Receiver
+and console manifests synchronized. `npm run verify` checks that the metadata is present
+exactly once and matches the product version.
+
+The About version identifies the plugin file SwiftBar loaded. It does not query the
+Receiver, so it remains available if the service is down. For the running Receiver's
+version and exact build commit, use `GET /admin/health` and its `build` object.
+
+After installing a release, reload the plugin and reopen About to verify the displayed
+version. The standard setup uses a symlink to this checkout, so switching the checkout
+also changes the plugin file. Keep the checkout on the deployed release.
+
 ## Setting it up, entirely from the command line
 
 No GUI click is needed. Verified on macOS with SwiftBar from Homebrew:

@@ -560,3 +560,14 @@ test('the NIGHT_DARK constant matches what the firmware can actually emit', () =
     `exactly one Night verdict may mean dark, got ${JSON.stringify(returns)}`,
   );
 });
+
+test('a fetch failure records its network cause code without exposing the nested error text', async (t) => {
+  const lines: string[] = [];
+  const cause = Object.assign(new Error('private request details must not be logged'), { code: 'EHOSTUNREACH' });
+  t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('fetch failed', { cause }); });
+  const driver = new EsphomeTextDriver({ host: '127.0.0.1:1', retries: 0, log: (line) => lines.push(line) });
+  assert.equal(await driver.read(), 'unknown');
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /fetch failed \(EHOSTUNREACH\)/);
+  assert.equal(lines[0]!.includes('private request details'), false);
+});

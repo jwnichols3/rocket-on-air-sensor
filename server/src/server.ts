@@ -16,6 +16,7 @@ import { envOverrides, effectiveLight } from './config.js';
 import { validateConfig, type OnAirConfig } from './config-store.js';
 import type { LightDriver } from './driver.js';
 import { FanOutDriver } from './fanout-driver.js';
+import { BUILD_INFO } from './build-info.js';
 import { DISPLAY_HTML } from './display.js';
 import { DOCS_HTML } from './docs-page.js';
 import { escapeHtml, repairHtml } from './repair.js';
@@ -40,6 +41,9 @@ export interface ServerDeps {
    *  one to the supervisor so supervisor writes serialise with HTTP writes. */
   enqueueWrite?: EnqueueWrite;
   token?: string;
+  /** Environment-only data credential; never copied into the persisted document. */
+  passphraseOverride?: string;
+  passphraseVariable?: 'ONAIR_PASSPHRASE' | 'ONAIR_TOKEN';
   hub?: SseHub;
   ws?: WsBridge;
   log?: (line: string) => void;
@@ -52,8 +56,8 @@ export interface ServerDeps {
   /** The live config document, and the one way to replace it. Supplied by app.ts. */
   config?: () => OnAirConfig;
   /**
-   * Apply a validated config: persist it, swap the table in, rebind if the port or bind
-   * mode moved. Resolves with an error message when the rebind failed and rolled back.
+   * Apply a validated config carrying the editor's base version. The app serializes its
+   * version check, persistence, and runtime application with every other mutation.
    */
   applyConfig?: (next: OnAirConfig) => Promise<{ ok: true } | { ok: false; status: 409 | 507; error: string }>;
   /** Set when the config file on disk could not be used, so the repair view is served. */
@@ -61,7 +65,7 @@ export interface ServerDeps {
   /** Admin sessions. Shared across every listener, so which address you arrived on is invisible. */
   sessions?: SessionStore;
   /** Wipe everything back to shipped defaults. Supplied by app.ts. */
-  factoryReset?: () => Promise<void>;
+  factoryReset?: () => Promise<{ ok: true } | { ok: false; status: 409 | 507; error: string }>;
 }
 
 // `POST /state/{id}` is matched separately - it is the one route with a variable segment.
@@ -180,6 +184,10 @@ const STATE_ID_PATH = /^\/state\/([^/]+)$/;
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_MESSAGE_CHARS = 200;
 
+class UnknownStateError extends Error {
+  constructor(id: string, readonly validStates: string[]) { super(`unknown state '${id}'`); }
+}
+
 export function createApiServer(deps: ServerDeps): Server {
   if (deps.token !== undefined && deps.token.trim() === '') {
     throw new Error('token must be non-empty when provided');
@@ -206,7 +214,11 @@ export function createApiServer(deps: ServerDeps): Server {
   server = createServer((req, res) => {
     handle(req, res, deps, enqueueWrite, hub, ws, log, server).catch((err) => {
       if (!res.headersSent) {
-        sendJson(res, 500, { error: `internal error: ${errorMessage(err)}` });
+        if (err instanceof UnknownStateError) {
+          sendJson(res, 400, { error: err.message, validStates: err.validStates });
+        } else {
+          sendJson(res, 500, { error: `internal error: ${errorMessage(err)}` });
+        }
       } else {
         // Can't send a JSON error once headers are out; destroy so the client sees a clear
         // connection failure instead of a silently hung or truncated response.
@@ -283,7 +295,9 @@ function authorize(
 
   const presented = presentedCredential(req, url);
   if (audience === 'data') {
-    if (presented !== null && passphraseAccepted(authOf(deps), presented)) return null;
+    if (presented !== null && (deps.passphraseOverride !== undefined
+      ? timingSafeStringEqual(presented, deps.passphraseOverride)
+      : passphraseAccepted(authOf(deps), presented))) return null;
     return { status: 401, error: 'missing or invalid passphrase' };
   }
   // Admin. ONLY a session token - the passphrase is not accepted here, and vice versa.
@@ -398,6 +412,10 @@ async function doWrite(
   source: Source,
   log: (line: string) => void,
 ): Promise<void> {
+  // A config save ahead of this queued write may have removed the requested row since
+  // the HTTP handler validated it. Never persist a reference outside the active table.
+  const table = deps.store.getTable();
+  if (!table.has(stateId)) throw new UnknownStateError(stateId, table.ids());
   const was = deps.store.get();
   const applied = deps.store.write(stateId, source, new Date()).state;
   await persistCurrent(deps);
@@ -553,8 +571,18 @@ async function handle(
   }
 
   if (path === '/admin/health') {
+    const primary = deps.config?.().devices.find((d) => d.primary);
+    const health = deps.driver instanceof FanOutDriver ? deps.driver.health().find((d) => d.id === primary?.id) : undefined;
+    const current = deps.store.get();
+    const primaryStatus = !primary || !primary.enabled || !(health?.host ?? primary.host) ? 'not-configured'
+      : current.confirmedReason === 'unreachable' || health?.reachable === false ? 'unreachable'
+      : deps.driver instanceof FanOutDriver && health?.reachable !== true ? 'unconfirmed'
+      : current.confirmedReason === 'asleep' ? 'asleep'
+      : current.confirmed !== UNKNOWN_ID && current.confirmed === current.state ? 'ready' : 'unconfirmed';
     sendJson(res, 200, {
       uptime: process.uptime(),
+      build: BUILD_INFO,
+      primary: { id: primary?.id ?? null, ready: primaryStatus === 'ready' || primaryStatus === 'asleep', status: primaryStatus },
       pid: process.pid,
       nodeVersion: process.version,
       port: boundPort(server),
@@ -677,7 +705,11 @@ async function handle(
       sendJson(res, 403, { error: 'factory reset requires the admin password, from any origin' });
       return;
     }
-    await deps.factoryReset();
+    const reset = await deps.factoryReset();
+    if (!reset.ok) {
+      sendJson(res, reset.status, { error: reset.error, config: deps.config?.() });
+      return;
+    }
     deps.sessions?.destroyAll();
     sendJson(res, 200, { ok: true, config: deps.config?.() });
     return;
@@ -712,7 +744,8 @@ async function handle(
         config: cfg,
         problem: deps.configProblem?.(),
         env: {
-          overrides: envOverrides(),
+          overrides: [ ...envOverrides(), ...(deps.passphraseOverride === undefined ? []
+            : [{ key: 'auth.passphrase', variable: deps.passphraseVariable ?? 'ONAIR_TOKEN' }]) ],
           // The EFFECTIVE non-credential values, so an overridden field shows what is
           // actually in force rather than an empty box that reads as "not configured".
           // `username` and `password` are deliberately absent: they are a device credential,
@@ -734,18 +767,9 @@ async function handle(
       sendJson(res, 400, { error: 'invalid config', problems: validated.errors });
       return;
     }
-    // OPTIMISTIC CONCURRENCY. The submitted document carries the version it was based on;
-    // if the live one has moved since, the save is refused with the current document so the
-    // UI can show what changed underneath rather than silently overwriting it.
-    const live = deps.config();
-    if (validated.config.version !== live.version) {
-      sendJson(res, 409, {
-        error: `config has changed underneath you (yours ${validated.config.version}, current ${live.version})`,
-        config: live,
-      });
-      return;
-    }
-    const applied = await deps.applyConfig({ ...validated.config, version: live.version + 1 });
+    // The submitted version is checked inside the app's serialized config operation.
+    // Checking here, before its first await, lets concurrent requests share a base.
+    const applied = await deps.applyConfig(validated.config);
     if (!applied.ok) {
       sendJson(res, applied.status, { error: applied.error, config: deps.config() });
       return;

@@ -1,7 +1,8 @@
 # firmware
 
-The ESPHome configuration for the on-air panel - an Elegoo ESP32 devkit driving an
-SH1106 128x64 OLED.
+ESPHome configurations support the CrowPanel 7-inch display and an Elegoo ESP32 devkit
+driving an SH1106 128x64 OLED. Configure one panel as primary; optional secondary panels
+can be disconnected without affecting the primary panel's confirmation.
 
 Imported here by **D-37** from [`jwnichols3/rocket-esp32`](https://github.com/jwnichols3/rocket-esp32)
 as **files, not history**: that repo was set up as a lab and stays one, unarchived. Its log
@@ -19,12 +20,41 @@ $EDITOR firmware/configs/secrets.yaml      # gitignored; holds the D-17 device c
 
 ```sh
 npm run firmware:config                    # validate - no hardware, no flash. Part of `npm run verify`.
-npm run firmware:compile                   # full build
-.venv/bin/esphome upload --device <ip> configs/elegoo-esp32.yaml   # OTA flash
+npm run firmware:compile                   # full build of the default Elegoo board
+make -C firmware compile CONFIG=configs/crowpanel-7.yaml
+make -C firmware release-check             # validate and compile BOTH boards, no upload
 ```
 
 **Do not run `make -C firmware flash` or `logs` from an agent turn** - `esphome run` and
 `esphome logs` tail the device with no timeout and will hang. OTA upload is the flash path.
+
+Configuration validation prints a short success for each board. On failure it preserves
+ESPHome's diagnostic context while redacting values from `configs/secrets.yaml`; it never
+prints the successful expanded configuration. Both board YAMLs are always checked.
+
+### Release and OTA verification
+
+Run the root `npm run verify`, then `make -C firmware release-check` before a firmware
+release. The latter compiles both board binaries, without contacting or flashing hardware.
+It clears cached build metadata before compilation so header-only changes receive a fresh
+build timestamp (D-150).
+
+For the board being updated:
+
+1. Record its authenticated `GET /text_sensor/Build` response **before** upload.
+2. Inspect `configs/.esphome/build/<board>/build_info.json` and the freshly compiled
+   `build/firmware.ota.bin`. The timestamp must distinguish this build from the running
+   marker. Keep an image checksum with the release record.
+3. From `firmware/`, run `.venv/bin/esphome upload --device <ip> configs/<board>.yaml`.
+   Upload does not compile. Never use it as a substitute for the preceding build.
+4. After reboot, read `Build` again and match the expected new hash/timestamp. Check it
+   again **more than 60 seconds after the new image boots**, preferably after two minutes,
+   and verify the relevant behavior plus the Receiver's genuine confirmation.
+
+An upload success or a responding `/onair` page is not proof of the running image.
+ESP-IDF can revert a pending image if it resets inside the safe-mode verification window.
+Keep OTA rollback enabled; issue 87 remains open. A disconnected secondary can be compiled
+and tested offline without pretending that an OTA or hardware check was performed.
 
 ## The ESPHome pin
 
@@ -53,7 +83,8 @@ Point a browser at the panel's IP (#33, D-57):
 |---|---|---|
 | `/onair` | **none** | what the panel is showing, and why |
 | `/onair/config` | device basic auth | the local presentation overrides |
-| `/` | device basic auth | ESPHome's stock dashboard, untouched |
+| `/` | none | redirects to the read-only `/onair` page |
+| `/?esphome=1` | device basic auth | ESPHome's stock dashboard |
 
 `/onair` is deliberately open and deliberately read-only: it shows no credential of any
 kind and offers no control that changes anything. It reports the same answer the glass is
@@ -90,7 +121,7 @@ edited; it is a consequence, not a bug.
 All of these are at the device's IP on port 80, behind the `web_server` basic auth (D-17).
 **The login is `rocket` / `ESP32`** - the same default as the admin console (D-56). It is a
 published default, not a secret; change `web_server_password` in `secrets.yaml` for a
-per-device one, and set `light.password` in `~/.onair/config.json` to match.
+per-device one, and set the matching `devices` row's password in `~/.onair/config.json`.
 
 | Entity | What it is |
 |---|---|
@@ -128,11 +159,12 @@ within a few seconds whether the new value works.
 belongs where the rest of the write-only entity lives, and duplicating it onto a page whose
 whole subject is presentation would invite exactly the confusion D-55 came out of.
 
-## The three headers
+## Source layout
 
 | File | What is in it |
 |---|---|
-| `configs/elegoo-esp32.yaml` | the ESPHome configuration, the display lambda, the pull |
+| `configs/elegoo-esp32.yaml`, `configs/crowpanel-7.yaml` | board wiring and display rendering |
+| `configs/onair-core.yaml` | shared state, profile pull, night schedule and device entities |
 | `configs/onair_table.h` | the table, the overlay, `effective()` and `compute_view()` |
 | `configs/onair_page.h` | the two web handlers |
 

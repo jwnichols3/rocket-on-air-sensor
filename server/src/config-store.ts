@@ -1,5 +1,6 @@
 import { constants as fsConstants } from 'node:fs';
-import { open, rename, mkdir, readFile, chmod } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { open, rename, mkdir, readFile, chmod, rm } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { dirname } from 'node:path';
 import { defaultAuth, type AuthBlock } from './auth.js';
@@ -469,20 +470,23 @@ export function isOutOfSpace(err: unknown): boolean {
  */
 export async function saveConfigFile(file: string, config: OnAirConfig): Promise<void> {
   await mkdir(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${randomUUID()}.tmp`;
   const body = `${JSON.stringify(config, null, 2)}\n`;
   let handle;
   try {
-    handle = await open(tmp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC, 0o600);
+    handle = await open(tmp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
     await chmod(tmp, 0o600);
     await handle.writeFile(body, 'utf8');
     await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(tmp, file);
   } catch (err) {
     throw new ConfigWriteError(`cannot write ${tmp}: ${String(err)}`, isOutOfSpace(err));
   } finally {
     await handle?.close().catch(() => {});
+    await rm(tmp, { force: true }).catch(() => {});
   }
-  await rename(tmp, file);
 }
 
 /**

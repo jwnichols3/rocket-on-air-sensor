@@ -10,7 +10,7 @@ import {
 } from './config-store.js';
 import { rotate, SessionStore } from './auth.js';
 import { deviceSpecs } from './config.js';
-import { NoopDriver, type LightDriver } from './driver.js';
+import type { LightDriver } from './driver.js';
 import { EsphomeTextDriver } from './esphome-driver.js';
 import { FanOutDriver } from './fanout-driver.js';
 import { loadState, saveState } from './persist.js';
@@ -32,6 +32,8 @@ export interface AppOptions {
    * the break-glass path for a box you can only reach over SSH.
    */
   token?: string;
+  /** Name of the environment override, for the admin console; no secret is exposed. */
+  tokenVariable?: 'ONAIR_PASSPHRASE' | 'ONAIR_TOKEN';
   /** Built from the config's `devices` list when not supplied, and never reconfigured. */
   driver?: LightDriver;
   /**
@@ -122,25 +124,29 @@ async function closeAll(servers: Server[]): Promise<void> {
  * return. The listening socket shuts immediately either way, which is all the rebind
  * actually needs - the new listener can take the port at once.
  *
- * The old sockets are swept a moment later, by which time our own response has flushed.
+ * The caller starts the old-socket sweep only when the operation finishes, leaving time
+ * for its response to flush even if the device version nudge takes several seconds.
  * Anything still attached then is a keep-alive client, and it will reconnect to the new
  * listener on its next request.
  */
-function stopAccepting(servers: Server[]): void {
+function stopAccepting(servers: Server[]): () => void {
   for (const s of servers) {
     s.close();
     s.closeIdleConnections();
   }
-  setTimeout(() => {
-    for (const s of servers) {
-      s.closeIdleConnections();
-      s.closeAllConnections();
-    }
-  }, 1000).unref();
+  return () => {
+    setTimeout(() => {
+      for (const s of servers) {
+        s.closeIdleConnections();
+        s.closeAllConnections();
+      }
+    }, 1000).unref();
+  };
 }
 
 export async function createApp(opts: AppOptions): Promise<App> {
   const log = opts.log ?? console.log;
+  if (opts.token !== undefined && opts.token.trim() === '') throw new Error('passphrase override must be non-empty');
   /** A real environment variable always wins over the file - D-14's rule, and the SSH escape hatch. */
   const effectivePort = (c: OnAirConfig): number => opts.port ?? c.port;
 
@@ -165,9 +171,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
       log(`[onair] could not write a starting config: ${errorMessage(err)}`);
     }
   }
-  // The env credential wins over the file, and is folded in here so there is exactly ONE
-  // passphrase in play rather than two gates that could disagree.
-  if (opts.token !== undefined) config = { ...config, auth: { ...config.auth, passphrase: opts.token } };
+  // Keep the document separate from the environment. Authorization applies the override
+  // on every request, so saves and reset cannot remove it or write it into the document.
   if (problem) {
     log(`[onair] CONFIG UNUSABLE - starting on loopback with defaults, serving the repair view:`);
     for (const e of problem.errors) log(`[onair]   ${e}`);
@@ -253,6 +258,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
   const sessions = new SessionStore();
   let servers: Server[] = [];
   let boundPort = 0;
+  let supervisor: ReturnType<typeof startSupervisor> | undefined;
 
   const makeServer = (): Server =>
     createApiServer({
@@ -265,6 +271,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
       log,
       stateFile: opts.stateFile,
       config: () => config,
+      passphraseOverride: opts.token,
+      passphraseVariable: opts.tokenVariable ?? 'ONAIR_TOKEN',
       configProblem: () => problem,
       applyConfig,
       sessions,
@@ -286,119 +294,125 @@ export async function createApp(opts: AppOptions): Promise<App> {
    * route this comment says not to take. Caught by "factory reset KEEPS the device
    * credentials", which is what that test is for.
    */
-  async function factoryReset(): Promise<void> {
-    const fresh = {
-      ...defaultConfig(),
-      version: config.version + 1,
-      devices: config.devices.map((d) => ({ ...d })),
-      light: { ...config.light },
-    };
-    if (opts.configFile) await saveConfigFile(opts.configFile, fresh);
-    config = fresh;
-    problem = undefined;
-    store.setTable(new StateTable(fresh.states, fresh.version));
-    store.write(UNKNOWN_ID, { kind: 'human', label: 'factory-reset', raw: 'human:factory-reset' });
-    await saveState(opts.stateFile, store.persisted());
-    log('[onair] factory reset: credentials, table, state and bind are back to defaults');
+  type ConfigResult = { ok: true } | { ok: false; status: 409 | 507; error: string };
+
+  const retiringListeners: Array<() => void> = [];
+
+  async function serializeConfig(run: () => Promise<ConfigResult>): Promise<ConfigResult> {
+    let result: ConfigResult;
+    await enqueueWrite(async () => {
+      try { result = await run(); } finally {
+        for (const retire of retiringListeners.splice(0)) retire();
+      }
+    });
+    return result!;
+  }
+
+  async function factoryReset(): Promise<ConfigResult> {
+    return serializeConfig(async () => {
+      const fresh = {
+        ...defaultConfig(),
+        version: config.version + 1,
+        devices: config.devices.map((d) => ({ ...d })),
+        light: { ...config.light },
+      };
+      const result = await commitConfig(fresh);
+      if (!result.ok) return result;
+      store.write(UNKNOWN_ID, { kind: 'human', label: 'factory-reset', raw: 'human:factory-reset' });
+      store.clearMessage();
+      await saveState(opts.stateFile, store.persisted());
+      try { await driver.set(UNKNOWN_ID); } catch (err) {
+        log(`[onair] factory reset device write failed: ${errorMessage(err)}`);
+      }
+      store.setConfirmed(UNKNOWN_ID);
+      hub.broadcast();
+      wsBridge.broadcast(store.status());
+      log('[onair] factory reset: credentials, table, state and bind are back to defaults');
+      return result;
+    });
+  }
+
+  // The version comparison and the complete application share the state-write queue.
+  // Checking in the HTTP handler allowed two editors to pass before either saved, and
+  // configuration could also swap a driver while a state write was using it.
+  async function applyConfig(input: OnAirConfig): Promise<ConfigResult> {
+    return serializeConfig(async () => {
+      if (input.version !== config.version) {
+        return { ok: false, status: 409,
+          error: `config has changed underneath you (yours ${input.version}, current ${config.version})` };
+      }
+      return commitConfig({ ...input, version: config.version + 1, auth: rotate(config.auth, input.auth) });
+    });
   }
 
   /**
-   * The one apply path (D-36). Persist first, then swap the table in, then rebind if the
-   * port or bind mode moved.
-   *
-   * **It never exits.** A rebind that fails rolls back to the previous listeners and
-   * answers `409` - "restart and hope" is not safe to invoke from across the house, and
-   * under KeepAlive a process exit on a bad address is a crash-loop.
+   * Persist and establish the listener before changing table, driver, or credentials.
+   * A rejected rebind must never send a table nudge, forget the current row, or revoke
+   * sessions. State writes and supervisor ticks cannot run during this operation.
    */
-  async function applyConfig(input: OnAirConfig): Promise<{ ok: true } | { ok: false; status: 409 | 507; error: string }> {
-    let next = input;
-    // A passphrase change starts the 60-minute grace window, so the ESP32, Companion and
-    // the detector degrade on a schedule instead of all at once.
-    next = { ...next, auth: rotate(config.auth, next.auth) };
+  async function commitConfig(next: OnAirConfig): Promise<ConfigResult> {
+    const previous = config;
     if (opts.configFile) {
       try {
         await saveConfigFile(opts.configFile, next);
       } catch (err) {
-        // ENOSPC leaves the running config untouched - that is what the atomic write buys.
-        if (err instanceof ConfigWriteError && err.outOfSpace) {
-          return { ok: false, status: 507, error: `config not saved: ${err.message}` };
-        }
-        return { ok: false, status: 409, error: `config not saved: ${errorMessage(err)}` };
+        return { ok: false, status: err instanceof ConfigWriteError && err.outOfSpace ? 507 : 409,
+          error: `config not saved: ${errorMessage(err)}` };
       }
     }
-    // The env override wins over the document (D-14), so a port change in the document is
-    // not a rebind while it is set - otherwise a save would silently undo the escape hatch
-    // someone used to get the service back up.
-    const rebinding = effectivePort(next) !== effectivePort(config) || next.bind !== config.bind;
-    const previous = config;
-    // A changed admin password invalidates every live session: the point of changing it is
-    // that whoever knew the old one stops being admin.
-    if (next.auth.adminPassword !== config.auth.adminPassword) sessions.destroyAll();
-    config = next;
-    problem = undefined; // a successful save is the repair
-    store.setTable(new StateTable(next.states, next.version));
-
-    // THE DEVICE LIST TAKES EFFECT NOW, NOT AT THE NEXT RESTART.
-    //
-    // Before this line existed, `applyConfig` saved the document, answered 200, and left the
-    // process talking to the old panel until somebody restarted the daemon. Change the
-    // address in the console and nothing happened, silently - the same shape as D-79's
-    // overridden field and D-100's stale binary, and the single most likely way to ship this
-    // feature broken.
-    //
-    // It reconfigures IN PLACE. `driver` is captured by closure in `makeServer` and in the
-    // supervisor, so replacing the object would leave both of them holding the old one; the
-    // fan-out swaps its contents instead and every holder keeps working. A driver injected
-    // through `opts.driver` is deliberately left alone - that is a test's own driver and
-    // reconfiguring it would be this function reaching into a seam that is not its business.
-    if (driver instanceof FanOutDriver) {
-      driver.reconfigure(deviceSpecs(next.devices));
+    const rebinding = effectivePort(next) !== effectivePort(previous) || next.bind !== previous.bind;
+    if (rebinding) {
+      const target = resolveBind(next.bind);
+      if (target.warning) log(`[onair] ${target.warning}`);
+      retiringListeners.push(stopAccepting(servers));
+      try {
+        const opened = await listenAll(makeServer, target.addresses, effectivePort(next));
+        servers = opened.servers;
+        boundPort = opened.port;
+        log(`[onair] rebound to ${target.addresses.join(', ')} on :${boundPort}`);
+      } catch (err) {
+        let rollbackError = '';
+        if (opts.configFile) {
+          try { await saveConfigFile(opts.configFile, previous); } catch (diskError) {
+            rollbackError = `; restoring the config file also failed: ${errorMessage(diskError)}`;
+          }
+        }
+        try {
+          const back = await listenAll(makeServer, resolveBind(previous.bind).addresses, effectivePort(previous));
+          servers = back.servers;
+          boundPort = back.port;
+        } catch (bindError) {
+          log(`[onair] rollback bind ALSO failed (${errorMessage(bindError)}) - falling back to loopback`);
+          const last = await listenAll(makeServer, ['127.0.0.1'], effectivePort(previous));
+          servers = last.servers;
+          boundPort = last.port;
+        }
+        log(`[onair] rebind failed (${errorMessage(err)}) - restored previous listeners${rollbackError}`);
+        return { ok: false, status: 409,
+          error: `rebind failed and was rolled back: ${errorMessage(err)}${rollbackError}` };
+      }
     }
-    // Nudge here as well as on a state write (D-42). Without this a pure presentation
-    // edit - renaming a row, changing a colour - reaches the panel only when the next
-    // state write happens, which on a quiet afternoon is hours. The nudge is what makes
-    // an edit in the console feel like it did something.
-    try {
-      await driver.setTableVersion?.(next.version);
-    } catch (err) {
+
+    config = next;
+    problem = undefined;
+    store.setTable(new StateTable(next.states, next.version));
+    if (driver instanceof FanOutDriver) {
+      const previousPrimary = driver.primaryDriver();
+      driver.reconfigure(deviceSpecs(next.devices));
+      if (driver.primaryDriver() !== previousPrimary) {
+        // Fan-out preserves a driver only when its id and connection are unchanged.
+        // A label edit or secondary change therefore keeps the primary's evidence.
+        store.setConfirmed(UNKNOWN_ID);
+        supervisor?.resetEvidence();
+      }
+    }
+    if (next.auth.adminPassword !== previous.auth.adminPassword) sessions.destroyAll();
+    try { await driver.setTableVersion?.(next.version); } catch (err) {
       log(`[onair] version nudge failed: ${errorMessage(err)}`);
     }
-
-    if (!rebinding) return { ok: true };
-
-    // NOT `opts.bind ?? next.bind`. The seam sets the STARTING bind; a rebind is a test
-    // deliberately changing it, and overriding that would make the two rebind tests assert
-    // against a bind they did not ask for. Measured - both went red.
-    const target = resolveBind(next.bind);
-    if (target.warning) log(`[onair] ${target.warning}`);
-    // Stop accepting BEFORE binding: the new addresses usually overlap the old ones on the
-    // same port, so binding first would just be EADDRINUSE against ourselves.
-    stopAccepting(servers);
-    try {
-      const opened = await listenAll(makeServer, target.addresses, effectivePort(next));
-      servers = opened.servers;
-      boundPort = opened.port;
-      log(`[onair] rebound to ${target.addresses.join(', ')} on :${boundPort}`);
-      return { ok: true };
-    } catch (err) {
-      log(`[onair] rebind failed (${errorMessage(err)}) - rolling back to :${previous.port}`);
-      config = previous;
-      store.setTable(new StateTable(previous.states, previous.version));
-      if (opts.configFile) await saveConfigFile(opts.configFile, previous).catch(() => {});
-      try {
-        const back = await listenAll(makeServer, resolveBind(previous.bind).addresses, effectivePort(previous));
-        servers = back.servers;
-        boundPort = back.port;
-      } catch (err2) {
-        // Never fail closed. If even the old binding will not come back, loopback is the
-        // last resort that still leaves an admin surface to fix this from.
-        log(`[onair] rollback bind ALSO failed (${errorMessage(err2)}) - falling back to loopback`);
-        const last = await listenAll(makeServer, ['127.0.0.1'], effectivePort(previous));
-        servers = last.servers;
-        boundPort = last.port;
-      }
-      return { ok: false, status: 409, error: `rebind failed and was rolled back: ${errorMessage(err)}` };
-    }
+    hub.broadcast();
+    wsBridge.broadcast(store.status());
+    return { ok: true };
   }
 
   // A config the service could not read is a config it must not act on: bind loopback,
@@ -412,7 +426,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
   boundPort = opened.port;
   log(`[onair] listening on ${resolved.addresses.join(', ')}:${boundPort}, state file ${opts.stateFile}`);
 
-  const supervisor = startSupervisor({
+  supervisor = startSupervisor({
     store,
     driver,
     enqueue: enqueueWrite,
@@ -434,7 +448,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     config: () => config,
     sessions,
     close: async () => {
-      supervisor.stop(); // synchronous: never await an in-flight tick
+      supervisor?.stop(); // synchronous: never await an in-flight tick
       hub.closeAll();
       wsBridge.closeAll();
       await closeAll(servers);

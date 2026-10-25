@@ -16,11 +16,13 @@
 // claim three times over in #50 and was wrong the first two. `*` does not match
 // pseudo-elements; that one selector put lit pixels inside the reserved diagnostics band.
 //
-// Runs against a page fetched from the LIVE DEVICE if one is reachable, and otherwise
-// against the committed capture. Never silently skips - it says which it used.
+// Default: compile the current firmware headers against the host shim and exercise the
+// actual GET handler. No device or historical HTML capture is involved.
+// --live is an explicit, read-only hardware check and never falls back on failure.
 
 import { chromium } from 'playwright'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,8 +30,10 @@ import { gunzipSync } from 'node:zlib'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = join(HERE, '..', '..', '..')
-const DEVICE = process.env.ONAIR_DEVICE || '10.42.12.77'
-const AUTH = 'Basic ' + Buffer.from('rocket:ESP32').toString('base64')
+const LIVE = process.argv.slice(2).includes('--live')
+if (process.argv.slice(2).some((arg) => arg !== '--live')) {
+  throw new Error('usage: test-page.mjs [--live]')
+}
 
 let checks = 0, failures = 0, current = ''
 const test = (name) => { current = name; console.log('- ' + name) }
@@ -43,41 +47,37 @@ const check = (cond, detail = '') => {
 
 // ---- get the page and its assets ------------------------------------------------------
 async function fromDevice() {
+  const device = process.env.ONAIR_DEVICE
+  const password = process.env.ONAIR_DEVICE_PASSWORD
+  if (!device || !password) {
+    throw new Error('--live requires ONAIR_DEVICE and ONAIR_DEVICE_PASSWORD')
+  }
+  const auth = 'Basic ' + Buffer.from(`${process.env.ONAIR_DEVICE_USER || 'rocket'}:${password}`).toString('base64')
   const grab = async (path, headers = {}) => {
-    const res = await fetch(`http://${DEVICE}${path}`, { headers, signal: AbortSignal.timeout(4000) })
+    const res = await fetch(`http://${device}${path}`, { headers, signal: AbortSignal.timeout(4000) })
     if (!res.ok) throw new Error(`${path} -> ${res.status}`)
     return Buffer.from(await res.arrayBuffer())
   }
-  const html = (await grab('/onair/config?edit=interruptible', { Authorization: AUTH })).toString()
-  // The assets come back gzipped with no transfer decoding, because fetch only auto-decodes
-  // what it asked for; ask for identity and gunzip explicitly so this is unambiguous.
-  const css = gunzipSync(await grab('/onair.css'))
-  const js = gunzipSync(await grab('/onair.js'))
-  return { html, css: css.toString(), js: js.toString(), source: `live device ${DEVICE}` }
+  const html = (await grab('/onair/config?edit=interruptible', { Authorization: auth })).toString()
+  // fetch may already decode Content-Encoding; the firmware can also serve raw gzip.
+  const decode = (bytes) => bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes).toString() : bytes.toString()
+  const css = decode(await grab('/onair.css'))
+  const js = decode(await grab('/onair.js'))
+  return { html, css, js, source: 'explicit live-device read' }
 }
 
-function fromCapture() {
-  const dir = join(REPO, 'docs/design/esp32-config-2026-08-26/live')
-  const html = readFileSync(join(dir, 'technical-dark.html'), 'utf8')
+function fromCurrentFirmware() {
+  const html = execFileSync('bash', [join(REPO, 'firmware/test/run.sh'), '--browser-fixture'],
+    { encoding: 'utf8', timeout: 60_000, maxBuffer: 1024 * 1024 })
   return {
     html,
     css: readFileSync(join(REPO, 'firmware/assets/onair.css'), 'utf8'),
     js: readFileSync(join(REPO, 'firmware/assets/onair.js'), 'utf8'),
-    source: 'committed capture + firmware/assets (device not reachable)',
+    source: 'current C++ config handler + firmware/assets (offline)',
   }
 }
 
-let fixture
-try {
-  fixture = await fromDevice()
-} catch (err) {
-  const dir = join(REPO, 'docs/design/esp32-config-2026-08-26/live/technical-dark.html')
-  if (!existsSync(dir)) {
-    console.error(`no device at ${DEVICE} (${err.message}) and no committed capture at ${dir}`)
-    process.exit(1)
-  }
-  fixture = fromCapture()
-}
+const fixture = LIVE ? await fromDevice() : fromCurrentFirmware()
 console.log(`onair browser tests\nfixture: ${fixture.source}\n`)
 
 // Serve the three files so relative asset paths resolve exactly as they do on the device.
@@ -91,10 +91,23 @@ const server = createServer((req, res) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const base = `http://127.0.0.1:${server.address().port}/`
 
-const browser = await chromium.launch()
+let browser
+try {
+browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1000, height: 1100 } })
 await page.goto(base)
 await page.waitForFunction(() => !!document.querySelector('.ed'))
+
+test('the current default page includes the editable Night schedule')
+{
+  check(await page.locator('form#night').count() === 1,
+    'the current firmware renders Night schedule on every config page (D-151)')
+  if (!LIVE) {
+    const data = await page.locator('form#night').evaluate((form) => Object.fromEntries(new FormData(form)))
+    check(data.action === 'night' && data.night === 'on' && data.sleep === '23:00' && data.wake === '07:00',
+      `the current handler must serialize the seeded schedule, got ${JSON.stringify(data)}`)
+  }
+}
 
 // =========================================================================================
 // 1. WHAT THE FORM ACTUALLY POSTS
@@ -391,8 +404,10 @@ test('an invalid hex says nothing will be saved rather than showing a stale shap
   check(/nothing will be saved/.test(t), `got "${t}"`)
 }
 
-await browser.close()
-server.close()
+} finally {
+  await browser?.close()
+  await new Promise((resolve) => server.close(resolve))
+}
 
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

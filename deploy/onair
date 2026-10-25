@@ -36,6 +36,10 @@ DIST_DIR="$SERVER_DIR/dist"
 DIST_NEXT="$SERVER_DIR/.dist-next"
 DIST_PREV="$SERVER_DIR/dist.prev"
 DIST_FAILED="$SERVER_DIR/.dist-failed"
+ADMIN_DIR="$SERVER_DIR/public/admin"
+ADMIN_NEXT="$SERVER_DIR/.admin-next"
+ADMIN_PREV="$SERVER_DIR/admin.prev"
+ADMIN_FAILED="$SERVER_DIR/.admin-failed"
 
 # --- resolve the real (non-root) target user + home, whether invoked directly or via sudo ---
 CURRENT_USER="$(id -un)"
@@ -138,7 +142,7 @@ verbs:
   enable                launchctl enable, then start
   update [--check-only|--dry-run] [--yes]
                         fetch + fast-forward this checkout, rebuild, swap in
-                        the new dist, restart (reload if the node path
+                        the server and console, restart (reload if the node path
                         changed), health-poll; rolls back on failure.
                         --check-only/--dry-run lists pending commits without
                         applying. --yes skips the confirm prompt (implied
@@ -341,48 +345,99 @@ git_u() {
   run_as_invoking_user git -C "$APPDIR" "$@"
 }
 
-# dist_is_current - true if $DIST_DIR exists and no file under $SERVER_DIR/src has a
-# newer mtime than it.
+# Both artifacts must exist and include every input, including the metadata generator.
+# Compare files, not a directory mtime: replacing index.html need not touch its parent.
 dist_is_current() {
-  [[ -d "$DIST_DIR" ]] || return 1
+  [[ -f "$DIST_DIR/index.js" && -f "$DIST_DIR/build-info.json" && -f "$ADMIN_DIR/index.html" ]] || return 1
   local newer
-  newer="$(find "$SERVER_DIR/src" -type f -newer "$DIST_DIR" 2>/dev/null)"
+  newer="$(find "$SERVER_DIR/src" "$SERVER_DIR/tools" "$SERVER_DIR/package.json" \
+    "$SERVER_DIR/tsconfig.json" "$APPDIR/package.json" "$APPDIR/package-lock.json" \
+    -type f -newer "$DIST_DIR/build-info.json" 2>/dev/null)" || return 1
+  [[ -z "$newer" ]] || return 1
+  newer="$(find "$APPDIR/admin-ui/src" "$APPDIR/admin-ui/build.mjs" "$APPDIR/admin-ui/package.json" \
+    -type f -newer "$ADMIN_DIR/index.html" 2>/dev/null)" || return 1
   [[ -z "$newer" ]]
 }
 
-# swap_dist_in - move the staged build at $DIST_NEXT into $DIST_DIR, keeping the
-# outgoing one at $DIST_PREV for rollback. The trap is deliberately scoped to just
-# the two `mv`s: if a kill lands between them, $DIST_DIR would otherwise be left
-# missing entirely and KeepAlive would respawn into nothing.
-swap_dist_in() {
-  trap '
-    if [[ ! -d "$DIST_DIR" && -d "$DIST_PREV" ]]; then
-      echo "onair: update: interrupted mid-swap - restoring dist from dist.prev" >&2
-      mv "$DIST_PREV" "$DIST_DIR"
-    fi
+# Replace both artifacts, keeping the displaced pair. A subshell scopes signal/EXIT traps
+# so the caller's own cleanup survives. Every mutation has an explicit failure branch:
+# callers using `if helper` or `set +e` must get the same recovery as an interactive update.
+#
+# Two paths cannot be renamed atomically together. If any rename fails or INT/TERM lands,
+# restore both original paths before returning failure. A killed machine/process (SIGKILL)
+# cannot execute a trap; the previous directories remain available for manual recovery.
+replace_release() (
+  local source_dist="$1" source_admin="$2" saved_dist="$3" saved_admin="$4"
+  local restoring="${5:-false}" install_admin=true
+  local had_dist=false had_admin=false
+  [[ -f "$source_dist/index.js" ]] || {
+    echo "onair: update: usable server build required at $source_dist" >&2
     exit 1
-  ' INT TERM ERR
-  rm -rf "$DIST_PREV"
-  if [[ -d "$DIST_DIR" ]]; then
-    mv "$DIST_DIR" "$DIST_PREV"
+  }
+  if [[ ! -f "$source_admin/index.html" ]]; then
+    if [[ "$restoring" == true && -d "$source_admin" ]]; then
+      : # Restore the original directory even if its console was not built.
+    elif [[ "$restoring" == true && -f "$source_admin.absent" && ! -e "$source_admin" ]]; then
+      install_admin=false
+    else
+      echo "onair: update: complete console candidate or recorded previous snapshot required at $source_admin" >&2
+      exit 1
+    fi
   fi
-  mv "$DIST_NEXT" "$DIST_DIR"
-  trap - INT TERM ERR
+  [[ -d "$DIST_DIR" ]] && had_dist=true
+  [[ -d "$ADMIN_DIR" ]] && had_admin=true
+  mkdir -p "$(dirname "$ADMIN_DIR")" || exit 1
+  rm -rf "$saved_dist" "$saved_admin" "$saved_admin.absent" || exit 1
+  # Absence is part of the previous release. An older install without a console must
+  # still recover its working server instead of being stranded on a failed update.
+  if [[ "$had_admin" == false ]]; then : > "$saved_admin.absent" || exit 1; fi
+
+  restore_component() {
+    local active="$1" saved="$2" source="$3" existed="$4"
+    if [[ -d "$saved" ]]; then
+      if [[ -e "$active" ]]; then mv "$active" "$source" || return 1; fi
+      mv "$saved" "$active" || return 1
+    elif [[ "$existed" == false && -e "$active" ]]; then
+      mv "$active" "$source" || return 1
+    fi
+  }
+  recover_release() {
+    local status="$?"
+    trap - EXIT INT TERM
+    if [[ "$status" -ne 0 ]]; then
+      echo "onair: update: replacement interrupted; restoring original server and console" >&2
+      local recovered=true
+      restore_component "$DIST_DIR" "$saved_dist" "$source_dist" "$had_dist" || recovered=false
+      restore_component "$ADMIN_DIR" "$saved_admin" "$source_admin" "$had_admin" || recovered=false
+      # Cleanup may already have consumed the source's absence marker when TERM lands.
+      # Restore that snapshot evidence too, or a subsequent rollback cannot use it.
+      if [[ "$install_admin" == false ]]; then : > "$source_admin.absent" || recovered=false; fi
+      if [[ "$recovered" != true ]]; then
+        echo "onair: update: recovery incomplete; preserve $saved_dist and $saved_admin for repair" >&2
+      else
+        rm -f "$saved_admin.absent"
+      fi
+    fi
+    exit "$status"
+  }
+  trap recover_release EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if [[ "$had_dist" == true ]]; then mv "$DIST_DIR" "$saved_dist" || exit 1; fi
+  if [[ "$had_admin" == true ]]; then mv "$ADMIN_DIR" "$saved_admin" || exit 1; fi
+  mv "$source_dist" "$DIST_DIR" || exit 1
+  if [[ "$install_admin" == true ]]; then mv "$source_admin" "$ADMIN_DIR" || exit 1; fi
+  rm -f "$source_admin.absent" || exit 1
+  trap - EXIT INT TERM
+)
+
+swap_release_in() {
+  replace_release "$DIST_NEXT" "$ADMIN_NEXT" "$DIST_PREV" "$ADMIN_PREV"
 }
 
-# roll_dist_back - put the pre-update build back and keep the bad one for diagnosis.
-# Returns non-zero when there is nothing to roll back to, which is a materially
-# different situation and must not be reported as a successful rollback.
-roll_dist_back() {
-  if [[ ! -d "$DIST_PREV" ]]; then
-    echo "onair: update: no dist.prev to roll back to - $DIST_DIR left as the failed build" >&2
-    return 1
-  fi
-  rm -rf "$DIST_FAILED"
-  mv "$DIST_DIR" "$DIST_FAILED"
-  mv "$DIST_PREV" "$DIST_DIR"
-  echo "onair: update: failed build kept at $DIST_FAILED for diagnosis" >&2
-  return 0
+roll_release_back() {
+  replace_release "$DIST_PREV" "$ADMIN_PREV" "$DIST_FAILED" "$ADMIN_FAILED" true || return 1
+  echo "onair: update: failed pair kept at $DIST_FAILED and $ADMIN_FAILED for diagnosis" >&2
 }
 
 # ---------------------------------------------------------------------------
@@ -950,7 +1005,7 @@ cmd_update() {
   # Step 2: fetch, then check both "no new commits" and "dist is current" -
   # a stale/missing dist with no new commits still needs a rebuild, just
   # without a merge first.
-  git_u fetch --quiet origin
+  git_u fetch --quiet origin || return 1
 
   local head_rev upstream_rev
   head_rev="$(git_u rev-parse @)"
@@ -989,24 +1044,19 @@ cmd_update() {
   # Step 5: fast-forward (skip if already at the upstream commit) + npm ci,
   # both as the checkout-owning user even if `update` itself was run via sudo.
   if [[ "$head_rev" != "$upstream_rev" ]]; then
-    git_u merge --ff-only '@{u}'
+    git_u merge --ff-only '@{u}' || return 1
   fi
   # npm ci at the ROOT: the workspaces (D-37) are installed as one tree, and
   # running it inside server/ would miss the other two and rewrite the root lock.
-  ( cd "$APPDIR" && run_as_invoking_user npm ci --ignore-scripts )
+  ( cd "$APPDIR" && run_as_invoking_user npm ci --ignore-scripts ) || return 1
 
-  # Step 6: build to a staging dir, then swap it in.
-  rm -rf "$DIST_NEXT"
-  ( cd "$SERVER_DIR" && run_as_invoking_user npx tsc -p tsconfig.json --outDir .dist-next )
+  # Step 6: build both parts without changing what the running service serves.
+  rm -rf "$DIST_NEXT" "$ADMIN_NEXT" || return 1
+  ( cd "$SERVER_DIR" && run_as_invoking_user npx tsc -p tsconfig.json --outDir .dist-next ) || return 1
+  ( cd "$APPDIR" && run_as_invoking_user node server/tools/gen-build-info.mjs "$DIST_NEXT" ) || return 1
+  ( cd "$APPDIR" && run_as_invoking_user node admin-ui/build.mjs --out-dir "$ADMIN_NEXT" ) || return 1
 
-  # The admin console is a static asset under server/public, not part of dist, so it is
-  # rebuilt in place rather than staged. It is regenerated wholly on every update and the
-  # server re-reads it per request, so a stale or half-written one cannot outlive this.
-  # Skipping it would leave `onair update` serving yesterday's console with no symptom
-  # except that a fix did not appear.
-  ( cd "$APPDIR" && run_as_invoking_user npm run build --workspace admin-ui )
-
-  swap_dist_in
+  swap_release_in || return 1
 
   # Steps 7-8: restart (or reload, if node moved) + health-poll.
   if apply_restart_for_update; then
@@ -1017,7 +1067,7 @@ cmd_update() {
   # around for diagnosis, restart once more (best-effort - the update has
   # already failed regardless of whether this second restart's poll passes).
   echo "onair: update: health check failed after update - rolling back" >&2
-  if roll_dist_back; then
+  if roll_release_back; then
     apply_restart_for_update || true
   fi
   exit 1
@@ -1025,7 +1075,7 @@ cmd_update() {
 
 # ---------------------------------------------------------------------------
 # ONAIR_LIB_ONLY=1 sources the functions above without dispatching a verb, so the
-# pure ones - render_plist_to, plist_is_stale, swap_dist_in, roll_dist_back - can be
+# pure ones - render_plist_to, plist_is_stale, replace_release - can be
 # exercised by deploy/test-update.sh with no sudo and nothing installed. It is a test
 # seam and nothing else: every verb below still requires an explicit argument.
 if [[ -n "${ONAIR_LIB_ONLY:-}" ]]; then

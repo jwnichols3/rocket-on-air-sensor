@@ -46,6 +46,9 @@ const app = await createApp({
   configFile: join(dir, 'config.json'),
   stateFile: join(dir, 'state.json'),
   port: 0,
+  bind: 'loopback',
+  // Device settings are real form data, but a browser test must never drive their hosts.
+  driver: { set: async (id) => id, read: async () => 'unknown' },
   log: () => {},
 });
 const base = `http://127.0.0.1:${app.port}`;
@@ -880,6 +883,58 @@ test('a staged DELETION stays on screen, struck through, with an Undo');
   const back = await deviceState();
   check(back.draft.some((d) => d.id === 'studio-panel'), 'Undo delete did not put the row back');
   check(back.staged.length === 0, `undoing left something staged: [${back.staged.join(', ')}]`);
+}
+
+test('a new state cannot stage an id already used by a saved or staged row (#94)');
+{
+  await page.evaluate(() => { resetDraft(); editing = {}; renderAll(); showSection('states'); });
+  const stateEditor = () => page.locator('#rows .row-edit');
+  const addState = async (label) => {
+    await page.click('#add-row');
+    await stateEditor().locator('input').first().fill(label);
+    await stateEditor().locator('button:text-is("Save row")').click();
+  };
+  const expectUniqueDraft = async (id) => {
+    const count = await page.evaluate((key) => draft.states.filter((r) => r.id === key).length, id);
+    check(count === 1, `staging introduced ${count} rows named ${id}`);
+  };
+
+  await addState('On Air');
+  check(await stateEditor().locator('.err').count() === 1 &&
+        /already taken/.test(await stateEditor().locator('.err').textContent()),
+        'collision with a saved row was not rejected inside its editor');
+  await expectUniqueDraft('on-air');
+  await page.evaluate(() => { resetDraft(); editing = {}; renderAll(); });
+
+  await addState('At Lunch');
+  check(await stateEditor().count() === 0, 'a unique new id was rejected');
+  await expectUniqueDraft('at-lunch');
+  await addState('At Lunch');
+  check(await stateEditor().locator('.err').count() === 1 &&
+        /already taken/.test(await stateEditor().locator('.err').textContent()),
+        'collision with a staged row was not rejected inside its editor');
+  await expectUniqueDraft('at-lunch');
+  await page.evaluate(() => { resetDraft(); editing = {}; renderAll(); });
+}
+
+test('the machine passphrase follows the environment override without revealing a credential');
+{
+  for (const variable of ['ONAIR_PASSPHRASE', 'ONAIR_TOKEN']) {
+    await page.evaluate((name) => {
+      envInfo = { overrides: [{ key: 'auth.passphrase', variable: name }], effective: {} };
+      renderFields();
+    }, variable);
+    const input = page.locator('#f-passphrase-machine-clients-');
+    check(await input.evaluate((i) => i.readOnly), `${variable} did not lock the passphrase field`);
+    check(await input.inputValue() === '', `${variable} showed the inactive document credential`);
+    check(await input.getAttribute('placeholder') === 'not shown', 'the empty field does not explain itself');
+    const note = await input.locator('..').textContent();
+    check(note.includes(variable), `the field does not name ${variable}`);
+    check(!note.includes('Currently set to the default.'), 'an overridden field claims the document default is active');
+  }
+  await page.evaluate(() => { envInfo = { overrides: [], effective: {} }; renderFields(); });
+  check(await page.locator('#f-passphrase-machine-clients-').evaluate((i) => !i.readOnly),
+        'removing the override did not make the document field editable again');
 }
 
 test('no page errors were raised at any point');
