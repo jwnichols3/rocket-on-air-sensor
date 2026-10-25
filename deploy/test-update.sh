@@ -27,6 +27,8 @@ check(){ if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1" "expected [$3], got 
 # Source the functions without dispatching a verb. `onair` sets -e for its own
 # safety, which would abort this script the first time a predicate answers "no" -
 # so turn it back off. `-u` stays on.
+# Keep this render fixture independent of a signed runtime installed on the test host.
+ONAIR_RUNTIME_APP=legacy
 ONAIR_LIB_ONLY=1 . "$HERE/onair"
 set +e +o pipefail
 

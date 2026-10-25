@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 /**
  * The state table and the state object - contract v2, §1 and §2.
  *
@@ -199,6 +201,10 @@ export interface OnAirState {
 
 /** The §2 object as it goes on the wire, with the derived fields filled in. */
 export interface StatusBody extends OnAirState {
+  /** Opaque lifetime identifier. A fresh Receiver starts a new sequence namespace. */
+  receiverInstanceId: string;
+  /** Orders observations, including confirmation changes that do not move updatedAt. */
+  statusSequence: number;
   busy: boolean;
   intended: 'on' | 'off';
   /**
@@ -230,6 +236,8 @@ export function defaultState(now: Date = new Date()): OnAirState {
 export class StateStore {
   private state: OnAirState;
   private table: StateTable;
+  private readonly receiverInstanceId = randomUUID();
+  private statusSequence = 1;
 
   constructor(initial: OnAirState, table: StateTable = new StateTable()) {
     this.table = table;
@@ -249,8 +257,12 @@ export class StateStore {
    * `unknown` and records where it came from (D-34). Used by the config store (#39).
    */
   setTable(table: StateTable): OnAirState {
+    const next = resolveAgainst(this.state, table);
+    if (table.version !== this.table.version
+      || tableObservation(table) !== tableObservation(this.table)
+      || !sameState(this.state, next)) this.advanceSequence();
     this.table = table;
-    this.state = resolveAgainst(this.state, table);
+    this.state = next;
     return this.get();
   }
 
@@ -272,7 +284,7 @@ export class StateStore {
       updatedAt: now.toISOString(),
     };
     delete next.stateResolvedFrom;
-    this.state = next;
+    this.replaceState(next);
     return this.get();
   }
 
@@ -282,17 +294,17 @@ export class StateStore {
     const next = { ...this.state, confirmed };
     if (reason === undefined) delete next.confirmedReason;
     else next.confirmedReason = reason;
-    this.state = next;
+    this.replaceState(next);
     return this.get();
   }
 
   setMessage(text: string): OnAirState {
-    this.state = { ...this.state, message: text };
+    this.replaceState({ ...this.state, message: text });
     return this.get();
   }
 
   clearMessage(): OnAirState {
-    this.state = { ...this.state, message: null };
+    this.replaceState({ ...this.state, message: null });
     return this.get();
   }
 
@@ -307,6 +319,8 @@ export class StateStore {
     const busy = this.table.busy(s.state);
     return {
       ...s,
+      receiverInstanceId: this.receiverInstanceId,
+      statusSequence: this.statusSequence,
       busy,
       intended: busy ? 'on' : 'off',
       ageSeconds: this.ageSeconds(now),
@@ -324,6 +338,28 @@ export class StateStore {
       tableVersion: this.table.version,
     };
   }
+
+  private replaceState(next: OnAirState): void {
+    if (!sameState(this.state, next)) this.advanceSequence();
+    this.state = next;
+  }
+
+  private advanceSequence(): void {
+    // Never emit an imprecise counter or wrap inside one instance's namespace.
+    if (this.statusSequence === Number.MAX_SAFE_INTEGER) throw new Error('status sequence exhausted; restart Receiver');
+    this.statusSequence++;
+  }
+}
+
+function sameState(a: OnAirState, b: OnAirState): boolean {
+  return a.state === b.state && a.confirmed === b.confirmed && a.source === b.source
+    && a.updatedAt === b.updatedAt && a.message === b.message
+    && a.stateResolvedFrom === b.stateResolvedFrom && a.confirmedReason === b.confirmedReason;
+}
+
+function tableObservation(table: StateTable): string {
+  return JSON.stringify(table.rows().map((row) =>
+    [row.id, row.label, row.color, row.bgcolor, row.description, row.busy, row.order]));
 }
 
 /**

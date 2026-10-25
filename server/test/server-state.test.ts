@@ -74,7 +74,8 @@ test('GET /status has an EXACT key set - a retired field cannot linger unnoticed
   // exact set is not. `stateResolvedFrom` is deliberately absent: it appears only when the
   // live row was deleted (D-34), and it has its own tests.
   assert.deepEqual(Object.keys(await status(h)).sort(), [
-    'ageSeconds', 'busy', 'confirmed', 'intended', 'message', 'source', 'state', 'tableVersion', 'updatedAt',
+    'ageSeconds', 'busy', 'confirmed', 'intended', 'message', 'receiverInstanceId', 'source', 'state',
+    'statusSequence', 'tableVersion', 'updatedAt',
   ]);
 });
 

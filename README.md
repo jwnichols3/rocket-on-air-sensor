@@ -12,6 +12,9 @@ curl -fsSL https://raw.githubusercontent.com/jwnichols3/rocket-on-air-sensor/mai
 [INSTALL.md](INSTALL.md) covers each layer. [Current architecture and operations](docs/architecture.md)
 is the short guide to how the parts fit together.
 
+For long-running Mac Receivers, see the [signed runtime setup](docs/mac-setup.md#stable-signed-mac-runtime).
+For repeatable Companion installs and rollback, see [Companion deployment](docs/companion-deployment.md).
+
 ## Architecture
 
 ```text

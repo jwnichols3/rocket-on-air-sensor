@@ -81,9 +81,10 @@ button. The table is the owner's and they can add rows.
 
 **`apiVersion` is declared, not derived.** `runtime.apiVersion` in the manifest is the
 module author's claim about which host API it wants. It has nothing to do with the version of
-`@companion-module/base` you depend on. The manifest declares **1.14.0**, and the module
-uses that contract. A host must support the declared API. Raising the string alone does
-not migrate the implementation or make API 2 linked presets safe.
+`@companion-module/base` you depend on. The manifest declares **2.2.0**, matching Companion 5.1.1's supported API list, and the
+implementation uses SDK 2.2.1. The module exports an ESM constructor and upgrade scripts,
+object-map variables, and separate preset sections/definitions. This is an implementation
+migration, not just a changed version string.
 
 **macOS `tar` breaks the sideload.** It writes AppleDouble `._*` entries, the first being
 `._.` - one path component. Companion extracts with `strip: 1` and no ignore filter, so that
@@ -149,10 +150,10 @@ unplugging the panel, or killing the daemon mid-meeting:
 | `setConfirmed()` | a light that disagrees, and a light that will not answer |
 | `setWriteDelay()` | #68's slow-but-successful write |
 
-`test/module.test.mjs` loads `src/index.js` with its `runEntrypoint` line swapped for an
-export, so the tests exercise the shipped source rather than a copy. Instances are built with
-`Object.create(OnAirInstance.prototype)`: `InstanceBase`'s constructor refuses manual
-construction and then builds an IpcWrapper that wants a live Companion.
+`test/module.test.mjs` imports the exported source class and records its host callbacks.
+`test/api2.test.mjs` additionally loads source and the actual ESM bundle through the real
+`@companion-module/host` wrapper, validating the API 2 definitions and upgrade script.
+`test/ordering.test.mjs` checks Receiver sequence/instance handling and command diagnostics.
 
 The timing-sensitive tests set the thresholds they depend on rather than waiting out the
 defaults - every threshold in this module is configuration, which is what makes that honest
@@ -181,3 +182,26 @@ now includes those conditions. Re-create a copy from the 0.7.3 preset to gain th
 NOT REFRESHING, NO DATA, and ASLEEP presentations. Healthy sleep is not a fault. Preserve
 customized controls deliberately.
 See [module release and deployment instructions](../docs/releases.md#companion-module-releases).
+
+
+## API 2 presets and diagnostics
+
+Companion 5.1.1 can place these presets as linked references. Existing copied buttons do not
+become linked automatically. Preserve their full configuration before replacing them.
+The existing preset IDs `state_cycle` and `panel_toggle` remain stable. A linked cycle uses
+the local variable `cycle_states`; set that array to the old button's selected ring during
+migration so later table additions do not silently change which states it cycles.
+
+The `diagnostics` preset uses layered graphics and local value-feedback variables to display
+READY, ASLEEP, RECEIVER OFFLINE, or a primary-panel warning, together with the last command
+outcome and module version. It creates no additional polling loop. `last_command` retains
+the full result while the preset uses a concise summary. Command acceptance/delivery is kept
+separate from physical confirmation.
+
+The module orders snapshots by `(receiverInstanceId, statusSequence)` when present. Equal
+sequence heartbeats refresh contact and write age without replacing semantic state.
+`receiver_instance_id` and `status_sequence` expose the accepted epoch and highest sequence,
+and are empty for legacy Receivers. Old
+Receiver identities are retired when a new boot is accepted. Legacy Receivers remain usable;
+a rollback from the ordered protocol to a legacy one requires a fresh SSE stream or an
+explicit connection reset, so an arbitrary missing field cannot erase ordering protection.

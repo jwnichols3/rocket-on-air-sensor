@@ -82,8 +82,35 @@ One object, persisted atomically, restored on restart.
 | `updatedAt` | ISO 8601 | **Provenance.** Time of the last state write, refreshed by idempotent repeats. |
 | `ageSeconds` | integer | **Provenance.** How long ago that write happened, computed at read time. |
 | `tableVersion` | integer | The table version in force. Bumped on every config save. |
+| `receiverInstanceId` | string | Opaque Receiver-lifetime identifier. Changes on restart; shared by every listener and status transport. Not persisted. |
+| `statusSequence` | positive safe integer | Orders status observations within one Receiver instance. Advances when state, confirmation/reason, message, or table changes. Not persisted. |
 | `stateResolvedFrom` | string \| absent | Present only when the live row was deleted and the state fell back to `unknown`. Names the dead `id`. |
 | `message` | string \| `null` | Optional display message. Independent of state writes - a state write never touches it. |
+
+### Ordering observations across transports
+
+`receiverInstanceId` and `statusSequence` form one ordering token. The token is attached to
+`GET /status`, state-write responses, SSE and WebSocket status snapshots, and the public
+rendering view. Different listeners and transports reading the same state carry the same
+token. Reads, heartbeats, and the passage of time do not advance it; `ageSeconds` may increase
+while the sequence stays unchanged. Several mutations can happen before a client sees a
+snapshot, so sequence numbers need not be consecutive.
+
+Within the same instance, a lower sequence is an older observation and must not replace a
+newer one. An equal sequence is a duplicate underlying observation, but a valid current
+heartbeat can still refresh the client's contact clock. Confirmation can change without a
+state write, so `updatedAt` alone is insufficient for ordering. The sequence is independent
+of wall-clock corrections.
+
+A restart creates a new opaque instance ID and starts a new counter. Never compare sequence
+numbers across IDs, and never sort the IDs themselves. Clients must retain connection/request
+generation fences while adopting a new instance: a delayed HTTP response from a retired
+instance must not switch them back. Factory reset and configuration rebinding keep the
+running instance ID and advance its sequence as observations change.
+
+These fields are additive. Older renderers can ignore them; newer clients talking to an
+older Receiver must retain their conservative unsequenced-response handling. They are not
+written to the state file and do not change the last-write-wins rule.
 
 > **A DARK PANEL IS NOT A FAULT, AND `confirmed` SAYS SO (#82/#83, 2026-08-30).**
 >

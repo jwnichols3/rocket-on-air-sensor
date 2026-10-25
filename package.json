@@ -1,6 +1,6 @@
 {
   "name": "rocket-on-air-sensor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Detect call state on the Mac and drive a remote on-air light. Four parts, one verify command.",
   "type": "module",
@@ -30,7 +30,8 @@
     "test:browser:live": "node firmware/test/browser/test-page.mjs --live",
     "version:check": "node scripts/version.mjs check",
     "version:set": "node scripts/version.mjs set",
-    "test:version": "node --test scripts/test/*.test.mjs"
+    "test:version": "node --test scripts/test/*.test.mjs",
+    "module:deploy": "node scripts/companion-deploy.mjs"
   },
   "devDependencies": {
     "@types/node": "^22",

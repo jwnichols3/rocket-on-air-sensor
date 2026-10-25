@@ -29,11 +29,11 @@ import {
 	InstanceStatus,
 	Regex,
 	combineRgb,
-	runEntrypoint,
 } from '@companion-module/base'
 
 import { ICONS } from './icons.js'
 import { MODULE_BUILD_INFO } from './build-info.js'
+import { upgradeLegacyStateExpressions } from './upgrades.js'
 
 /// The reserved row (contract section 1). It always exists in a real table and its `busy` is
 /// always true; this is what the module falls back to before the first table pull, which is
@@ -113,10 +113,16 @@ function num(raw, fallback, min = 0) {
 }
 
 const STATE_ID = /^[a-z0-9][a-z0-9-]{0,31}$/
+function observationTuple(payload) {
+	const id = payload?.receiverInstanceId, sequence = payload?.statusSequence
+	if (id === undefined && sequence === undefined) return null
+	if (typeof id !== 'string' || id.length === 0 || id.length > 128 || !Number.isSafeInteger(sequence) || sequence < 1) return false
+	return { id, sequence }
+}
 function validStatus(payload) {
 	return payload !== null && typeof payload === 'object' && !Array.isArray(payload)
 		&& typeof payload.state === 'string' && STATE_ID.test(payload.state)
-		&& typeof payload.busy === 'boolean'
+		&& typeof payload.busy === 'boolean' && observationTuple(payload) !== false
 }
 function validTable(payload) {
 	if (!payload || !Number.isSafeInteger(payload.version) || payload.version < 1 || !Array.isArray(payload.states)) return false
@@ -166,16 +172,21 @@ class OnAirInstance extends InstanceBase {
 		this.tableVersion = null
 		this.current = null
 		this.observationRevision = 0
+		this.receiverInstanceId = null
+		this.statusSequence = null
+		this.retiredReceiverIds = new Set()
 		this.lastContactAt = 0
 		this.lastStreamAt = 0
 		this.streamOpen = false
 		this.lastConnection = 'no data'
 		this.fault = null
 		this.lastStatusKey = null
+		this.commandId = 0
+		this.lastCommand = { status: 'none', label: 'No command yet', result: 'No command yet' }
 		this.setActionDefinitions(this.buildActions())
 		this.defineFeedbacks()
 		this.setVariableDefinitions(this.buildVariables())
-		this.setPresetDefinitions(this.buildPresets())
+		this.definePresets()
 		this.publishStatus()
 		this.publishVariables()
 		this.checkAll()
@@ -216,7 +227,11 @@ class OnAirInstance extends InstanceBase {
 	// arrived while it was in flight, discard that ambiguous snapshot. The next poll is
 	// the fallback; this does not pretend that updatedAt sequences confirmation changes.
 	ingestResponse(payload, request) {
-		if (!this.isCurrent(request.generation) || request.observation !== this.observationRevision) return false
+		if (!this.isCurrent(request.generation)) return false
+		const tuple = observationTuple(payload)
+		// The sequence outranks arrival order within one Receiver boot. New/legacy
+		// epochs retain the request-start fence so an old response cannot switch back.
+		if (!(tuple && tuple.id === this.receiverInstanceId) && request.observation !== this.observationRevision) return false
 		return this.ingest(payload)
 	}
 
@@ -398,8 +413,36 @@ class OnAirInstance extends InstanceBase {
 	 * poll and the stream disagreeing about which of them is authoritative is exactly the bug
 	 * this shape prevents.
 	 */
-	ingest(payload) {
-		if (!validStatus(payload)) return false
+	ingest(payload, { allowLegacy = false } = {}) {
+		if (this.stopping || !validStatus(payload)) return false
+		const tuple = observationTuple(payload)
+		if (tuple && this.retiredReceiverIds.has(tuple.id)) return false
+		if (!tuple && this.receiverInstanceId !== null) {
+			// Receiver rollback to an older protocol needs a fresh current SSE stream
+			// (or explicit connection reset), not an arbitrary missing field in a response.
+			if (!allowLegacy) return false
+			this.retiredReceiverIds.add(this.receiverInstanceId)
+			this.receiverInstanceId = null
+			this.statusSequence = null
+		}
+		if (tuple && tuple.id === this.receiverInstanceId && tuple.sequence <= this.statusSequence) {
+			this.lastContactAt = Date.now()
+			this.clearFault()
+			// Duplicate heartbeats can advance display age without changing semantic state.
+			if (tuple.sequence === this.statusSequence && Number.isFinite(payload.ageSeconds) && payload.ageSeconds >= 0) {
+				this.current = { ...this.current, ageSeconds: payload.ageSeconds }
+			}
+			this.refreshExpectedTable()
+			this.publishVariables()
+			this.publishStatus()
+			this.checkAll()
+			return true
+		}
+		if (tuple) {
+			if (this.receiverInstanceId !== null && tuple.id !== this.receiverInstanceId) this.retiredReceiverIds.add(this.receiverInstanceId)
+			this.receiverInstanceId = tuple.id
+			this.statusSequence = tuple.sequence
+		}
 
 		this.current = payload
 		this.observationRevision++
@@ -409,17 +452,22 @@ class OnAirInstance extends InstanceBase {
 		this.lastContactAt = Date.now()
 		this.clearFault()
 
-		// tableVersion moves whenever the table is saved. That is the regeneration trigger -
-		// no polling of the table, and no restart.
-		if (payload.tableVersion !== undefined && payload.tableVersion !== this.tableVersion) {
-			this.log('info', `table version ${this.tableVersion} -> ${payload.tableVersion}, regenerating`)
-			void this.refreshTable()
-		}
+		this.refreshExpectedTable()
 
 		this.publishStatus()
 		this.publishVariables()
 		this.checkAll()
 		return true
+	}
+
+	refreshExpectedTable() {
+		// Retry knowledge even when the accepted status sequence is unchanged. A failed
+		// or already-in-flight older pull must not leave linked presets stale forever.
+		const target = this.current?.tableVersion
+		if (target !== undefined && target !== this.tableVersion) {
+			if (!this.tablePromise) this.log('info', `table version ${this.tableVersion} -> ${target}, regenerating`)
+			void this.refreshTable()
+		}
 	}
 
 	/**
@@ -429,6 +477,22 @@ class OnAirInstance extends InstanceBase {
 		const defs = this.buildFeedbacks()
 		this.feedbackIds = Object.keys(defs)
 		this.setFeedbackDefinitions(defs)
+	}
+
+	/** API 2 separates stable preset sections from the definitions they reference. */
+	definePresets() {
+		const authored = this.buildPresets()
+		const groups = new Map()
+		const presets = {}
+		for (const [id, { category, ...preset }] of Object.entries(authored)) {
+			if (!groups.has(category)) groups.set(category, [])
+			groups.get(category).push(id)
+			presets[id] = preset
+		}
+		const sections = [...groups].map(([name, definitions]) => ({
+			id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-$/, ''), name, definitions,
+		}))
+		this.setPresetDefinitions(sections, presets)
 	}
 
 	/**
@@ -480,12 +544,16 @@ class OnAirInstance extends InstanceBase {
 	setFault(status, message) {
 		this.fault = [status, message]
 		this.publishStatus()
+		this.publishVariables()
+		this.checkAll()
 	}
 
 	clearFault() {
 		if (!this.fault) return
 		this.fault = null
 		this.publishStatus()
+		this.publishVariables()
+		this.checkAll()
 	}
 
 	// ---- the view: the module's single source of truth about what it may claim ----------------
@@ -635,7 +703,7 @@ class OnAirInstance extends InstanceBase {
 			this.setActionDefinitions(this.buildActions())
 			this.defineFeedbacks()
 			this.setVariableDefinitions(this.buildVariables())
-			this.setPresetDefinitions(this.buildPresets())
+			this.definePresets()
 			this.publishVariables()
 			this.checkAll()
 			return true
@@ -669,7 +737,7 @@ class OnAirInstance extends InstanceBase {
 				this.streamOpen = true
 				this.lastStreamAt = Date.now()
 				const reader = res.body.getReader(), decoder = new TextDecoder()
-				let buffer = ''
+				let buffer = '', firstStatus = true
 				for (;;) {
 					const { value, done } = await reader.read()
 					if (!current()) { void reader.cancel().catch(() => {}); return }
@@ -677,7 +745,7 @@ class OnAirInstance extends InstanceBase {
 					buffer += decoder.decode(value, { stream: true })
 					let cut
 					while ((cut = buffer.indexOf('\n\n')) !== -1) {
-						this.handleEvent(buffer.slice(0, cut))
+						if (this.handleEvent(buffer.slice(0, cut), firstStatus)) firstStatus = false
 						buffer = buffer.slice(cut + 2)
 					}
 				}
@@ -704,7 +772,7 @@ class OnAirInstance extends InstanceBase {
 		this.retryTimer.unref?.()
 	}
 
-	handleEvent(chunk) {
+	handleEvent(chunk, firstStatus = false) {
 		const dataLines = chunk
 			.split('\n')
 			.filter((l) => l.startsWith('data:'))
@@ -719,13 +787,15 @@ class OnAirInstance extends InstanceBase {
 		// The watchdog is satisfied by the stream being ALIVE, which a keep-alive `status`
 		// event proves even when the payload is one this module cannot use.
 		this.lastStreamAt = Date.now()
-		this.ingest(payload)
+		if (!validStatus(payload)) return false
+		this.ingest(payload, { allowLegacy: firstStatus })
+		return true
 	}
 
 	// ---- variables ------------------------------------------------------------------------
 
 	buildVariables() {
-		return [
+		const definitions = [
 			{ variableId: 'state', name: 'Current state id' },
 			{ variableId: 'label', name: 'Current state label' },
 			{ variableId: 'busy', name: 'Busy (yes/no)' },
@@ -746,7 +816,13 @@ class OnAirInstance extends InstanceBase {
 			{ variableId: 'table_version', name: 'State table version' },
 			{ variableId: 'module_version', name: 'Running module version' },
 			{ variableId: 'module_commit', name: 'Running module source commit' },
+			{ variableId: 'receiver_instance_id', name: 'Accepted Receiver instance ID (empty for a legacy Receiver)' },
+			{ variableId: 'status_sequence', name: 'Highest accepted Receiver observation sequence (empty for legacy)' },
+			{ variableId: 'diagnostic_status', name: 'Receiver and primary panel health' },
+			{ variableId: 'last_command', name: 'Last command and outcome (acceptance is not physical confirmation)' },
+			{ variableId: 'last_command_status', name: 'Last command status: none / pending / accepted / undelivered / rejected / unknown' },
 		]
+		return Object.fromEntries(definitions.map(({ variableId, name }) => [variableId, { name }]))
 	}
 
 	publishVariables() {
@@ -766,9 +842,50 @@ class OnAirInstance extends InstanceBase {
 			seconds_since_contact: Number.isFinite(v.lostFor) ? Math.floor(v.lostFor / 1000) : '',
 			age_seconds: s?.ageSeconds ?? '',
 			table_version: this.tableVersion ?? '',
+			receiver_instance_id: this.receiverInstanceId ?? '',
+			status_sequence: this.statusSequence ?? '',
+			diagnostic_status: this.diagnosticView().status,
+			last_command: this.lastCommand?.result ?? 'No command yet',
+			last_command_status: this.lastCommand?.status ?? 'none',
 			module_version: MODULE_BUILD_INFO.version,
 			module_commit: (MODULE_BUILD_INFO.commit ?? 'unknown') + (MODULE_BUILD_INFO.dirty ? ' (modified)' : ''),
 		})
+	}
+
+	/** One compact diagnosis, shared by variables and the linked diagnostics preset. */
+	diagnosticView() {
+		if (this.fault) return { status: this.fault[0] === InstanceStatus.AuthenticationFailure ? 'AUTH ERROR'
+			: this.fault[0] === InstanceStatus.BadConfig ? 'CONFIG ERROR' : 'RECEIVER ERROR', color: 0xc1121f, ink: 0xffffff }
+		const view = this.view()
+		if (view.connection !== 'ok') return { status: 'RECEIVER OFFLINE', color: 0xffbf00, ink: 0x000000 }
+		const confirmation = this.confirmation()
+		if (confirmation === 'asleep') return { status: 'ASLEEP', color: 0x46464a, ink: 0xffffff }
+		if (confirmation === 'agrees') return { status: 'READY', color: 0x0b6e2e, ink: 0xffffff }
+		return { status: this.current?.confirmedReason === 'unreachable' ? 'PANEL UNREACHABLE' : 'PANEL UNCONFIRMED', color: 0xc1121f, ink: 0xffffff }
+	}
+
+	commandSummary() {
+		const command = this.lastCommand
+		if (!command || command.status === 'none') return 'No command yet'
+		const action = command.label.startsWith('cycle state') ? 'Cycle'
+			: command.label.startsWith('set state') ? 'Set state'
+			: command.label.startsWith('panel ') ? 'Panel' : 'Table refresh'
+		return `${action}: ${command.status === 'unknown' ? 'outcome unknown' : command.status}`
+	}
+
+	beginCommand(label) {
+		const token = { id: ++this.commandId, generation: this.generation }
+		this.lastCommand = { ...token, label, status: 'pending', result: `Pending: ${label}` }
+		this.publishVariables()
+		this.checkAll()
+		return token
+	}
+
+	finishCommand(token, status, result) {
+		if (!this.isCurrent(token.generation) || this.lastCommand?.id !== token.id) return
+		this.lastCommand = { ...this.lastCommand, status, result }
+		this.publishVariables()
+		this.checkAll()
 	}
 
 	// ---- actions ---------------------------------------------------------------------------
@@ -789,9 +906,8 @@ class OnAirInstance extends InstanceBase {
 					},
 				],
 				callback: async (event) => {
-					const generation = this.generation
-					const id = await this.parseVariablesInString(String(event.options.state ?? ''))
-					if (this.isCurrent(generation)) await this.setState(id)
+					// API 2 resolves option expressions before invoking the callback.
+					await this.setState(String(event.options.state ?? ''))
 				},
 			},
 			cycle_state: {
@@ -859,7 +975,9 @@ class OnAirInstance extends InstanceBase {
 				name: 'Refresh the state table now',
 				options: [],
 				callback: async () => {
-					await this.refreshTable()
+					const command = this.beginCommand('refresh table')
+					const okay = await this.refreshTable()
+					this.finishCommand(command, okay ? 'accepted' : 'unknown', okay ? 'State table refreshed' : 'Table refresh did not complete')
 				},
 			},
 		}
@@ -884,11 +1002,12 @@ class OnAirInstance extends InstanceBase {
 	 * know, and the instance is not broken.
 	 */
 	async panelSleep(command) {
+		if (this.stopping) return
 		// `true`/`false` from the two one-way buttons, `'toggle'` from the one-button form. The
 		// booleans are kept rather than replaced with strings so #91's two actions read the same
 		// as they always did at their call sites.
 		const what = command === 'toggle' ? 'toggle' : command ? 'sleep' : 'wake'
-		if (this.stopping) return
+		const outcome = this.beginCommand(`panel ${what}`)
 		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
 		const request = this.beginRequest(timeout)
 		try {
@@ -909,8 +1028,10 @@ class OnAirInstance extends InstanceBase {
 					/* a 200 with an unreadable body; the poll will settle it */
 				}
 				if (!this.isCurrent(request.generation)) return
+				this.finishCommand(outcome, delivered === true ? 'accepted' : delivered === false ? 'undelivered' : 'unknown',
+					delivered === true ? `Panel ${asked ?? what} request delivered` : delivered === false ? 'Panel request not acknowledged' : 'Panel request outcome unknown')
 				if (delivered === false) {
-					this.log('warn', `panel ${what}: the server could not reach the panel. Nothing changed on the glass.`)
+					this.log('warn', `panel ${what}: the server could not confirm delivery to the panel.`)
 				} else if (what !== 'toggle') {
 					// EVERY PRESS LEAVES A LINE, not just the toggle's. This used to log nothing at
 					// all on a successful one-way press, and that silence cost real time: a deck
@@ -942,9 +1063,11 @@ class OnAirInstance extends InstanceBase {
 			// models no device. Nothing the operator can fix from the deck, but "not supported"
 			// beats a bare number.
 			if (!this.isCurrent(request.generation)) return
+			this.finishCommand(outcome, 'rejected', `Panel request rejected (${res.status})`)
 			this.log('error', `panel ${what} failed: ${detail}`)
 		} catch (err) {
 			if (!this.isCurrent(request.generation)) return
+			this.finishCommand(outcome, 'unknown', 'No reply; panel command outcome unknown')
 			if (err.name === 'TimeoutError') {
 				this.log('warn', `panel ${what}: no answer within ${timeout} ms. It may still have landed.`)
 				return
@@ -999,6 +1122,7 @@ class OnAirInstance extends InstanceBase {
 	 */
 	async postWrite(path, what) {
 		if (this.stopping) return
+		const command = this.beginCommand(what)
 		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
 		const request = this.beginRequest(timeout)
 		try {
@@ -1015,9 +1139,11 @@ class OnAirInstance extends InstanceBase {
 				// means a press that failed to reach the lamp shows the fault whenever the next
 				// event happens to arrive, instead of immediately.
 				try {
-					this.ingestResponse(await res.json(), request)
+					const body = await res.json()
+					this.ingestResponse(body, request)
+					this.finishCommand(command, validStatus(body) ? 'accepted' : 'unknown', validStatus(body) ? `Accepted: ${what}` : 'Write response could not be verified')
 				} catch {
-					/* a 200 with an unreadable body; the poll will settle it */
+					this.finishCommand(command, 'unknown', 'Write response could not be verified')
 				}
 				return
 			}
@@ -1042,9 +1168,11 @@ class OnAirInstance extends InstanceBase {
 				/* no JSON body; the status alone is what we have */
 			}
 			if (!this.isCurrent(request.generation)) return
+			this.finishCommand(command, 'rejected', `Rejected: ${what} (${res.status})`)
 			this.log('error', `${what} failed: ${detail}`)
 		} catch (err) {
 			if (!this.isCurrent(request.generation)) return
+			this.finishCommand(command, 'unknown', `No reply: ${what}; outcome unknown`)
 			// A TIMEOUT IS AN UNKNOWN OUTCOME, NOT A FAILURE (D-123, #76). Issue #68 measured
 			// two writes that blocked for 6.4 s and 13.2 s against a powered-off panel and
 			// BOTH SUCCEEDED. Reporting that as a failed write, and dropping the whole
@@ -1072,6 +1200,18 @@ class OnAirInstance extends InstanceBase {
 		const white = combineRgb(255, 255, 255)
 		const black = combineRgb(0, 0, 0)
 		return {
+			diagnostic_value: {
+				type: 'value', name: 'Diagnostics value',
+				options: [{ type: 'dropdown', id: 'field', label: 'Field', default: 'status', choices: [
+					{ id: 'status', label: 'Status' }, { id: 'color', label: 'Background' }, { id: 'ink', label: 'Text color' },
+					{ id: 'command', label: 'Last command' }, { id: 'version', label: 'Module version' },
+				] }],
+				callback: ({ options }) => {
+					if (options.field === 'command') return this.commandSummary()
+					if (options.field === 'version') return `v${MODULE_BUILD_INFO.version}`
+					return this.diagnosticView()[options.field] ?? ''
+				},
+			},
 			state_is: {
 				type: 'boolean',
 				name: 'Receiver state is',
@@ -1235,7 +1375,7 @@ class OnAirInstance extends InstanceBase {
 			// index never appears (D-34), so a preset keeps its identity across a table edit -
 			// which is what makes 5.1's live-linked preset references work when they land.
 			presets[`state_${row.id}`] = {
-				type: 'button',
+				type: 'simple',
 				category: 'States',
 				name: row.label,
 				// AT REST the row is dimmed; `state_is` lights it in full. The button therefore
@@ -1259,7 +1399,7 @@ class OnAirInstance extends InstanceBase {
 			// operator. Both sets are generated from the same row, wear the same feedbacks and
 			// write the same state, so a deck can mix them freely.
 			presets[`state_${row.id}_words`] = {
-				type: 'button',
+				type: 'simple',
 				category: 'States (words)',
 				name: `${row.label} (words)`,
 				style: {
@@ -1291,7 +1431,7 @@ class OnAirInstance extends InstanceBase {
 
 			const cycle = (key, category, withArt) => {
 				presets[`state_cycle${key}`] = {
-					type: 'button',
+					type: 'simple',
 					category,
 					name: 'Next state (cycle)',
 					// The resting face is only ever seen before the first status arrives. After that
@@ -1303,7 +1443,8 @@ class OnAirInstance extends InstanceBase {
 						bgcolor: CYCLE_BG,
 						...(withArt ? { png64: icon('cycle', CYCLE_BG) } : {}),
 					},
-					steps: [{ down: [{ actionId: 'cycle_state', options: { ring } }], up: [] }],
+					localVariables: [{ variableName: 'cycle_states', variableType: 'simple', startupValue: ring }],
+					steps: [{ down: [{ actionId: 'cycle_state', options: { ring: { isExpression: true, value: '$(local:cycle_states)' } } }], up: [] }],
 					// SAME PRIORITY ORDER AS THE ROW BUTTONS (D-122): the rows first, the two
 					// connection marks last, so dark-because-dead is never painted over.
 					feedbacks: [
@@ -1353,7 +1494,7 @@ class OnAirInstance extends InstanceBase {
 
 		if (this.states.length) {
 			presets.light = {
-				type: 'button',
+				type: 'simple',
 				category: 'Utility',
 				name: 'Light health',
 				style: { text: 'LIGHT\nOK', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(11, 110, 46) },
@@ -1422,7 +1563,7 @@ class OnAirInstance extends InstanceBase {
 			const art = (name, bg) => (withArt ? { png64: icon(name, bg) } : {})
 
 			presets[`panel_sleep${key}`] = {
-				type: 'button',
+				type: 'simple',
 				category,
 				name: 'Panel sleep',
 				style: { ...word('PANEL\nSLEEP', CMD_BG), ...art('sleep', CMD_BG) },
@@ -1446,7 +1587,7 @@ class OnAirInstance extends InstanceBase {
 			}
 
 			presets[`panel_wake${key}`] = {
-				type: 'button',
+				type: 'simple',
 				category,
 				name: 'Panel wake',
 				style: { ...word('PANEL\nWAKE', CMD_BG), ...art('wake', CMD_BG) },
@@ -1465,7 +1606,7 @@ class OnAirInstance extends InstanceBase {
 			// an indicator shows STATE. What the press does is then obvious, because there are
 			// only two states and pressing goes to the other one.
 			presets[`panel_toggle${key}`] = {
-				type: 'button',
+				type: 'simple',
 				category,
 				name: 'Panel sleep/wake toggle',
 				style: { ...word('SCREEN\nON', LIT_BG), ...art('wake', LIT_BG) },
@@ -1490,15 +1631,32 @@ class OnAirInstance extends InstanceBase {
 		panel('_words', 'Panel (words)', false)
 
 		presets.refresh = {
-			type: 'button',
+			type: 'simple',
 			category: 'Utility',
 			name: 'Refresh table',
 			style: { text: 'REFRESH\nTABLE', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(40, 40, 40) },
 			steps: [{ down: [{ actionId: 'refresh_table', options: {} }], up: [] }],
 			feedbacks: [],
 		}
+		const local = (id) => ({ isExpression: true, value: `$(local:${id})` })
+		presets.diagnostics = {
+			type: 'layered', category: 'Utility', name: 'Receiver and panel diagnostics',
+			notes: 'Status distinguishes Receiver contact from physical panel evidence. A delivered or accepted command is not physical confirmation.',
+			canvas: { decoration: 'none' },
+			localVariables: ['status', 'color', 'ink', 'command', 'version'].map((field) => ({
+				variableName: field, variableType: 'feedback', feedbackId: 'diagnostic_value', options: { field },
+			})),
+			elements: [
+				{ type: 'box', id: 'background', x: 0, y: 0, width: 100, height: 100, color: local('color') },
+				{ type: 'text', id: 'status', x: 3, y: 4, width: 94, height: 48, text: local('status'), fontsize: 22, fontsizeAllowShrink: true, color: local('ink') },
+				{ type: 'text', id: 'command', x: 3, y: 55, width: 94, height: 24, text: local('command'), fontsize: 11, fontsizeAllowShrink: true, color: local('ink') },
+				{ type: 'text', id: 'version', x: 3, y: 83, width: 94, height: 14, text: local('version'), fontsize: 11, color: local('ink') },
+			],
+			steps: [{ down: [], up: [] }], feedbacks: [],
+		}
 		return presets
 	}
 }
 
-runEntrypoint(OnAirInstance, [])
+export default OnAirInstance
+export const UpgradeScripts = [upgradeLegacyStateExpressions]

@@ -1,11 +1,11 @@
 {
   "name": "companion-module-rocket-onair",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "private": true,
   "description": "Bitfocus Companion module, sideloaded, with presets generated from the state table. Built by #44, rebuilt for the v2 client contract by #72-#76, given button art and a sleep/wake toggle by #92.",
   "type": "module",
   "dependencies": {
-    "@companion-module/base": "1.14.1"
+    "@companion-module/base": "2.2.1"
   },
   "scripts": {
     "build": "node build.mjs",
@@ -13,5 +13,8 @@
     "package": "node build.mjs && node package.mjs",
     "icons": "node tools/icons/build-icons.mjs",
     "version:set": "node ../scripts/version.mjs module-set"
+  },
+  "devDependencies": {
+    "@companion-module/host": "1.2.1"
   }
 }

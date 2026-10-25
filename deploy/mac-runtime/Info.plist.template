@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.rocket.onair.receiver</string>
+<key>CFBundleExecutable</key><string>OnAirReceiver</string>
+<key>CFBundleName</key><string>On Air Receiver</string>
+<key>CFBundleDisplayName</key><string>On Air Receiver</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSUIElement</key><true/>
+<key>NSLocalNetworkUsageDescription</key><string>Connect to your configured on-air panels and confirm their displayed state.</string>
+</dict></plist>

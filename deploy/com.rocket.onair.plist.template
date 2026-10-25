@@ -8,7 +8,7 @@
 
   Placeholders (filled in by `onair install`; kept out of this sentence so the
   rendered copy doesn't end up with a self-contradicting comment):
-    NODE - absolute path to the node binary (e.g. /opt/homebrew/bin/node)
+    NODE - verified signed app executable, or explicitly selected external Node
     APPDIR - absolute path to the repo checkout (WorkingDirectory; runs
              APPDIR/server/dist/index.js - the service lives under server/ since
              D-37, and `onair update` rewrites this path on a plist installed
@@ -39,6 +39,8 @@
 
 	<key>UserName</key>
 	<string>@USER@</string>
+
+	@ASSOCIATED_BUNDLE@
 
 	<key>WorkingDirectory</key>
 	<string>@APPDIR@</string>
