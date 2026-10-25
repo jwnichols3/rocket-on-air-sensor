@@ -35,6 +35,11 @@ only: it does not build, commit, tag, push, create a release, or deploy.
 local gate runs this check and the version-tool tests before building. The project's
 explicit local-gate policy remains in place; no CI service is required by this workflow.
 
+Verify on Node 22 as well as the Receiver's runtime when those differ. Companion's
+upstream base package declares Node 22 support. Its test-file timeout is 60 seconds
+because Node 22 applies that limit to the whole file, including the timed reconnect
+and outage checks, rather than only to individual tests.
+
 Update [CHANGELOG.md](../CHANGELOG.md), commit the tested changes on a branch, and open a
 pull request against `main`. Review the change and verification evidence before merging.
 Do not publish credentials, local configuration, or machine-specific verification receipts.
