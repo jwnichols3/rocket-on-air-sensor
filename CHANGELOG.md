@@ -1,5 +1,25 @@
 # Changelog
 
+## Companion module 0.7.3
+
+### Fixed
+
+- Late responses from old connections and superseded HTTP requests no longer overwrite
+  newer state observations; table refreshes are coordinated.
+- The Light health preset presents connection loss, no data, and intentional sleep explicitly.
+  Existing copied health buttons also stop showing green during lost contact/no data through
+  the broadened `light_not_confirming` feedback, with its existing ID preserved.
+- The contact-age variable updates between connection-condition changes.
+- State and sleep labels distinguish Receiver intent, physical confirmation, and manual sleep.
+
+### Added
+
+- Running module version and commit variables, backed by embedded build identity.
+- Sideload package version/hash validation and synchronized module manifest/lock versions.
+- Current upgrade guidance, including explicit version activation and copied-preset migration.
+
+The module remains on API 1.14. Product version 0.2.0 and firmware are unchanged.
+
 ## 0.2.0
 
 This is the first tagged On Air product release. The Receiver, admin console, and SwiftBar

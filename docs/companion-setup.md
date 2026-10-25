@@ -11,7 +11,7 @@ shipped before #44 described wiring that cannot work.
 `companion-module/` in this repo. Sideloaded rather than installed from the store: it is
 specific to this system and upstream submission is deliberately out of scope.
 
-**What it gives you that the generic path does not:** one preset per state, generated from
+**What it gives you that the generic path does not:** presets per state, generated from
 the server's own table. Drag them onto a Stream Deck and they already carry the right
 caption and the right colours, because both come from `GET /config/states`. Add a state on
 the server and its button appears - no Companion restart, no re-wiring.
@@ -50,12 +50,24 @@ ssh -f -N -L 18000:127.0.0.1:8000 john@<companion-host>
 
 Then open `http://127.0.0.1:18000` and import there.
 
-**Upgrading an existing install** is the same import: Companion replaces the module in place
-and restarts the connection. Buttons already on a surface keep working - preset ids are keyed
-on the immutable row `id` (D-31), so nothing on the deck is re-bound. What you gain after an
-upgrade are the new actions and feedbacks; **buttons placed before the upgrade do not
-retroactively gain the new connection marks**, because a placed button is a one-time copy of
-the preset. Re-drag a state preset if you want the marks on an old button.
+**Upgrading an existing install has two separate steps.** Import adds the package version;
+it does not guarantee any connection starts using it. Confirm the version under
+**Modules → Rocket: On-Air light**, then open the target connection and change **Module
+Version** to that version. Reload the connection page first if its version list is stale.
+Save the selection and verify the connection recovers.
+
+For module 0.7.3 and later, inspect the live `module_version` and `module_commit` variables.
+Compare them with the packaged build identity and the release commit. A version visible in
+the Modules list proves installation, while these variables are supplied by the running
+instance. A modified or unknown build must not be described as a clean release.
+
+Buttons already placed on a surface retain their action/feedback IDs. They are copies, so
+preset-definition changes do not retrofit their styles or extra feedbacks. Preserve custom
+controls deliberately. Existing **Light health** copies are protected by the broadened
+`light_not_confirming` feedback: loss of Receiver contact or no data activates their navy
+NO ACK style rather than leaving them green. Re-create a copy from the 0.7.3 preset if you
+want its more precise NOT REFRESHING, NO DATA, and ASLEEP styles. Healthy intentional sleep
+remains non-faulting. Existing state-cycle and sleep/wake controls retain their bindings.
 
 ## Configure the connection
 
@@ -79,7 +91,10 @@ change shape, with no `confirmed` and no `source`. Companion normally runs on a
 different host from the server anyway, where D-24's loopback waiver does not apply and the
 passphrase was already mandatory.
 
-The easiest place to read the passphrase is the admin console at `http://<host>:8484/`.
+The admin console at `http://<host>:8484/` shows the document passphrase unless an environment
+override is active. When overridden, it names the winning variable instead. Use that effective
+credential from the Receiver's environment/config overlay; the inactive document value will
+not authenticate the module.
 
 ## What you get
 
@@ -87,33 +102,39 @@ The easiest place to read the passphrase is the admin console at `http://<host>:
 with its `color` on `bgcolor`, verbatim. Each one ships with the connection marks already
 attached, so a deck straight out of the box meets the client contract without hand-wiring.
 
-Under **Utility**: **Light health** and **Refresh table**.
+Each state preset has graphic and words-only variants under **States** and **States (words)**.
+The same groups include a state-cycle button. **Panel** and **Panel (words)** contain sleep,
+wake, and sleep/wake toggle controls. **Utility** contains **Light health** and **Refresh table**.
 
 **Actions**
 
 | Action | What it does |
 |---|---|
 | Set state | `POST /state/{id}?source=companion`. The dropdown is the live table; a custom value is allowed |
+| Cycle to the next state | `POST /cycle`; the Receiver advances the selected ring in its write queue |
+| Panel sleep | Requests `POST /panel/sleep`; a busy panel may remain lit |
+| Panel wake | Requests `POST /panel/wake` |
+| Panel sleep/wake toggle | `POST /panel/toggle`; the Receiver reads the glass and chooses the opposite |
 | Refresh the state table now | re-reads `GET /config/states` |
 
 **Feedbacks**
 
 | Feedback | True when | Default look |
 |---|---|---|
-| State is | the light is showing that state | white on red |
+| Receiver state is | the Receiver reports that state, independently of physical confirmation | white on red |
 | Busy | the current row is busy. The server's own flag, not a colour test - THE BUSY RULE (D-32) is what it means | white on red |
 | Not refreshing | the server has not answered for longer than the configured window. The state shown is the last one it reported | **black on amber** |
 | No data | the server has been silent long enough that the module has given the state up | **the reserved row's own colours**, as you set them |
-| Light not confirming | `confirmed` reads `unknown`: the panel is unreachable or frozen. The server admitting ignorance, not a claim the light is wrong | **white on navy** |
+| Light not confirming | Receiver contact is lost/no data, or physical confirmation is absent without intentional sleep. The system admitting ignorance, not a claim the light is wrong | **white on navy** |
 | Light disagrees | the light acknowledges a row the server did not ask for | **black on white** |
+| Panel asleep | the panel is deliberately dark, from a schedule or manual sleep | preset-specific |
 
-The last four are the "something is off" family and they have **four deliberately distinct
-looks**. An operator who cannot tell them apart at a glance has four feedbacks that mean one
-thing - and they have four different fixes: wait, restart the server, check the panel's power,
-check who else is writing to the panel.
+Connection loss, no data, lack of confirmation, and disagreement have distinct presentations
+because they describe different evidence and need different diagnosis. Intentional sleep is
+healthy and is reported separately; it must not trigger a hardware-failure alarm.
 
-**Variables**: `state`, `label`, `busy`, `confirmed`, `source`, `connection`,
-`seconds_since_contact`, `age_seconds`, `table_version`.
+**Variables**: `state`, `label`, `busy`, `confirmed`, `confirmed_reason`, `source`, `connection`,
+`seconds_since_contact`, `age_seconds`, `table_version`, `module_version`, `module_commit`.
 
 ## Slow writes are not failed writes
 
@@ -224,19 +245,19 @@ Three things follow, and all three were missing before #72:
 - **Presets regenerate when the table changes.** The module watches `tableVersion` on the
   status stream and on every poll; when it moves it re-reads the table and re-publishes
   definitions. No restart.
-- **A placed button is a one-time copy in Companion 5.0.x.** It keeps the preset id it was
+- **A placed button from this API 1.14 module is a copy.** It keeps the preset id it was
   created with, which is why preset ids are keyed on the immutable row id (D-31) and never on
   an index (D-34). A button survives rows being renamed or reordered.
 - **A button bound to a row the server no longer has says so.** The server answers `400` with
   the list of ids that would have worked, and the module logs it:
   `set state "deleted-row" failed: unknown state 'deleted-row' - valid states: available, on-air, ...`
 - **`apiVersion` is declared by the module, not derived from `@companion-module/base`.** The
-  manifest declares `1.14.0`, which this Companion implements. Do not "fix" it to the base
-  package's version - `2.1.3` asks for an API newer than Companion 5.0.3 has, and the module
-  will not load.
-- **There are no panel night/wake buttons.** Tickets #85 and #86 would add them, and #85 is
-  explicitly not to be built without Rocket's yes - the module never addresses the panel
-  directly, so it needs a server relay first.
+  manifest declares `1.14.0`, matching the implementation. The host must support that API.
+  Do not change the declaration to a package version or a newer API without migrating and
+  testing the module implementation.
+- **Panel controls use the Receiver relay.** Sleep, wake, and toggle actions do not address
+  a panel directly. The toggle icon reflects current glass state, not an assumed result of
+  the last press. Night-schedule configuration remains device-local.
 
 ---
 
@@ -305,3 +326,18 @@ holds no clock of its own, so it cannot mark the display as no longer refreshing
 and give the state up at thirty; it reads `intended` off a socket and shows whatever arrived
 last, forever. A `generic-websocket` button on a dead server is calm and confident, which is
 the exact failure mode section 3 exists to prevent. Use it to get going, not to go on air.
+
+
+## Reliability in module 0.7.3
+
+Late requests from a previous connection cannot update the current connection. A delayed
+poll/write response does not replace a status accepted while that request was in flight,
+and table pulls are coordinated. The contact-age variable keeps advancing during an outage,
+not just when a threshold is crossed. The generated Light health preset explicitly handles
+connection loss, no data, and intentional sleep instead of leaving a healthy default visible.
+Existing copied health buttons also stop showing green on lost contact/no data through the
+compatible broadening of `light_not_confirming`; all feedback IDs are preserved.
+
+The current module remains on API 1.14. Companion 5.1's linked presets require module API 2
+or later. Changing the manifest's API string alone does not enable that feature safely; a
+proper module migration and an existing-button migration plan are separate work.

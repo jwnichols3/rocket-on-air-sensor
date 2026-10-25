@@ -1,40 +1,46 @@
-// Bundles the module the way Companion modules actually ship: ONE CommonJS main.js with
-// @companion-module/base inlined, no node_modules alongside it. Verified against the store
-// module that loads on this host - generic-websocket 2.3.1 is exactly that shape, with an
-// empty `dependencies` and a bundled base.
-//
-// Output goes to dist/, which is also the staging root for the sideload .tgz:
-//   dist/companion/manifest.json
-//   dist/main.js
-//   dist/package.json
+// Build the self-contained CommonJS module and stamp the identity into its running code.
 import { build } from 'esbuild'
-import { mkdirSync, copyFileSync, writeFileSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdirSync, copyFileSync, writeFileSync, readFileSync, realpathSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 
-mkdirSync('dist/companion', { recursive: true })
-
+const here = resolve(import.meta.dirname)
+const repo = realpathSync(join(here, '..'))
+const dist = join(here, 'dist')
+const manifest = JSON.parse(readFileSync(join(here, 'companion/manifest.json'), 'utf8'))
+const pkg = JSON.parse(readFileSync(join(here, 'package.json'), 'utf8'))
+if (manifest.version !== pkg.version || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(manifest.version)) {
+  throw new Error('Module manifest and package versions must match a stable MAJOR.MINOR.PATCH version')
+}
+let commit = null
+let dirty = null
+const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+try {
+  // A source archive nested in another repository does not inherit that repository's identity.
+  if (realpathSync(git('rev-parse', '--show-toplevel')) === repo) {
+    commit = git('rev-parse', 'HEAD')
+    dirty = git('status', '--porcelain').length > 0
+  }
+} catch { /* Archives have no commit provenance. */ }
+const info = { version: manifest.version, commit, dirty, builtAt: new Date().toISOString() }
+mkdirSync(join(dist, 'companion'), { recursive: true })
 await build({
+  absWorkingDir: here,
   entryPoints: ['src/index.js'],
   bundle: true,
   platform: 'node',
   target: 'node22',
   format: 'cjs',
-  outfile: 'dist/main.js',
-  // The host talks to the module over an IPC channel it owns; these are its, not ours.
+  outfile: join(dist, 'main.js'),
+  define: { __ONAIR_MODULE_BUILD__: JSON.stringify(info) },
   external: ['electron'],
   logLevel: 'info',
 })
-
-copyFileSync('companion/manifest.json', 'dist/companion/manifest.json')
-
-// The sideloaded package.json carries no dependencies, because everything is in the bundle.
-// `type` must be commonjs to match the bundle format, or node refuses the entrypoint.
-const manifest = JSON.parse(readFileSync('companion/manifest.json', 'utf8'))
-writeFileSync(
-  'dist/package.json',
-  JSON.stringify(
-    { name: 'companion-module-' + manifest.id, version: manifest.version, type: 'commonjs', main: 'main.js' },
-    null,
-    2,
-  ) + '\n',
-)
-console.log('bundled -> dist/')
+copyFileSync(join(here, 'companion/manifest.json'), join(dist, 'companion/manifest.json'))
+writeFileSync(join(dist, 'package.json'), JSON.stringify({
+  name: 'companion-module-' + manifest.id, version: manifest.version, type: 'commonjs', main: 'main.js',
+}, null, 2) + '\n')
+const bundleSha256 = createHash('sha256').update(readFileSync(join(dist, 'main.js'))).digest('hex')
+writeFileSync(join(dist, 'build-info.json'), JSON.stringify({ ...info, bundleSha256 }, null, 2) + '\n')
+console.log(`bundled module ${info.version}, commit ${commit ?? 'unknown'}${dirty ? ' (modified)' : ''} -> dist/`)

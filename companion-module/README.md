@@ -16,7 +16,7 @@ Setup and packaging: `docs/companion-setup.md`. This file is the developer view.
 ```sh
 npm run build   --workspace companion-module   # bundle to dist/
 npm run package --workspace companion-module   # build, then pkg/rocket-onair-<v>.tgz
-npm run test    --workspace companion-module   # 49 tests, no Companion needed
+npm run test    --workspace companion-module   # source tests, no Companion needed
 npm run icons   --workspace companion-module   # redraw src/icons.js from tools/icons/icons.mjs
 ```
 
@@ -24,6 +24,7 @@ npm run icons   --workspace companion-module   # redraw src/icons.js from tools/
 
 ```
 src/index.js            the module
+src/build-info.js       build-injected module identity; unbuilt source reports no release identity
 src/icons.js            GENERATED button art, base64 PNG (npm run icons)
 tools/icons/            the art: a rasteriser, the shapes, and the generator
 companion/manifest.json what Companion reads to load it
@@ -48,8 +49,11 @@ Two transports feed **one** ingest path:
 - `GET /events` (SSE, parsed by hand so the fetch can carry an `Authorization` header, which
   `EventSource` cannot) is the **speed** path.
 
-`ingest()` is the only writer of `current` and `lastContactAt`, so the two transports cannot
-disagree about which of them is authoritative.
+`ingest()` is the shared publication path. Connection generations fence late responses after
+reconfiguration or teardown. HTTP observations are discarded when another accepted status
+arrives while their request is in flight. Table refreshes are coordinated so an older pull
+cannot replace a newer one. This is conservative client-side ordering; it does not invent a
+server-wide revision or treat a write timestamp as the age of every confirmation update.
 
 ## The buttons (#92)
 
@@ -77,9 +81,9 @@ button. The table is the owner's and they can add rows.
 
 **`apiVersion` is declared, not derived.** `runtime.apiVersion` in the manifest is the
 module author's claim about which host API it wants. It has nothing to do with the version of
-`@companion-module/base` you depend on - that package ships no such field. Companion 5.0.3
-implements `1.14.0`, `2.1.0` and a `2.1.2` nightly; the manifest declares **1.14.0**. A
-manifest declaring `2.1.3` asks for an API newer than the host has and will not load.
+`@companion-module/base` you depend on. The manifest declares **1.14.0**, and the module
+uses that contract. A host must support the declared API. Raising the string alone does
+not migrate the implementation or make API 2 linked presets safe.
 
 **macOS `tar` breaks the sideload.** It writes AppleDouble `._*` entries, the first being
 `._.` - one path component. Companion extracts with `strip: 1` and no ignore filter, so that
@@ -153,3 +157,27 @@ construction and then builds an IpcWrapper that wants a live Companion.
 The timing-sensitive tests set the thresholds they depend on rather than waiting out the
 defaults - every threshold in this module is configuration, which is what makes that honest
 rather than a dodge.
+
+
+## Build identity and module releases
+
+The module has its own version, independent of the Receiver/SwiftBar product version.
+Use `npm run version:set --workspace companion-module -- patch` (or an explicit stable
+version) to synchronize `package.json`, `companion/manifest.json`, and the workspace lock
+entry. The root `npm run version:check` checks all three.
+
+`build.mjs` embeds `MODULE_BUILD_INFO` into the running bundle and writes
+`dist/build-info.json` with the same version, commit, dirty flag, build time, and a SHA-256
+of `main.js`. `package.mjs` checks version agreement and that hash before archiving.
+`module_version` and `module_commit` are live instance variables: a modified checkout is
+marked, and unbuilt source/unknown provenance is not presented as a release commit.
+
+After importing a new package, explicitly select that module version on the connection.
+Verify the new live identity variables before exercising controls. A copy of a preset already
+placed on a page does not acquire new feedbacks merely because a module was updated. In
+particular, old **Light health** copies now show their existing navy NO ACK presentation
+when Receiver contact is lost or there is no data: the unchanged `light_not_confirming` ID
+now includes those conditions. Re-create a copy from the 0.7.3 preset to gain the more precise
+NOT REFRESHING, NO DATA, and ASLEEP presentations. Healthy sleep is not a fault. Preserve
+customized controls deliberately.
+See [module release and deployment instructions](../docs/releases.md#companion-module-releases).

@@ -1123,7 +1123,8 @@ test('button captions carry real line breaks, not a literal backslash-n', async 
 	const captions = [
 		seen.presets.refresh.style.text,
 		seen.presets.light.style.text,
-		...seen.presets.light.feedbacks.map((f) => f.style.text),
+		// The no-data label belongs to the owner's table, including its line breaks.
+		...seen.presets.light.feedbacks.filter((f) => f.feedbackId !== 'no_data').map((f) => f.style.text),
 	]
 	for (const c of captions) {
 		assert.equal(/\\n/.test(c), false, `literal backslash-n in ${JSON.stringify(c)}`)
@@ -1562,4 +1563,224 @@ test('#93 the asleep feedback actually flips when the server says the panel is d
 
 	await inst.destroy()
 	await fake.close()
+})
+
+// Controlled fetch responses exercise lifecycle and transport ordering without live devices.
+const statusPayload = (state = 'available', extra = {}) => ({
+	state, busy: state !== 'available', confirmed: state, source: 'human:test',
+	updatedAt: '2026-01-01T00:00:00.000Z', tableVersion: 1, ...extra,
+})
+const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
+async function controlled(t) {
+	const OnAir = await loadInstanceClass()
+	const h = makeInstance(OnAir, 1, 'test-pass')
+	h.inst.startPolling = () => {}
+	h.inst.connectStream = () => {}
+	t.mock.method(globalThis, 'fetch', async (url) => Response.json(String(url).endsWith('/config/states')
+		? { version: 1, states: SEED } : statusPayload()))
+	await h.inst.init(h.config)
+	t.after(() => h.inst.destroy())
+	return h
+}
+
+test('an old poll body and its finally cannot repopulate or unlock a changed connection', async (t) => {
+	const { inst, config } = await controlled(t)
+	const oldBody = deferred(), newPoll = deferred()
+	let oldSignal
+	t.mock.method(globalThis, 'fetch', async (url, options) => {
+		if (String(url).endsWith('/config/states')) return Response.json({ version: 1, states: SEED })
+		if (String(url).includes('127.0.0.1')) { oldSignal = options.signal; return { ok: true, status: 200, json: () => oldBody.promise } }
+		return newPoll.promise
+	})
+	const pending = inst.poll()
+	await settle(0)
+	const changed = inst.configUpdated({ ...config, host: 'new.invalid' })
+	await settle(0)
+	assert.equal(inst.current, null)
+	oldBody.resolve(statusPayload('on-air', { source: 'old-server' }))
+	await pending
+	assert.equal(inst.current, null, 'late body from the old host must not become new-host contact')
+	assert.equal(inst.polling, true, 'old finally must not unlock the new generation poll')
+	assert(oldSignal.aborted, 'old request is cancelled as well as fenced')
+	newPoll.resolve(Response.json(statusPayload('available', { source: 'new-server' })))
+	await changed
+	assert.equal(inst.current.source, 'new-server')
+})
+
+test('a delayed poll cannot overwrite newer SSE, while a later equal-timestamp poll can update confirmation', async (t) => {
+	const { inst } = await controlled(t)
+	const response = deferred()
+	t.mock.method(globalThis, 'fetch', () => response.promise)
+	const pending = inst.poll()
+	inst.handleEvent('data: ' + JSON.stringify(statusPayload('on-air')))
+	response.resolve(Response.json(statusPayload('available')))
+	await pending
+	assert.equal(inst.current.state, 'on-air')
+	t.mock.method(globalThis, 'fetch', async () => Response.json(statusPayload('on-air', { confirmed: 'unknown', confirmedReason: 'asleep' })))
+	await inst.poll()
+	assert.equal(inst.current.confirmedReason, 'asleep', 'same write timestamp may contain fresh confirmation')
+})
+
+test('a delayed write response cannot overwrite a newer observation', async (t) => {
+	const { inst } = await controlled(t)
+	const response = deferred()
+	t.mock.method(globalThis, 'fetch', () => response.promise)
+	const pending = inst.setState('available')
+	inst.handleEvent('data: ' + JSON.stringify(statusPayload('on-air')))
+	response.resolve(Response.json(statusPayload('available')))
+	await pending
+	assert.equal(inst.current.state, 'on-air')
+})
+
+test('table refreshes are single-flight and a later poll can refresh a changed version', async (t) => {
+	const { inst } = await controlled(t)
+	const response = deferred(); let calls = 0
+	t.mock.method(globalThis, 'fetch', () => { calls++; return response.promise })
+	const a = inst.refreshTable(), b = inst.refreshTable()
+	assert.equal(calls, 1, 'overlapping refresh callers share one request')
+	response.resolve(Response.json({ version: 2, states: SEED }))
+	await Promise.all([a, b])
+	assert.equal(inst.tableVersion, 2)
+	t.mock.method(globalThis, 'fetch', async () => Response.json({ version: 3, states: SEED }))
+	inst.ingest(statusPayload('available', { tableVersion: 3 }))
+	await settle(0)
+	assert.equal(inst.tableVersion, 3)
+})
+
+test('old table completion and errors cannot restore old definitions or faults after reconfiguration', async (t) => {
+	const { inst, seen, config } = await controlled(t)
+	const old = deferred()
+	t.mock.method(globalThis, 'fetch', (url) => String(url).includes('127.0.0.1') ? old.promise : Promise.reject(new Error('new host unavailable')))
+	const pending = inst.refreshTable()
+	await inst.configUpdated({ ...config, host: 'new.invalid' })
+	assert.deepEqual(inst.states, [], 'old table must not survive a failed new-host pull')
+	assert.equal(seen.presets.state_available, undefined)
+	old.resolve(Response.json({ version: 99, states: SEED }))
+	await pending
+	assert.deepEqual(inst.states, [])
+	assert.notEqual(inst.tableVersion, 99)
+})
+
+test('destroy fences a pending write body and table response', async (t) => {
+	const { inst, seen } = await controlled(t)
+	const body = deferred(), table = deferred()
+	t.mock.method(globalThis, 'fetch', async (url) => String(url).endsWith('/config/states')
+		? table.promise : { status: 200, ok: true, json: () => body.promise })
+	const write = inst.setState('on-air'), refresh = inst.refreshTable()
+	await settle(0)
+	await inst.destroy()
+	const prior = { ...seen.variables }
+	body.resolve(statusPayload('on-air'))
+	table.resolve(Response.json({ version: 9, states: SEED }))
+	await Promise.all([write, refresh])
+	assert.deepEqual(seen.variables, prior)
+	assert.notEqual(inst.tableVersion, 9)
+})
+
+test('Light health explicitly renders no data, lost contact, and asleep', async (t) => {
+	const { inst } = await controlled(t)
+	const preset = inst.buildPresets().light, defs = inst.buildFeedbacks()
+	const text = () => preset.feedbacks.reduce((style, f) => defs[f.feedbackId].callback(f) ? { ...style, ...f.style } : style, preset.style).text
+	inst.lastContactAt = 0
+	assert.match(text(), /NO.DATA/)
+	inst.lastContactAt = Date.now() - 61000
+	assert.match(text(), /NOT\sREFRESHING/)
+	inst.ingest(statusPayload('available', { confirmed: 'unknown', confirmedReason: 'asleep' }))
+	assert.match(text(), /ASLEEP/)
+})
+
+test('contact age ticks without a connection-state change or unnecessary feedback redraw', async (t) => {
+	const { inst, seen } = await controlled(t)
+	inst.lastConnection = 'ok'
+	inst.lastContactAt = Date.now() - 10000
+	const repaints = seen.repaints.length
+	inst.tick()
+	assert.equal(seen.variables.seconds_since_contact, 10)
+	assert.equal(seen.repaints.length, repaints)
+})
+
+test('malformed status and table payloads do not refresh confidence', async (t) => {
+	const { inst } = await controlled(t)
+	const prior = inst.current, contact = inst.lastContactAt
+	for (const payload of [{ state: null }, { state: 'available' }, { state: 'available', busy: 'false' }]) {
+		assert.equal(inst.ingest(payload), false)
+		assert.equal(inst.current, prior)
+		assert.equal(inst.lastContactAt, contact)
+	}
+	t.mock.method(globalThis, 'fetch', async () => Response.json({ version: 2, states: [{ id: 'available', busy: false }] }))
+	assert.equal(await inst.refreshTable(), false)
+	assert.equal(inst.tableVersion, 1)
+	assert.equal(inst.states.length, SEED.length)
+	t.mock.method(globalThis, 'fetch', async () => Response.json({ version: 2, states: SEED.map((row) => ({ ...row, color: [row.color] })) }))
+	assert.equal(await inst.refreshTable(), false, 'colour arrays must not pass via implicit string coercion')
+	assert.equal(inst.tableVersion, 1)
+})
+
+test('an uncontested poll accepts a lower write timestamp after a server clock correction', async (t) => {
+	const { inst } = await controlled(t)
+	inst.ingest(statusPayload('on-air', { updatedAt: '2026-02-01T00:00:00.000Z' }))
+	t.mock.method(globalThis, 'fetch', async () => Response.json(statusPayload('available')))
+	assert.equal(await inst.poll(), true)
+	assert.equal(inst.current.state, 'available')
+})
+
+test('an old stream cannot publish a late body or schedule retries after reconfiguration', async (t) => {
+	const { inst, config } = await controlled(t)
+	const OnAir = await loadInstanceClass()
+	let streamController, retries = 0
+	inst.scheduleRetry = () => { retries++ }
+	const stream = new ReadableStream({ start(controller) { streamController = controller } })
+	t.mock.method(globalThis, 'fetch', async (url) => String(url).endsWith('/events')
+		? new Response(stream) : Response.json(String(url).endsWith('/config/states') ? { version: 1, states: SEED } : statusPayload()))
+	OnAir.prototype.connectStream.call(inst)
+	await settle(0)
+	await inst.configUpdated({ ...config, host: 'new.invalid' })
+	streamController.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(statusPayload('on-air')) + '\n\n'))
+	await settle(0)
+	assert.equal(inst.current.state, 'available')
+	assert.equal(retries, 0)
+})
+
+test('an old stream 401 cannot mark the new connection as unauthenticated', async (t) => {
+	const { inst, config } = await controlled(t)
+	const OnAir = await loadInstanceClass(), response = deferred()
+	let retries = 0
+	inst.scheduleRetry = () => { retries++ }
+	t.mock.method(globalThis, 'fetch', (url) => String(url).endsWith('/events') ? response.promise
+		: Promise.resolve(Response.json(String(url).endsWith('/config/states') ? { version: 1, states: SEED } : statusPayload())))
+	OnAir.prototype.connectStream.call(inst)
+	await inst.configUpdated({ ...config, host: 'new.invalid' })
+	response.resolve(new Response(null, { status: 401 }))
+	await settle(0)
+	assert.equal(inst.fault, null)
+	assert.equal(retries, 0)
+})
+
+test('overlapping config updates cannot restart transports for the superseded host', async (t) => {
+	const { inst, config } = await controlled(t)
+	const oldTable = deferred(); let starts = 0
+	inst.startPolling = () => { starts++ }
+	t.mock.method(globalThis, 'fetch', (url) => String(url).includes('slow.invalid') ? oldTable.promise
+		: Promise.resolve(Response.json(String(url).endsWith('/config/states') ? { version: 1, states: SEED } : statusPayload())))
+	const old = inst.configUpdated({ ...config, host: 'slow.invalid' })
+	await inst.configUpdated({ ...config, host: 'current.invalid' })
+	oldTable.resolve(Response.json({ version: 8, states: SEED }))
+	await old
+	assert.equal(starts, 1)
+	assert.equal(inst.config.host, 'current.invalid')
+	assert.equal(inst.tableVersion, 1)
+})
+
+test('existing copied Light health presets cannot remain green without Receiver contact', async (t) => {
+	const { inst } = await controlled(t)
+	const defs = inst.buildFeedbacks()
+	// The old placed preset only had these two feedbacks; it must improve without a re-drag.
+	const oldText = () => defs.light_not_confirming.callback() ? 'LIGHT\nNO ACK'
+		: defs.light_disagrees.callback() ? 'LIGHT\nDISAGREES' : 'LIGHT\nOK'
+	inst.lastContactAt = 0
+	assert.equal(oldText(), 'LIGHT\nNO ACK')
+	inst.lastContactAt = Date.now() - 61000
+	assert.equal(oldText(), 'LIGHT\nNO ACK')
+	inst.ingest(statusPayload('available', { confirmed: 'unknown', confirmedReason: 'asleep' }))
+	assert.equal(defs.light_not_confirming.callback(), false, 'healthy sleep must never alarm')
 })

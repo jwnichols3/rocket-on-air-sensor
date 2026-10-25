@@ -15,6 +15,7 @@
 // Both were measured, not guessed. Doing this by hand is how they come back.
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, cpSync, rmSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -28,6 +29,15 @@ if (!existsSync(join(dist, 'main.js')) || !existsSync(join(dist, 'companion', 'm
 }
 
 const manifest = JSON.parse(readFileSync(join(dist, 'companion', 'manifest.json'), 'utf8'))
+const info = JSON.parse(readFileSync(join(dist, 'build-info.json'), 'utf8'))
+const sourceManifest = JSON.parse(readFileSync(join(here, 'companion/manifest.json'), 'utf8'))
+const sourcePackage = JSON.parse(readFileSync(join(here, 'package.json'), 'utf8'))
+const builtPackage = JSON.parse(readFileSync(join(dist, 'package.json'), 'utf8'))
+if ([info.version, sourceManifest.version, sourcePackage.version, builtPackage.version].some((v) => v !== manifest.version)) {
+	throw new Error('Module version drift: rebuild before packaging')
+}
+const actualHash = createHash('sha256').update(readFileSync(join(dist, 'main.js'))).digest('hex')
+if (info.bundleSha256 !== actualHash) throw new Error('Module bundle hash differs from its build identity; rebuild before packaging')
 const name = manifest.id
 const out = join(here, 'pkg', `${name}-${manifest.version}.tgz`)
 
@@ -59,8 +69,8 @@ if (firstDir !== `${name}/`) {
 	console.error(`the first directory entry must be "${name}/", got ${firstDir ?? '(none)'}`)
 	process.exit(1)
 }
-if (!listing.includes(`${name}/companion/manifest.json`)) {
-	console.error('the manifest is not where Companion looks for it')
+if (!listing.includes(`${name}/companion/manifest.json`) || !listing.includes(`${name}/build-info.json`)) {
+	console.error('the manifest or build identity is missing from the archive')
 	process.exit(1)
 }
 
