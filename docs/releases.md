@@ -85,3 +85,30 @@ A release is deployed only after all of these are observed:
 Keep rollback artifacts until verification completes. Firmware changes additionally require
 [the firmware release checks](../firmware/README.md), including real device Build-marker
 verification after the OTA rollback window. Compilation alone is not a firmware deployment.
+
+
+## Companion module releases
+
+Companion is versioned separately from the On Air product. Use:
+
+```sh
+npm run version:set --workspace companion-module -- patch
+npm run version:check
+npm run verify
+npm run package --workspace companion-module
+```
+
+The module command synchronizes its package manifest, Companion manifest, and lockfile
+record without changing Receiver, console, or SwiftBar versions. Commit the tested changes
+and publish a module tag such as `companion-v0.7.3`. Build the final tarball from that clean
+commit, then attach `companion-module/pkg/rocket-onair-0.7.3.tgz` to its GitHub release.
+The tarball carries `build-info.json`, including source identity and the bundle SHA-256.
+
+Import the package in Companion, then explicitly select the imported version on the target
+connection. Check the running `module_version` and `module_commit` variables against the
+release, not just the installed-version list. Verify the existing action bindings, state
+feedback, and connection health before declaring deployment complete. Re-create copied
+presets only where the new release changes their feedback/style definitions; do not overwrite
+customized deck controls indiscriminately. Keep the previous module installed for rollback.
+
+A module release does not imply a Receiver deployment, a firmware flash, or an API 2 migration.

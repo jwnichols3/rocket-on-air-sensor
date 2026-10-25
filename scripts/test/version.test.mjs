@@ -13,6 +13,7 @@ async function fixture(t) {
     'server/package.json': { name: 'server', version: '0.2.0' },
     'admin-ui/package.json': { name: 'admin', version: '0.2.0' },
     'companion-module/package.json': { name: 'companion', version: '0.7.2' },
+    'companion-module/companion/manifest.json': { id: 'companion', version: '0.7.2' },
     'package-lock.json': { version: '0.2.0', packages: {
       '': { version: '0.2.0' }, server: { version: '0.2.0' }, 'admin-ui': { version: '0.2.0' },
       'companion-module': { version: '0.7.2' }, 'node_modules/example': { version: '9.0.0' },
@@ -83,4 +84,24 @@ test('a missing lock workspace record is refused rather than fabricated', async 
   await writeFile(join(root, 'package-lock.json'), JSON.stringify(lock));
   await assert.rejects(setVersion(root, 'patch'), /missing packages/);
   assert.equal((await json(root, 'package.json')).version, '0.2.0');
+});
+
+
+test('Companion manifest drift is rejected independently of product version', async (t) => {
+  const root = await fixture(t);
+  await writeFile(join(root, 'companion-module/companion/manifest.json'), JSON.stringify({ version: '0.6.0' }));
+  await assert.rejects(checkVersions(root), /companion.*manifest/);
+});
+
+test('a module-only bump keeps product and SwiftBar unchanged and synchronizes all module version records', async (t) => {
+  const root = await fixture(t);
+  const { setModuleVersion } = await import('../version.mjs');
+  const plugin = await readFile(join(root, 'deploy/swiftbar/onair.5s.sh'), 'utf8');
+  assert.equal(await setModuleVersion(root, 'patch'), '0.7.3');
+  assert.equal((await json(root, 'companion-module/package.json')).version, '0.7.3');
+  assert.equal((await json(root, 'companion-module/companion/manifest.json')).version, '0.7.3');
+  assert.equal((await json(root, 'package-lock.json')).packages['companion-module'].version, '0.7.3');
+  assert.equal(await checkVersions(root), '0.2.0');
+  assert.equal(await readFile(join(root, 'deploy/swiftbar/onair.5s.sh'), 'utf8'), plugin);
+  await assert.rejects(setModuleVersion(root, '0.7.2'), /backwards/);
 });

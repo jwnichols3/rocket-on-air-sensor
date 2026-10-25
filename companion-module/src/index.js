@@ -33,6 +33,7 @@ import {
 } from '@companion-module/base'
 
 import { ICONS } from './icons.js'
+import { MODULE_BUILD_INFO } from './build-info.js'
 
 /// The reserved row (contract section 1). It always exists in a real table and its `busy` is
 /// always true; this is what the module falls back to before the first table pull, which is
@@ -111,61 +112,80 @@ function num(raw, fallback, min = 0) {
 	return Math.max(min, n)
 }
 
+const STATE_ID = /^[a-z0-9][a-z0-9-]{0,31}$/
+function validStatus(payload) {
+	return payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+		&& typeof payload.state === 'string' && STATE_ID.test(payload.state)
+		&& typeof payload.busy === 'boolean'
+}
+function validTable(payload) {
+	if (!payload || !Number.isSafeInteger(payload.version) || payload.version < 1 || !Array.isArray(payload.states)) return false
+	const ids = new Set()
+	for (const row of payload.states) {
+		if (!row || typeof row.id !== 'string' || !STATE_ID.test(row.id) || ids.has(row.id)
+			|| typeof row.label !== 'string' || row.label.length === 0 || typeof row.busy !== 'boolean'
+			|| typeof row.color !== 'string' || typeof row.bgcolor !== 'string'
+			|| !/^#[0-9a-f]{6}$/i.test(row.color) || !/^#[0-9a-f]{6}$/i.test(row.bgcolor)) return false
+		ids.add(row.id)
+	}
+	return payload.states.some((row) => row.id === RESERVED_ID && row.busy === true)
+}
+
 class OnAirInstance extends InstanceBase {
 	async init(config) {
+		this.requests = new Set()
+		this.generation = 0
+		this.resetConnection(config)
+		this.livenessTimer = setInterval(() => this.tick(), 1000)
+		this.livenessTimer.unref?.()
+		await this.startConnection(this.generation)
+	}
+
+	isCurrent(generation) {
+		return !this.stopping && generation === this.generation
+	}
+
+	cancelRequests() {
+		this.generation++
+		for (const request of this.requests) request.controller.abort()
+		this.requests.clear()
+		if (this.abort) this.abort.abort()
+		if (this.retryTimer) clearTimeout(this.retryTimer)
+		if (this.pollTimer) clearInterval(this.pollTimer)
+		this.pollRequest = null
+		this.tableRequest = null
+		this.tablePromise = null
+		this.polling = false
+	}
+
+	resetConnection(config) {
+		this.cancelRequests()
 		this.config = config ?? {}
+		this.stopping = false
 		this.states = []
 		this.tableVersion = null
 		this.current = null
-		// When the server last answered - on EITHER path. Every threshold is measured from
-		// here; see view().
+		this.observationRevision = 0
 		this.lastContactAt = 0
-		// When the stream last delivered a parseable payload, which is what the watchdog
-		// judges. Separate from lastContactAt because a healthy poll must not keep a dead
-		// stream alive: the whole point of the watchdog is to notice a socket that is open
-		// and silent.
 		this.lastStreamAt = 0
 		this.streamOpen = false
-		// The last connection verdict published, so the liveness timer only redraws on a
-		// transition rather than once a second forever.
 		this.lastConnection = 'no data'
-		// A sticky fault that outranks the connection-derived status: a bad config or a
-		// rejected passphrase is not something the thresholds can describe.
 		this.fault = null
 		this.lastStatusKey = null
-		this.abort = null
-		this.retryTimer = null
-		this.livenessTimer = null
-		this.pollTimer = null
-		// One poll at a time. The timeout is several intervals long, so without this two polls
-		// can be in flight at once and the SECOND can answer first - leaving the first to
-		// overwrite fresh state with stale state and bump lastContactAt while doing it. On a
-		// system whose cardinal sin is a false OFF, that is not a race worth leaving open.
-		this.polling = false
-		this.stopping = false
-
 		this.setActionDefinitions(this.buildActions())
 		this.defineFeedbacks()
 		this.setVariableDefinitions(this.buildVariables())
+		this.setPresetDefinitions(this.buildPresets())
+		this.publishStatus()
+		this.publishVariables()
+		this.checkAll()
+	}
 
-		// CROSSING A THRESHOLD IS A CHANGE WITH NOTHING ARRIVING TO ANNOUNCE IT. Every other
-		// redraw in this module is triggered by a payload; this one cannot be, because the
-		// whole point is that payloads have stopped. Without it a dead server leaves every
-		// button frozen on its last confident reading forever.
-		//
-		// It also runs the stream watchdog, for the same reason: nothing arrives to say that
-		// nothing is arriving.
-		this.livenessTimer = setInterval(() => this.tick(), 1000)
-		this.livenessTimer.unref?.()
-
+	async startConnection(generation) {
 		await this.refreshTable()
-		// COLD READ. Before #72 the module had no state at all until the first stream event,
-		// so a Stream Deck came up blank against a perfectly healthy server whose state had
-		// not changed recently. The poll answers on startup, not on the next change.
+		if (!this.isCurrent(generation)) return
 		await this.poll()
-		// A SERVER THAT NEVER ANSWERED still owes the operator a connection light. Nothing
-		// below this line will publish one on its own: the liveness timer only speaks on a
-		// TRANSITION, and 'no data' is where lastConnection starts.
+		if (!this.isCurrent(generation)) return
 		this.publishStatus()
 		this.startPolling()
 		this.connectStream()
@@ -173,40 +193,31 @@ class OnAirInstance extends InstanceBase {
 
 	async destroy() {
 		this.stopping = true
-		if (this.retryTimer) clearTimeout(this.retryTimer)
+		this.cancelRequests()
 		if (this.livenessTimer) clearInterval(this.livenessTimer)
-		if (this.pollTimer) clearInterval(this.pollTimer)
-		if (this.abort) this.abort.abort()
 	}
 
 	async configUpdated(config) {
-		this.config = config ?? {}
-		if (this.abort) this.abort.abort()
-		if (this.retryTimer) clearTimeout(this.retryTimer)
-		if (this.pollTimer) clearInterval(this.pollTimer)
+		if (this.stopping) return
+		this.resetConnection(config)
+		await this.startConnection(this.generation)
+	}
 
-		// FORGET THE PREVIOUS SERVER. `host` may have just changed, and carrying the old box's
-		// state across would present one server's answer as though the new one had given it -
-		// with `lastContactAt` recent, so every threshold reads healthy against a machine this
-		// instance has never reached. Dropping to 'no data' is the fail-CLOSED direction.
-		this.current = null
-		this.lastContactAt = 0
-		this.lastStreamAt = 0
-		this.streamOpen = false
-		this.lastConnection = 'no data'
-		this.fault = null
-		// Cleared too, or publishStatus() suppresses the first status after the change as a
-		// duplicate and a fault message from the OLD config sticks on the connection light
-		// forever.
-		this.lastStatusKey = null
+	beginRequest(timeout) {
+		const controller = new AbortController()
+		const request = { controller, generation: this.generation, observation: this.observationRevision,
+			base: this.base(), headers: this.headers(),
+			signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)]) }
+		this.requests.add(request)
+		return request
+	}
 
-		await this.refreshTable()
-		await this.poll()
-		this.publishStatus()
-		this.publishVariables()
-		this.checkAll()
-		this.startPolling()
-		this.connectStream()
+	// HTTP carries a snapshot from somewhere during its request. If a newer observation
+	// arrived while it was in flight, discard that ambiguous snapshot. The next poll is
+	// the fallback; this does not pretend that updatedAt sequences confirmation changes.
+	ingestResponse(payload, request) {
+		if (!this.isCurrent(request.generation) || request.observation !== this.observationRevision) return false
+		return this.ingest(payload)
 	}
 
 	getConfigFields() {
@@ -332,10 +343,12 @@ class OnAirInstance extends InstanceBase {
 
 		const before = this.lastConnection
 		const now = this.view().connection
+		// Age changes even while the connection verdict stays the same. No feedback redraw
+		// is needed for the timer, but variables used in button text must keep advancing.
+		this.publishVariables()
 		if (now === before) return
 		this.lastConnection = now
 		this.publishStatus()
-		this.publishVariables()
 		this.checkAll()
 	}
 
@@ -357,27 +370,26 @@ class OnAirInstance extends InstanceBase {
 	 */
 	async poll() {
 		if (this.stopping || this.polling || !this.config.passphrase) return false
+		const request = this.beginRequest(Math.max(1000, num(this.config.poll_ms, 1000, 250) * 5))
+		this.pollRequest = request
 		this.polling = true
 		try {
-			const res = await fetch(`${this.base()}/status`, {
-				headers: this.headers(),
-				signal: AbortSignal.timeout(Math.max(1000, num(this.config.poll_ms, 1000, 250) * 5)),
-			})
+			const res = await fetch(`${request.base}/status`, { headers: request.headers, signal: request.signal })
+			if (!this.isCurrent(request.generation)) return false
 			if (res.status === 401) {
 				this.setFault(InstanceStatus.AuthenticationFailure, 'passphrase rejected')
 				return false
 			}
 			if (!res.ok) return false
-			const body = await res.json()
-			// Re-checked AFTER the await: destroy() can land while this is in flight, and
-			// publishing to a torn-down instance is a call into a host that has gone.
-			if (this.stopping) return false
-			this.ingest(body)
-			return true
+			return this.ingestResponse(await res.json(), request)
 		} catch {
 			return false
 		} finally {
-			this.polling = false
+			this.requests.delete(request)
+			if (this.pollRequest === request) {
+				this.pollRequest = null
+				this.polling = false
+			}
 		}
 	}
 
@@ -387,9 +399,10 @@ class OnAirInstance extends InstanceBase {
 	 * this shape prevents.
 	 */
 	ingest(payload) {
-		if (!payload || typeof payload !== 'object' || payload.state === undefined) return false
+		if (!validStatus(payload)) return false
 
 		this.current = payload
+		this.observationRevision++
 		// CONTACT. Only a parseable status payload counts: an unparseable one is not the
 		// server talking to us, and counting it would let a server emitting garbage hold
 		// every button confident forever - the fail-OPEN direction.
@@ -577,16 +590,30 @@ class OnAirInstance extends InstanceBase {
 
 	// ---- the state table, which is where presets come from ------------------------------
 
-	async refreshTable() {
+	refreshTable() {
+		if (this.stopping) return Promise.resolve(false)
+		if (this.tablePromise) return this.tablePromise
 		if (!this.config.passphrase) {
 			this.setFault(InstanceStatus.BadConfig, 'passphrase required')
-			return false
+			return Promise.resolve(false)
 		}
+		const request = this.beginRequest(5000)
+		this.tableRequest = request
+		const operation = this.fetchTable(request)
+		this.tablePromise = operation.finally(() => {
+			this.requests.delete(request)
+			if (this.tableRequest === request) {
+				this.tableRequest = null
+				this.tablePromise = null
+			}
+		})
+		return this.tablePromise
+	}
+
+	async fetchTable(request) {
 		try {
-			const res = await fetch(`${this.base()}/config/states`, {
-				headers: this.headers(),
-				signal: AbortSignal.timeout(5000),
-			})
+			const res = await fetch(`${request.base}/config/states`, { headers: request.headers, signal: request.signal })
+			if (!this.isCurrent(request.generation)) return false
 			if (res.status === 401) {
 				this.setFault(InstanceStatus.AuthenticationFailure, 'passphrase rejected')
 				return false
@@ -596,13 +623,15 @@ class OnAirInstance extends InstanceBase {
 				return false
 			}
 			const body = await res.json()
-			this.states = Array.isArray(body.states) ? body.states : []
-			this.tableVersion = body.version ?? null
+			if (!this.isCurrent(request.generation)) return false
+			if (!validTable(body)) {
+				this.log('error', 'state table: invalid response')
+				return false
+			}
+			this.states = body.states
+			this.tableVersion = body.version
 			this.clearFault()
 			this.log('info', `state table v${this.tableVersion}, ${this.states.length} rows`)
-
-			// Definitions are repeatedly callable and diff-patched to the UI, so regenerating
-			// costs nothing and needs no restart.
 			this.setActionDefinitions(this.buildActions())
 			this.defineFeedbacks()
 			this.setVariableDefinitions(this.buildVariables())
@@ -611,7 +640,7 @@ class OnAirInstance extends InstanceBase {
 			this.checkAll()
 			return true
 		} catch (err) {
-			this.log('error', `state table: ${err.message}`)
+			if (this.isCurrent(request.generation)) this.log('error', `state table: ${err.message}`)
 			return false
 		}
 	}
@@ -620,16 +649,15 @@ class OnAirInstance extends InstanceBase {
 
 	connectStream() {
 		if (this.stopping || !this.config.passphrase) return
+		if (this.abort) this.abort.abort()
 		this.abort = new AbortController()
-		const abort = this.abort
-
-		// SSE parsed by hand rather than with EventSource, because fetch can carry the
-		// Authorization header and EventSource cannot. One connection at a time.
+		const abort = this.abort, generation = this.generation
+		const current = () => this.isCurrent(generation) && this.abort === abort && !abort.signal.aborted
 		fetch(`${this.base()}/events`, {
-			headers: { ...this.headers(), Accept: 'text/event-stream' },
-			signal: abort.signal,
+			headers: { ...this.headers(), Accept: 'text/event-stream' }, signal: abort.signal,
 		})
 			.then(async (res) => {
+				if (!current()) { void res.body?.cancel().catch(() => {}); return }
 				if (res.status === 401) {
 					this.setFault(InstanceStatus.AuthenticationFailure, 'passphrase rejected')
 					return this.scheduleRetry(30000)
@@ -638,16 +666,13 @@ class OnAirInstance extends InstanceBase {
 					this.log('error', `GET /events -> ${res.status}`)
 					return this.scheduleRetry()
 				}
-				// OPENING A SOCKET IS NOT CONTACT (D-98). The watchdog clock starts here so a
-				// stream that connects and then says nothing is caught; `lastContactAt` still
-				// moves only on a parseable payload.
 				this.streamOpen = true
 				this.lastStreamAt = Date.now()
-				const reader = res.body.getReader()
-				const decoder = new TextDecoder()
+				const reader = res.body.getReader(), decoder = new TextDecoder()
 				let buffer = ''
 				for (;;) {
 					const { value, done } = await reader.read()
+					if (!current()) { void reader.cancel().catch(() => {}); return }
 					if (done) break
 					buffer += decoder.decode(value, { stream: true })
 					let cut
@@ -656,17 +681,13 @@ class OnAirInstance extends InstanceBase {
 						buffer = buffer.slice(cut + 2)
 					}
 				}
-				if (this.abort === abort) this.streamOpen = false
-				if (!this.stopping) this.scheduleRetry()
+				if (!current()) return
+				this.streamOpen = false
+				this.scheduleRetry()
 			})
 			.catch((err) => {
-				// Only if this is still the live connection: the watchdog replaces the
-				// controller before this rejection lands, and clearing the new stream's flag
-				// from the old stream's failure would make the watchdog fire again at once.
-				if (this.abort === abort) this.streamOpen = false
-				if (this.stopping) return
-				// An AbortError here is either destroy() or the watchdog, and the watchdog has
-				// already scheduled its own reconnect.
+				if (!current()) return
+				this.streamOpen = false
 				if (err.name === 'AbortError') return
 				this.log('error', `stream: ${err.message}`)
 				this.scheduleRetry()
@@ -676,7 +697,10 @@ class OnAirInstance extends InstanceBase {
 	scheduleRetry(ms = 5000) {
 		if (this.stopping) return
 		if (this.retryTimer) clearTimeout(this.retryTimer)
-		this.retryTimer = setTimeout(() => this.connectStream(), ms)
+		const generation = this.generation
+		this.retryTimer = setTimeout(() => {
+			if (this.isCurrent(generation)) this.connectStream()
+		}, ms)
 		this.retryTimer.unref?.()
 	}
 
@@ -720,6 +744,8 @@ class OnAirInstance extends InstanceBase {
 			{ variableId: 'seconds_since_contact', name: 'Seconds since the server last answered' },
 			{ variableId: 'age_seconds', name: 'Seconds since the last write (provenance only)' },
 			{ variableId: 'table_version', name: 'State table version' },
+			{ variableId: 'module_version', name: 'Running module version' },
+			{ variableId: 'module_commit', name: 'Running module source commit' },
 		]
 	}
 
@@ -740,6 +766,8 @@ class OnAirInstance extends InstanceBase {
 			seconds_since_contact: Number.isFinite(v.lostFor) ? Math.floor(v.lostFor / 1000) : '',
 			age_seconds: s?.ageSeconds ?? '',
 			table_version: this.tableVersion ?? '',
+			module_version: MODULE_BUILD_INFO.version,
+			module_commit: (MODULE_BUILD_INFO.commit ?? 'unknown') + (MODULE_BUILD_INFO.dirty ? ' (modified)' : ''),
 		})
 	}
 
@@ -761,8 +789,9 @@ class OnAirInstance extends InstanceBase {
 					},
 				],
 				callback: async (event) => {
+					const generation = this.generation
 					const id = await this.parseVariablesInString(String(event.options.state ?? ''))
-					await this.setState(id)
+					if (this.isCurrent(generation)) await this.setState(id)
 				},
 			},
 			cycle_state: {
@@ -799,8 +828,8 @@ class OnAirInstance extends InstanceBase {
 					'Asks the panel to turn its glass off now, independently of the nightly schedule. ' +
 					'The panel REFUSES while the current row is busy, so this does nothing during a ' +
 					'call - and a call starting while it is asleep lights it. It also clears itself at ' +
-					'the panel\'s scheduled wake time. Watch $(confirmed_reason) or the "Panel asleep ' +
-					'on schedule" feedback for what actually happened.',
+					'the panel\'s scheduled wake time. Watch $(confirmed_reason) or the "Panel asleep" ' +
+					'feedback for what actually happened.',
 				options: [],
 				callback: async () => {
 					await this.panelSleep(true)
@@ -859,14 +888,16 @@ class OnAirInstance extends InstanceBase {
 		// booleans are kept rather than replaced with strings so #91's two actions read the same
 		// as they always did at their call sites.
 		const what = command === 'toggle' ? 'toggle' : command ? 'sleep' : 'wake'
+		if (this.stopping) return
 		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
+		const request = this.beginRequest(timeout)
 		try {
-			const res = await fetch(`${this.base()}/panel/${what}`, {
+			const res = await fetch(`${request.base}/panel/${what}`, {
 				method: 'POST',
-				headers: this.headers(),
-				signal: AbortSignal.timeout(timeout),
+				headers: request.headers,
+				signal: request.signal,
 			})
-			if (this.stopping) return
+			if (!this.isCurrent(request.generation)) return
 			if (res.ok) {
 				let delivered = null
 				let asked = null
@@ -877,6 +908,7 @@ class OnAirInstance extends InstanceBase {
 				} catch {
 					/* a 200 with an unreadable body; the poll will settle it */
 				}
+				if (!this.isCurrent(request.generation)) return
 				if (delivered === false) {
 					this.log('warn', `panel ${what}: the server could not reach the panel. Nothing changed on the glass.`)
 				} else if (what !== 'toggle') {
@@ -909,13 +941,17 @@ class OnAirInstance extends InstanceBase {
 			// 501 is the one worth recognising: an older server, or one wired to a driver that
 			// models no device. Nothing the operator can fix from the deck, but "not supported"
 			// beats a bare number.
+			if (!this.isCurrent(request.generation)) return
 			this.log('error', `panel ${what} failed: ${detail}`)
 		} catch (err) {
+			if (!this.isCurrent(request.generation)) return
 			if (err.name === 'TimeoutError') {
 				this.log('warn', `panel ${what}: no answer within ${timeout} ms. It may still have landed.`)
 				return
 			}
 			this.log('error', `panel ${what} failed: ${err.message}`)
+		} finally {
+			this.requests.delete(request)
 		}
 	}
 
@@ -962,14 +998,16 @@ class OnAirInstance extends InstanceBase {
 	 * `what` is the phrase for the log line, already naming what was attempted.
 	 */
 	async postWrite(path, what) {
+		if (this.stopping) return
 		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
+		const request = this.beginRequest(timeout)
 		try {
-			const res = await fetch(`${this.base()}${path}`, {
+			const res = await fetch(`${request.base}${path}`, {
 				method: 'POST',
-				headers: this.headers(),
-				signal: AbortSignal.timeout(timeout),
+				headers: request.headers,
+				signal: request.signal,
 			})
-			if (this.stopping) return
+			if (!this.isCurrent(request.generation)) return
 			if (res.ok) {
 				// PUBLISH FROM THE RESPONSE (D-121, #74). The server answers a write with the
 				// full GET /status body, AFTER the write and AFTER the light attempt - so it
@@ -977,7 +1015,7 @@ class OnAirInstance extends InstanceBase {
 				// means a press that failed to reach the lamp shows the fault whenever the next
 				// event happens to arrive, instead of immediately.
 				try {
-					this.ingest(await res.json())
+					this.ingestResponse(await res.json(), request)
 				} catch {
 					/* a 200 with an unreadable body; the poll will settle it */
 				}
@@ -1003,8 +1041,10 @@ class OnAirInstance extends InstanceBase {
 			} catch {
 				/* no JSON body; the status alone is what we have */
 			}
+			if (!this.isCurrent(request.generation)) return
 			this.log('error', `${what} failed: ${detail}`)
 		} catch (err) {
+			if (!this.isCurrent(request.generation)) return
 			// A TIMEOUT IS AN UNKNOWN OUTCOME, NOT A FAILURE (D-123, #76). Issue #68 measured
 			// two writes that blocked for 6.4 s and 13.2 s against a powered-off panel and
 			// BOTH SUCCEEDED. Reporting that as a failed write, and dropping the whole
@@ -1019,6 +1059,8 @@ class OnAirInstance extends InstanceBase {
 				return
 			}
 			this.log('error', `${what} failed: ${err.message}`)
+		} finally {
+			this.requests.delete(request)
 		}
 	}
 
@@ -1032,8 +1074,8 @@ class OnAirInstance extends InstanceBase {
 		return {
 			state_is: {
 				type: 'boolean',
-				name: 'State is',
-				description: 'True when the light is showing this state',
+				name: 'Receiver state is',
+				description: 'True when the Receiver reports this state; physical confirmation is separate',
 				defaultStyle: { color: white, bgcolor: combineRgb(193, 18, 31) },
 				options: [
 					{
@@ -1090,19 +1132,21 @@ class OnAirInstance extends InstanceBase {
 				type: 'boolean',
 				name: 'Light not confirming',
 				description:
-					'True when the server has no evidence from the light: `confirmed` reads unknown and the ' +
-					'panel is unreachable, frozen, or unexplained. This is the server admitting ignorance, ' +
-					'not a claim that the light is wrong. It is FALSE while the panel is dark on its night ' +
-					'schedule - that is healthy, and there is a separate feedback for it.',
+					'True when Receiver contact is lost, or the server has no evidence from the light: ' +
+					'the panel is unreachable, frozen, or unexplained. This is an admission of ignorance, ' +
+					'not a claim that the light is wrong. It is FALSE while the panel is deliberately dark ' +
+					'by schedule or manual sleep; that is healthy, with a separate feedback for it.',
 				defaultStyle: { color: white, bgcolor: combineRgb(27, 64, 121) },
 				options: [],
-				callback: () => this.confirmation() === 'unconfirmed',
+				// Also protects existing copied health presets, which have no dedicated
+				// connection-loss/no-data override: a lost Receiver cannot confirm the glass.
+				callback: () => this.view().connection !== 'ok' || this.confirmation() === 'unconfirmed',
 			},
 			panel_asleep: {
 				type: 'boolean',
-				name: 'Panel asleep on schedule',
+				name: 'Panel asleep',
 				description:
-					'True when the panel is deliberately dark on its night schedule. `confirmed` reads ' +
+					'True when the panel is deliberately dark, by schedule or manual sleep. `confirmed` reads ' +
 					'unknown throughout, which is honest - there are no pixels to confirm - but it is NOT ' +
 					'a fault and must not be treated as one.',
 				defaultStyle: { color: combineRgb(120, 120, 130), bgcolor: black },
@@ -1337,6 +1381,19 @@ class OnAirInstance extends InstanceBase {
 							color: combineRgb(0, 0, 0),
 							bgcolor: combineRgb(255, 255, 255),
 						},
+					},
+					{
+						feedbackId: 'panel_asleep', options: {},
+						style: { text: 'LIGHT\nASLEEP', size: '14', color: white, bgcolor: combineRgb(70, 70, 74) },
+					},
+					{
+						feedbackId: 'connection_lost', options: {},
+						style: { text: 'NOT\nREFRESHING', size: '14', color: black, bgcolor: AMBER },
+					},
+					{
+						feedbackId: 'no_data', options: {},
+						style: { text: this.reservedRow().label, size: '14',
+							color: rgb(this.reservedRow().color, white), bgcolor: rgb(this.reservedRow().bgcolor, black) },
 					},
 				],
 			}
