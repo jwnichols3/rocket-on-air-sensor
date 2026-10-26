@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.0
+
+- Added an optional Apple-signed Mac Receiver app with a native supervisor and pinned
+  official Node runtime. JavaScript updates reuse that installed runtime, reducing
+  unintended identity changes from package-manager updates.
+- Added bounded supervised network-consent probes, signature/hash verification,
+  runtime replacement rollback, and explicit legacy-runtime selection.
+- Added `receiverInstanceId` and `statusSequence` to status transports so clients can
+  order observations independently of wall-clock time and identify Receiver restarts.
+- Added a bounded Companion deployment CLI with target validation, private backups,
+  package inspection, explicit activation, identity verification, and rollback.
+
+## Companion module 0.8.0
+
+- Migrated to module API 2.2, including ESM loading, object variables, sections, and linked
+  presets supported by Companion 5.1.1.
+- Preserved existing action/feedback IDs and added an upgrade for legacy interpolated
+  set-state options. Existing copies remain copies until deliberately migrated.
+- Added linked cycle/toggle presets with a configurable cycle ring and a compact diagnostics
+  preset showing Receiver/panel health, module version, and last-command outcome.
+- Consume ordered Receiver observations, reject retired Receiver instances and older state,
+  keep equal-sequence contact alive, and recover failed table pulls without waiting for
+  another state change. Older Receiver protocol support remains available at a fresh boundary.
+- Surface authentication/configuration failures immediately in diagnostics. Expose accepted
+  Receiver identity and sequence alongside the existing module identity variables.
+
+
 ## Companion module 0.7.3
 
 ### Fixed

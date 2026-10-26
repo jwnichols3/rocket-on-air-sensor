@@ -112,3 +112,16 @@ presets only where the new release changes their feedback/style definitions; do 
 customized deck controls indiscriminately. Keep the previous module installed for rollback.
 
 A module release does not imply a Receiver deployment, a firmware flash, or an API 2 migration.
+
+## Signed Mac runtime and API 2 deployments
+
+The Mac runtime has its own controlled installation lifecycle. Build and verify the signed
+app, test normal Local Network consent in a supervised probe, then change the service
+launcher with an administrator-authorized rollback plan. See [Mac runtime setup](mac-setup.md#stable-signed-mac-runtime).
+Ordinary Receiver JavaScript releases reuse that runtime and do not re-sign Node.
+
+For module releases, [the deployment helper](companion-deployment.md) verifies the installed
+version/commit and retains a previous-version rollback path. API 2 linked-control migration
+is deliberate and separate: preserve existing controls on a backup page, test the linked
+candidates, and use native grid transfers to replace only the intended locations. Keep
+custom cycle selections and verify appearance and actions before removing backups.

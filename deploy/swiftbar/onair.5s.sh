@@ -1,6 +1,6 @@
 #!/bin/bash
 # <xbar.title>On Air</xbar.title>
-# <xbar.version>v0.2.0</xbar.version>
+# <xbar.version>v0.3.0</xbar.version>
 # <xbar.desc>Current state and service control for the on-air light.</xbar.desc>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>

@@ -1,10 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/bitfocus/companion-module-base/main/assets/manifest.schema.json",
+  "type": "connection",
   "id": "rocket-onair",
   "name": "rocket-onair",
   "shortname": "On Air",
   "description": "Drive and follow a Rocket On-Air light. Presets are generated from the server's own state table.",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "license": "MIT",
   "repository": "https://github.com/jwnichols3/rocket-on-air-sensor",
   "bugs": "https://github.com/jwnichols3/rocket-on-air-sensor/issues",
@@ -18,7 +19,7 @@
   "runtime": {
     "type": "node22",
     "api": "nodejs-ipc",
-    "apiVersion": "1.14.0",
+    "apiVersion": "2.2.0",
     "entrypoint": "../main.js"
   },
   "manufacturer": "Rocket",

@@ -1,4 +1,4 @@
-// Build the self-contained CommonJS module and stamp the identity into its running code.
+// Build the self-contained ESM module and stamp the identity into its running code.
 import { build } from 'esbuild'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -31,7 +31,7 @@ await build({
   bundle: true,
   platform: 'node',
   target: 'node22',
-  format: 'cjs',
+  format: 'esm',
   outfile: join(dist, 'main.js'),
   define: { __ONAIR_MODULE_BUILD__: JSON.stringify(info) },
   external: ['electron'],
@@ -39,7 +39,7 @@ await build({
 })
 copyFileSync(join(here, 'companion/manifest.json'), join(dist, 'companion/manifest.json'))
 writeFileSync(join(dist, 'package.json'), JSON.stringify({
-  name: 'companion-module-' + manifest.id, version: manifest.version, type: 'commonjs', main: 'main.js',
+  name: 'companion-module-' + manifest.id, version: manifest.version, type: 'module', main: 'main.js',
 }, null, 2) + '\n')
 const bundleSha256 = createHash('sha256').update(readFileSync(join(dist, 'main.js'))).digest('hex')
 writeFileSync(join(dist, 'build-info.json'), JSON.stringify({ ...info, bundleSha256 }, null, 2) + '\n')

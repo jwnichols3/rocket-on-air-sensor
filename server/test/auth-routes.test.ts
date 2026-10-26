@@ -356,7 +356,9 @@ test('GET /public/status is thin, resolved for rendering, and leaks nothing', as
   const h = await boot(t);
   await fetch(`${h.base}/state/on-air`, { method: 'POST' });
   const body = await json(await fetch(`${h.base}/public/status`, { headers: REMOTE }));
-  assert.deepEqual(Object.keys(body).sort(), ['ageSeconds', 'bgcolor', 'busy', 'color', 'label', 'message', 'state', 'tableVersion']);
+  assert.deepEqual(Object.keys(body).sort(), [
+    'ageSeconds', 'bgcolor', 'busy', 'color', 'label', 'message', 'receiverInstanceId', 'state', 'statusSequence', 'tableVersion',
+  ]);
   assert.equal(body.state, 'on-air');
   assert.equal(body.label, 'ON AIR');
   assert.equal(body.bgcolor, '#c1121f');
@@ -408,7 +410,9 @@ async function statusEvents(res: Response, want: number, trigger: () => Promise<
   return events;
 }
 
-const PUBLIC_KEYS = ['ageSeconds', 'bgcolor', 'busy', 'color', 'label', 'message', 'state', 'tableVersion'];
+const PUBLIC_KEYS = [
+  'ageSeconds', 'bgcolor', 'busy', 'color', 'label', 'message', 'receiverInstanceId', 'state', 'statusSequence', 'tableVersion',
+];
 
 test('the CHANGE event on /public/events is the thin view too, not the gated body (#88)', async (t) => {
   const h = await boot(t);
@@ -417,7 +421,7 @@ test('the CHANGE event on /public/events is the thin view too, not the gated bod
     await fetch(`${h.base}/state/on-air`, { method: 'POST' });
   });
   const body = change as Record<string, unknown>;
-  // Exactly the eight public keys. `deepEqual` on the sorted key list and not a forbidden
+  // Exactly the public keys. `deepEqual` on the sorted key list and not a forbidden
   // list: a forbidden list only catches the leaks somebody thought of, and this leak was
   // four fields nobody had thought of.
   assert.deepEqual(Object.keys(body).sort(), PUBLIC_KEYS, JSON.stringify(body));

@@ -1,10 +1,7 @@
 // Tests for the on-air Companion module (#44, rebuilt for #72-#76).
 //
-// The module class is exercised DIRECTLY, with the small part of the Companion host surface
-// it touches stubbed out. That is deliberate: `@companion-module/base`'s runEntrypoint wants
-// an IPC channel to a running Companion, so importing src/index.js as a module would try to
-// start one. Instead the class is loaded with the entrypoint call neutralised, and the host
-// callbacks are recorded.
+// API 2 exports the module class directly. These tests record host callbacks while
+// api2.test.mjs additionally exercises the real SDK host wrapper and its validators.
 //
 // What this covers that the live install cannot cover repeatably: preset regeneration when
 // tableVersion moves, which on the real server would mean editing Rocket's live state table
@@ -13,8 +10,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 // The generated art, so a test can name the icon it expects instead of comparing two opaque
 // base64 blobs and hoping they are the right way round (#93).
@@ -25,32 +22,9 @@ import { startFakeServer } from './fake-server.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = join(HERE, '..', 'src', 'index.js')
 
-// Load the module source with runEntrypoint stubbed, and hand back the class.
-//
-// Written to a real file inside the package rather than imported as a data: URL, because a
-// data: URL cannot resolve the bare specifier `@companion-module/base`. The file is
-// generated, gitignored, and identical to src/index.js apart from the entrypoint line - so
-// the tests exercise the shipped source, not a copy of it.
-//
-// It is written into src/ RATHER THAN test/, so that the source's own relative imports -
-// `./icons.js` since #92 - resolve exactly where they do in the shipped module. Written
-// beside the tests it resolved them beside the tests, and the whole suite died on a missing
-// file that exists.
 let cached
 async function loadInstanceClass() {
-	if (cached) return cached
-	const src = readFileSync(SRC, 'utf8')
-	const patched = src.replace(
-		/runEntrypoint\(OnAirInstance, \[\]\)/,
-		'export { OnAirInstance }',
-	)
-	if (!patched.includes('export { OnAirInstance }')) {
-		throw new Error('the entrypoint line moved - this loader needs updating')
-	}
-	const generated = join(HERE, '..', 'src', '.instance.generated.mjs')
-	writeFileSync(generated, patched)
-	const mod = await import(pathToFileURL(generated).href)
-	cached = mod.OnAirInstance
+	if (!cached) cached = (await import('../src/index.js')).default
 	return cached
 }
 
@@ -65,7 +39,7 @@ function makeInstance(OnAir, port, passphrase) {
 	const inst = Object.create(OnAir.prototype)
 	const seen = { presets: {}, actions: {}, feedbacks: {}, variables: {}, status: [], logs: [], repaints: [] }
 
-	inst.setPresetDefinitions = (p) => (seen.presets = p)
+	inst.setPresetDefinitions = (sections, presets) => { seen.sections = sections; seen.presets = presets }
 	inst.setActionDefinitions = (a) => (seen.actions = a)
 	inst.setFeedbackDefinitions = (f) => (seen.feedbacks = f)
 	inst.setVariableDefinitions = () => {}
@@ -95,6 +69,7 @@ const SEED = [
 // diagnostic that needs a caption to be understood should have one.
 const UTILITY_PRESETS = [
 	'light',
+	'diagnostics',
 	'refresh',
 	'panel_sleep',
 	'panel_wake',
@@ -401,7 +376,7 @@ test('BREAKING: `stale` is gone from the variables, the feedbacks and the fixtur
 
 	assert.equal('stale' in seen.variables, false)
 	assert.equal('stale' in seen.feedbacks, false)
-	assert.equal(inst.buildVariables().some((v) => v.variableId === 'stale'), false)
+	assert.equal(Object.hasOwn(inst.buildVariables(), 'stale'), false)
 	assert.equal(seen.variables.connection !== undefined, true, 'and it is replaced, not just removed')
 	assert.equal('stale' in fake.status(), false, 'the fixture must not carry it either')
 
@@ -595,7 +570,7 @@ test('BREAKING: the pin is gone from the actions, feedbacks, variables and the f
 	}
 	for (const id of ['hold', 'hold_label']) {
 		assert.equal(id in seen.variables, false, `${id} must be gone from the variables`)
-		assert.equal(inst.buildVariables().some((v) => v.variableId === id), false)
+		assert.equal(Object.hasOwn(inst.buildVariables(), id), false)
 	}
 	assert.equal('hold' in fake.status(), false, 'the fixture must not carry it either')
 
@@ -1329,7 +1304,7 @@ test('#92 every generated button clears 4.5:1, on the resting face and the lit o
 	assert.ok(seen.presets['state_interruptible_words'], 'the amber row never arrived')
 
 	const faces = []
-	for (const [key, preset] of Object.entries(seen.presets)) {
+	for (const [key, preset] of Object.entries(seen.presets).filter(([, p]) => p.type === 'simple')) {
 		faces.push([`${key} at rest`, preset.style.color, preset.style.bgcolor])
 		for (const f of preset.feedbacks ?? []) {
 			// A feedback style may override one channel and inherit the other, which is exactly
@@ -1488,7 +1463,8 @@ test('#93 the cycle preset wears the current row, so it can be pressed until the
 	assert.ok(preset, 'no cycle preset was generated')
 	// The default ring excludes the reserved row: NO DATA is the server admitting ignorance,
 	// not a state anyone chooses, and a cycle that stopped there would assert it on purpose.
-	assert.deepEqual(preset.steps[0].down[0].options.ring, ['available', 'on-air'])
+	assert.deepEqual(preset.localVariables.find(v=>v.variableName==='cycle_states').startupValue, ['available', 'on-air'])
+	assert.deepEqual(preset.steps[0].down[0].options.ring, {isExpression:true,value:'$(local:cycle_states)'})
 
 	// One `state_is` per row - INCLUDING the reserved one, which the ring leaves out. The
 	// button must be able to SHOW a state it will not write.

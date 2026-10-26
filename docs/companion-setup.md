@@ -134,7 +134,10 @@ because they describe different evidence and need different diagnosis. Intention
 healthy and is reported separately; it must not trigger a hardware-failure alarm.
 
 **Variables**: `state`, `label`, `busy`, `confirmed`, `confirmed_reason`, `source`, `connection`,
-`seconds_since_contact`, `age_seconds`, `table_version`, `module_version`, `module_commit`.
+`seconds_since_contact`, `age_seconds`, `table_version`, `module_version`, `module_commit`,
+`receiver_instance_id`, `status_sequence`, `diagnostic_status`, `last_command`, and
+`last_command_status`. Ordering variables show the accepted Receiver epoch and highest sequence;
+they are empty when connected to a legacy Receiver.
 
 ## Slow writes are not failed writes
 
@@ -245,14 +248,14 @@ Three things follow, and all three were missing before #72:
 - **Presets regenerate when the table changes.** The module watches `tableVersion` on the
   status stream and on every poll; when it moves it re-reads the table and re-publishes
   definitions. No restart.
-- **A placed button from this API 1.14 module is a copy.** It keeps the preset id it was
-  created with, which is why preset ids are keyed on the immutable row id (D-31) and never on
-  an index (D-34). A button survives rows being renamed or reordered.
+- **API 2 presets support Linked or Copy placement on Companion 5.1.1.** Existing copied
+  buttons remain copies until deliberately migrated. Linked references follow preset
+  updates. Preserve customizations and stable row IDs when converting existing controls.
 - **A button bound to a row the server no longer has says so.** The server answers `400` with
   the list of ids that would have worked, and the module logs it:
   `set state "deleted-row" failed: unknown state 'deleted-row' - valid states: available, on-air, ...`
 - **`apiVersion` is declared by the module, not derived from `@companion-module/base`.** The
-  manifest declares `1.14.0`, matching the implementation. The host must support that API.
+  manifest declares `2.2.0`, matching the implementation and Companion 5.1.1 support. The host must support that API.
   Do not change the declaration to a package version or a newer API without migrating and
   testing the module implementation.
 - **Panel controls use the Receiver relay.** Sleep, wake, and toggle actions do not address
@@ -338,6 +341,18 @@ connection loss, no data, and intentional sleep instead of leaving a healthy def
 Existing copied health buttons also stop showing green on lost contact/no data through the
 compatible broadening of `light_not_confirming`; all feedback IDs are preserved.
 
-The current module remains on API 1.14. Companion 5.1's linked presets require module API 2
-or later. Changing the manifest's API string alone does not enable that feature safely; a
-proper module migration and an existing-button migration plan are separate work.
+## API 2 and linked controls
+
+The current module uses API 2.2 on Companion 5.1.1, with an ESM entrypoint, API 2 variable
+and preset definitions, and a tested action-option upgrade script. Existing cycle and
+sleep/wake action IDs and feedback IDs are retained. Legacy custom `set_state` values that
+interpolate variables are migrated to expressions; ordinary cycle/toggle options stay intact.
+
+Back up controls before converting them to linked references. For `state_cycle`, preserve
+the selected ring using the preset's `cycle_states` local-variable override. `panel_toggle`
+needs no option override. Keep the original controls available for rollback, and validate
+state changes and physical panel confirmation before retiring those originals.
+
+The new Utility preset **Receiver and panel diagnostics** separates READY, ASLEEP,
+RECEIVER OFFLINE, and panel warnings. It includes module version and last-command outcome.
+A command marked accepted or delivered is not a substitute for physical confirmation.

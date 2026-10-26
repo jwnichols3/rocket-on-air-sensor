@@ -293,3 +293,67 @@ clickable.
 - **Plist edited (or reinstalled) but behavior unchanged** - this is the
   `kickstart -k` vs plist re-read issue above. Run `onair reload`, not
   `onair restart`.
+
+## Stable signed Mac runtime
+
+Homebrew Node can change its code identity when upgraded. Local Network permission belongs
+to responsible code, so a working request from a terminal does not prove that the supervised
+Receiver has the same permission. The optional signed runtime gives the Receiver a stable
+Apple-signed app identity and a pinned Node binary without running the service as root.
+
+The native `On Air Receiver.app` supervisor stays alive while its bundled Node runs. It
+forwards termination signals and exit status. A three-second shutdown grace force-terminates
+and reaps a Node helper that does not exit. The helper inherits the launchd job process group;
+a small native guardian waits for supervisor exit and terminates the owned job group,
+including descendants that ignore TERM. This also covers a hard `kickstart -k`, where the
+supervisor cannot run its own handler. It never signals a standalone caller's process group.
+`AbandonProcessGroup` remains false. The service template allows ten seconds before launchd
+force-kills the supervisor. The bundle's identifier and display name stay stable across runtime updates. The app requires an Apple-issued signing identity selected
+locally; there is no ad-hoc-signing fallback. Do not publish signing credentials. The included
+runtime manifest pins official Node archive URLs and SHA-256 values for each architecture.
+
+Build into a fresh staging directory, using the identity configured on this Mac:
+
+```sh
+python3 deploy/mac-runtime/runtime.py build --identity "$ONAIR_SIGNING_IDENTITY" \
+  --output /tmp/onair-runtime-stage/On\ Air\ Receiver.app
+python3 deploy/mac-runtime/runtime.py verify /tmp/onair-runtime-stage/On\ Air\ Receiver.app
+python3 deploy/mac-runtime/runtime.py install /tmp/onair-runtime-stage/On\ Air\ Receiver.app
+```
+
+Installation places the verified bundle at `~/Applications/On Air Receiver.app` and registers
+it with Launch Services. It does not start or change the service and does not grant network
+permission. An existing bundle is retained with a `.previous` suffix; preserve or archive that
+backup before replacing it again. Replacement failures and INT/TERM restore the old bundle;
+SIGKILL or power loss cannot run recovery, so preserve the `.previous` directory for repair.
+To use an already-downloaded archive, pass `--archive` to
+build; the pinned checksum is still checked.
+
+Before changing the service, test its permission context with a bounded temporary LaunchAgent:
+
+```sh
+python3 deploy/mac-runtime/runtime.py probe "$HOME/Applications/On Air Receiver.app" \
+  "http://<primary-panel>/onair"
+```
+
+This uses Network.framework to present the normal permission prompt when necessary, then
+runs a bounded GET in the bundled Node helper. Allow **On Air Receiver** to access the local
+network if prompted. The temporary agent is unloaded when the probe finishes. Its log remains
+in the printed temporary directory. Repeat after restarting the probe and after a deliberately
+signed runtime replacement; a terminal-only test is insufficient. A login/reboot test must be
+performed separately before claiming reboot persistence.
+
+For the one-time service cutover, save the installed launchd plist, render a replacement with
+`ONAIR_RUNTIME_APP` set to the verified app, then install and reload it through the normal
+administrator-authorized path. Keep `UserName` as the ordinary service user. Restore the saved
+plist and reload it to roll back. The existing server state/config files do not change.
+
+After cutover, `onair update` recognizes the native executable in the installed plist and reuses
+that app. Ordinary JavaScript updates do not rebuild or re-sign the runtime. Runtime upgrades
+are deliberate, separate installations. `ONAIR_RUNTIME_APP=legacy` explicitly selects external
+Node; existing legacy installations continue using their current model until cut over. A
+configured but missing/invalid signed runtime fails clearly rather than silently changing modes.
+
+Apple's [Local Network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy)
+recommends Apple-issued signing identities for reliable identity tracking. A stable signature
+is necessary engineering, not a substitute for actual supervised-context and reboot tests.

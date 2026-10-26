@@ -228,9 +228,9 @@ test('a human write and an auto write are the SAME write - the prefix is provena
     const store = new StateStore(defaultState(), new StateTable());
     for (const id of ['on-air', 'available', 'on-air']) store.write(id, source, at);
     const st = { ...store.status(at) } as Record<string, unknown>;
-    // `source` is the one field that is SUPPOSED to differ, and updatedAt/ageSeconds are
-    // clock, not decision.
+    // Source, instance identity, and clock are provenance, not a precedence decision.
     delete st.source;
+    delete st.receiverInstanceId;
     delete st.updatedAt;
     delete st.ageSeconds;
     return st;

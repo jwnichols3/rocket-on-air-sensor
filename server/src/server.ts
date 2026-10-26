@@ -368,6 +368,8 @@ function publicBody(deps: ServerDeps): Record<string, unknown> {
   // is both always possible and always what they chose to mean "something is wrong".
   const row = table.row(s.state) ?? table.row(UNKNOWN_ID)!;
   return {
+    receiverInstanceId: s.receiverInstanceId,
+    statusSequence: s.statusSequence,
     state: s.state,
     label: row.label,
     color: row.color,

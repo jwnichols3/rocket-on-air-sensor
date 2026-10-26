@@ -107,6 +107,31 @@ STATE_FILE="$(read_config ONAIR_STATE_FILE)"
 STATE_FILE="${STATE_FILE:-$TARGET_HOME/.onair/state.json}"
 LOG_FILE="$TARGET_HOME/.onair/logs/onair.log"
 
+# A verified, installed runtime is independent of JavaScript releases. Setting
+# ONAIR_RUNTIME_APP=legacy deliberately retains the external-Node launch path.
+service_executable() {
+  local runtime_app installed selected=false
+  runtime_app="$(read_config ONAIR_RUNTIME_APP)"
+  [[ -z "$runtime_app" || "$runtime_app" == legacy ]] || selected=true
+  if [[ -z "$runtime_app" && -f "$PLIST_PATH" ]]; then
+    installed="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$PLIST_PATH" 2>/dev/null)" || return 1
+    case "$installed" in
+      */Contents/MacOS/OnAirReceiver) runtime_app="${installed%/Contents/MacOS/OnAirReceiver}"; selected=true ;;
+      *) runtime_app=legacy ;;
+    esac
+  fi
+  runtime_app="${runtime_app:-$TARGET_HOME/Applications/On Air Receiver.app}"
+  if [[ "$runtime_app" != "legacy" && -d "$runtime_app" ]]; then
+    python3 "$DEPLOY_DIR/mac-runtime/runtime.py" verify "$runtime_app" --quiet || return 1
+    printf '%s/Contents/MacOS/OnAirReceiver' "$runtime_app"
+  elif [[ "$runtime_app" != "legacy" && "$selected" == true ]]; then
+    echo "onair: configured signed runtime is missing: $runtime_app" >&2
+    return 1
+  else
+    command -v node
+  fi
+}
+
 usage() {
   cat >&2 <<EOF
 usage: onair <verb> [args]
@@ -211,6 +236,24 @@ is_loaded() {
   sudo_launchctl print "$T" >/dev/null 2>&1
 }
 
+# bootout returns before launchd has necessarily removed the job. Starting it during
+# teardown can report bootstrap error 5, with "Operation already in progress" in logs.
+wait_for_unload() {
+  local deadline=$((SECONDS + ${1:-10})) output
+  while (( SECONDS < deadline )); do
+    if output="$(sudo_launchctl print "$T" 2>&1)"; then
+      sleep 0.1
+    elif [[ "$output" == *"Could not find service"* || "$output" == *"Could not find job"* ]]; then
+      return 0
+    else
+      echo "onair: cannot confirm service removal: $output" >&2
+      return 1
+    fi
+  done
+  echo "onair: service is still being removed after the bounded wait" >&2
+  return 1
+}
+
 # ensure_target_dir DIR - mkdir -p as TARGET_USER, whether invoked directly
 # or via sudo. A plain root-owned mkdir under sudo would leave the directory
 # unwritable by the daemon, which always runs as TARGET_USER.
@@ -242,7 +285,7 @@ migrate_cli_env() {
 render_plist_to() {
   local dest="$1"
   local node_bin
-  node_bin="$(command -v node || true)"
+  node_bin="$(service_executable)" || return 1
   if [[ -z "$node_bin" ]]; then
     echo "onair: node not found in PATH - install failed" >&2
     exit 1
@@ -253,6 +296,10 @@ render_plist_to() {
     exit 1
   fi
 
+  local associated_bundle=""
+  if [[ "$node_bin" == */Contents/MacOS/OnAirReceiver ]]; then
+    associated_bundle='<key>AssociatedBundleIdentifiers</key><array><string>com.rocket.onair.receiver</string></array>'
+  fi
   local sub_value
   for sub_value in "$node_bin" "$APPDIR" "$TARGET_USER" "$TARGET_HOME"; do
     if [[ "$sub_value" == *'&'* || "$sub_value" == *'|'* || "$sub_value" == *'\'* ]]; then
@@ -268,6 +315,7 @@ render_plist_to() {
     -e "s|@APPDIR@|$APPDIR|g" \
     -e "s|@USER@|$TARGET_USER|g" \
     -e "s|@HOME@|$TARGET_HOME|g" \
+    -e "s|@ASSOCIATED_BUNDLE@|$associated_bundle|g" \
     "$TEMPLATE" > "$dest"
 
   if ! plutil -lint "$dest" >/dev/null; then
@@ -303,7 +351,8 @@ render_plist() {
 # PlistBuddy hiccup into an unasked-for privileged write.
 plist_is_stale() {
   local plist="$1"
-  local want_node="${2:-$(command -v node || true)}"
+  local want_node="${2:-}"
+  if [[ -z "$want_node" ]]; then want_node="$(service_executable)" || return 2; fi
   local want_entry="${3:-$ENTRY}"
   local installed_node installed_entry
   [[ -f "$plist" ]] || return 1
@@ -784,6 +833,7 @@ cmd_reload() {
   echo "(e.g. after re-running install) actually take effect." >&2
   if is_loaded; then
     sudo_launchctl bootout "$T"
+    wait_for_unload || return 1
   fi
   sudo_launchctl bootstrap system "$PLIST_PATH"
   mutating_health_poll
@@ -951,7 +1001,9 @@ cmd_enable() {
 # printed there) - this function's exit status IS the health-poll result, for
 # cmd_update to branch on.
 apply_restart_for_update() {
-  if [[ "$(uname -s)" == "Darwin" ]] && plist_is_stale "$PLIST_PATH"; then
+  local desired
+  desired="$(service_executable)" || return 1
+  if [[ "$(uname -s)" == "Darwin" ]] && plist_is_stale "$PLIST_PATH" "$desired"; then
     echo "onair: update: re-rendering plist and reloading" >&2
     render_plist
     cmd_reload
