@@ -57,6 +57,21 @@ function makeInstance(OnAir, port, passphrase) {
 
 const settle = (ms = 250) => new Promise((r) => setTimeout(r, ms))
 
+// Read the actual-state layers independently of the production conversion helper.
+// Progress decorations must not change the established colors, icons, or feedback order.
+function observedStyle(preset, feedback) {
+	if (preset.type === 'simple') return { ...preset.style, ...feedback?.style }
+	const layers = Object.fromEntries(preset.elements.map(e => [e.id, { ...e }]))
+	for (const change of feedback?.styleOverrides ?? []) layers[change.elementId][change.elementProperty] = change.override
+	const literal = v => v && typeof v === 'object' && 'value' in v ? v.value : v
+	const image = literal(layers.actual_image.base64Image)
+	return {
+		text: literal(layers.actual_text.text), color: literal(layers.actual_text.color),
+		bgcolor: literal(layers.actual_background.color),
+		png64: image ? image.replace(/^data:image\/png;base64,/, '') : undefined,
+	}
+}
+
 /// The seed rows the fake server ships, including the reserved row the contract guarantees.
 const SEED = [
 	{ id: 'available', label: 'AVAILABLE', color: '#ffffff', bgcolor: '#0b6e2e', busy: false, order: 0 },
@@ -1200,6 +1215,11 @@ test('#92 the toggle POSTs to /panel/toggle and lets the SERVER decide the direc
 	await seen.actions.panel_toggle.callback({ options: {} })
 	await settle(150)
 	assert.equal(fake.panelAsleep, true, 'the first press did not darken the panel')
+	// Delivery alone is no longer enough to unlock the toggle. Model the independent
+	// physical observation before the operator's next deliberate press.
+	fake.setConfirmed('unknown')
+	fake.setConfirmedReason('asleep')
+	await inst.poll()
 	await seen.actions.panel_toggle.callback({ options: {} })
 	await settle(150)
 	assert.equal(fake.panelAsleep, false, 'the second press did not wake it')
@@ -1249,28 +1269,29 @@ test('#92 the toggle preset shows the panel, and changes what it offers when asl
 
 	const asleep = t.feedbacks.find((f) => f.feedbackId === 'panel_asleep')
 	assert.ok(asleep, 'the toggle does not report whether the panel is dark')
+	const litFace = observedStyle(t), asleepFace = observedStyle(t, asleep)
 	// The two faces must differ in BOTH channels, so the key reads as a small copy of the
 	// panel across the room rather than as a label that happens to change colour.
-	assert.notEqual(asleep.style.bgcolor, t.style.bgcolor, 'the asleep face is the same colour')
-	assert.notEqual(asleep.style.png64, t.style.png64, 'the asleep face shows the same picture')
+	assert.notEqual(asleepFace.bgcolor, litFace.bgcolor, 'the asleep face is the same colour')
+	assert.notEqual(asleepFace.png64, litFace.png64, 'the asleep face shows the same picture')
 
 	// THE ICON IS THE STATE, NOT THE ACTION (#93). This is the direction, asserted, because it
 	// was built backwards and shipped: the resting face means "the screen is ON" and must be
 	// the SUN on a bright ground, and the asleep face means "the screen is OFF" and must be
 	// the MOON on black. Swapping them is a one-character edit that no other test would catch,
 	// and it reads plausibly either way to whoever makes it.
-	assert.equal(t.style.bgcolor, 0xc8c8cd, 'a lit panel must show a BRIGHT key')
-	assert.equal(asleep.style.bgcolor, 0x000000, 'a dark panel must show a BLACK key')
-	assert.equal(t.style.png64, ICONS.wake.dark, 'a lit panel must show the SUN')
-	assert.equal(asleep.style.png64, ICONS.sleep.light, 'a dark panel must show the MOON')
+	assert.equal(litFace.bgcolor, 0xc8c8cd, 'a lit panel must show a BRIGHT key')
+	assert.equal(asleepFace.bgcolor, 0x000000, 'a dark panel must show a BLACK key')
+	assert.equal(litFace.png64, ICONS.wake.dark, 'a lit panel must show the SUN')
+	assert.equal(asleepFace.png64, ICONS.sleep.light, 'a dark panel must show the MOON')
 
 	// And the words version says the same thing in words rather than going blank.
-	assert.equal(seen.presets.panel_toggle_words.style.text, 'SCREEN\nON')
+	assert.equal(observedStyle(seen.presets.panel_toggle_words).text, 'SCREEN\nON')
 	assert.equal(
-		seen.presets.panel_toggle_words.feedbacks.find((f) => f.feedbackId === 'panel_asleep').style.text,
+		observedStyle(seen.presets.panel_toggle_words, seen.presets.panel_toggle_words.feedbacks.find((f) => f.feedbackId === 'panel_asleep')).text,
 		'SCREEN\nOFF',
 	)
-	assert.equal(seen.presets.panel_toggle_words.style.png64, undefined, 'the words preset carries art')
+	assert.equal(observedStyle(seen.presets.panel_toggle_words).png64, undefined, 'the words preset carries art')
 })
 
 test('#92 every generated button clears 4.5:1, on the resting face and the lit one', async () => {
@@ -1304,15 +1325,16 @@ test('#92 every generated button clears 4.5:1, on the resting face and the lit o
 	assert.ok(seen.presets['state_interruptible_words'], 'the amber row never arrived')
 
 	const faces = []
-	for (const [key, preset] of Object.entries(seen.presets).filter(([, p]) => p.type === 'simple')) {
-		faces.push([`${key} at rest`, preset.style.color, preset.style.bgcolor])
+	for (const [key, preset] of Object.entries(seen.presets).filter(([, p]) => p.type === 'simple' || p.elements?.some(e => e.id === 'actual_background'))) {
+		const base = observedStyle(preset)
+		faces.push([`${key} at rest`, base.color, base.bgcolor])
 		for (const f of preset.feedbacks ?? []) {
 			// A feedback style may override one channel and inherit the other, which is exactly
 			// where an unreadable pair can hide - so measure the pair as COMPOSED.
 			faces.push([
 				`${key} + ${f.feedbackId}`,
-				f.style?.color ?? preset.style.color,
-				f.style?.bgcolor ?? preset.style.bgcolor,
+				observedStyle(preset, f).color,
+				observedStyle(preset, f).bgcolor,
 			])
 		}
 	}
@@ -1470,11 +1492,11 @@ test('#93 the cycle preset wears the current row, so it can be pressed until the
 	// button must be able to SHOW a state it will not write.
 	const shown = preset.feedbacks.filter((f) => f.feedbackId === 'state_is').map((f) => f.options.state)
 	assert.deepEqual(shown, ['available', 'on-air', 'unknown'])
-	assert.equal(preset.feedbacks.find((f) => f.options.state === 'on-air').style.bgcolor, 0xc1121f)
+	assert.equal(observedStyle(preset, preset.feedbacks.find((f) => f.options.state === 'on-air')).bgcolor, 0xc1121f)
 	// And the words variant says which row in words, or the button is unreadable in the one
 	// mode chosen because icons are not.
 	assert.equal(
-		seen.presets.state_cycle_words.feedbacks.find((f) => f.options.state === 'on-air').style.text,
+		observedStyle(seen.presets.state_cycle_words, seen.presets.state_cycle_words.feedbacks.find((f) => f.options.state === 'on-air')).text,
 		'ON AIR',
 	)
 
