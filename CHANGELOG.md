@@ -1,5 +1,18 @@
 # Changelog
 
+## Companion module 0.9.0
+
+- Added immediate sleep/wake acknowledgement and a native draining progress strip to
+  linked toggle presets. The estimated ten-second confirmation window starts after
+  delivery and finishes early only on a fresh physical transition.
+- Late confirmation shows checking, then an unresolved notice after twenty seconds.
+  Busy suppression, missing delivery, lost contact, and Receiver restarts remain distinct
+  from a confirmed panel change.
+- Coalesced repeated toggle presses while a transition is pending, with a visible WAIT
+  response. Explicit sleep/wake actions can override it; rapid state cycling is unchanged.
+- Added a matching press accent to linked state-cycle presets and separate panel progress
+  variables. Existing action IDs, observed-state artwork, and cycle overrides are retained.
+
 ## Companion module 0.8.1
 
 - Corrected the diagnostics preset's text sizing for Companion's native button canvas

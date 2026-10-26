@@ -16,6 +16,17 @@ the server's own table. Drag them onto a Stream Deck and they already carry the 
 caption and the right colours, because both come from `GET /config/states`. Add a state on
 the server and its button appears - no Companion restart, no re-wiring.
 
+### Sleep/wake progress
+
+Module 0.9.0 updates linked sleep/wake toggles with immediate acknowledgement and a native
+countdown strip. `CHECK ~10s` is an estimated confirmation window after the request is
+delivered. It clears early when the panel confirms; a late reply shows checking, followed
+by `NO CONF` after twenty seconds. The sun/moon remains observed state, not predicted state.
+
+An extra toggle press while waiting shows `WAIT` instead of sending another toggle. The
+state-cycle button keeps its existing ring and rapid-press behavior, with a matching press
+accent. Existing linked controls update in place when the new module is activated.
+
 ## Build and package
 
 ```sh

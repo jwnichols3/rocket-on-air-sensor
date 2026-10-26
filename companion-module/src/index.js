@@ -34,6 +34,8 @@ import {
 import { ICONS } from './icons.js'
 import { MODULE_BUILD_INFO } from './build-info.js'
 import { upgradeLegacyStateExpressions } from './upgrades.js'
+import { PanelProgress } from './panel-progress.js'
+import { enhanceCommandPresets } from './command-presets.js'
 
 /// The reserved row (contract section 1). It always exists in a real table and its `busy` is
 /// always true; this is what the module falls back to before the first table pull, which is
@@ -158,6 +160,9 @@ class OnAirInstance extends InstanceBase {
 		if (this.abort) this.abort.abort()
 		if (this.retryTimer) clearTimeout(this.retryTimer)
 		if (this.pollTimer) clearInterval(this.pollTimer)
+		if (this.commandTimer) clearInterval(this.commandTimer)
+		this.commandTimer = null
+		this.panelProgress?.cancel('configuration')
 		this.pollRequest = null
 		this.tableRequest = null
 		this.tablePromise = null
@@ -183,6 +188,13 @@ class OnAirInstance extends InstanceBase {
 		this.lastStatusKey = null
 		this.commandId = 0
 		this.lastCommand = { status: 'none', label: 'No command yet', result: 'No command yet' }
+		this.panelProgress = new PanelProgress({ now: () => performance.now(), estimateMs: 10000, confirmMs: 20000 })
+		this.stateRequests = 0
+		this.statePressUntil = 0
+		this.repeatPressUntil = 0
+		this.lastPanelPhysical = 'unknown'
+		this.panelDisplayReceiver = null
+		this.lastCommandAppearance = null
 		this.setActionDefinitions(this.buildActions())
 		this.defineFeedbacks()
 		this.setVariableDefinitions(this.buildVariables())
@@ -360,7 +372,7 @@ class OnAirInstance extends InstanceBase {
 		const now = this.view().connection
 		// Age changes even while the connection verdict stays the same. No feedback redraw
 		// is needed for the timer, but variables used in button text must keep advancing.
-		this.publishVariables()
+		this.refreshCommandPresentation()
 		if (now === before) return
 		this.lastConnection = now
 		this.publishStatus()
@@ -452,6 +464,13 @@ class OnAirInstance extends InstanceBase {
 		this.lastContactAt = Date.now()
 		this.clearFault()
 
+		if (this.panelDisplayReceiver !== this.receiverInstanceId) {
+			this.lastPanelPhysical = 'unknown'
+			this.panelDisplayReceiver = this.receiverInstanceId
+		}
+		const panelObservation = this.panelObservation()
+		if (panelObservation.physical !== 'unknown') this.lastPanelPhysical = panelObservation.physical
+		this.panelProgress?.observe(panelObservation)
 		this.refreshExpectedTable()
 
 		this.publishStatus()
@@ -510,6 +529,7 @@ class OnAirInstance extends InstanceBase {
 	checkAll() {
 		const ids = this.feedbackIds ?? Object.keys(this.buildFeedbacks())
 		this.checkFeedbacks(...ids)
+		this.lastCommandAppearance = this.commandPresentationKey()
 	}
 
 	// ---- what Companion's own connection light says ------------------------------------------
@@ -821,6 +841,10 @@ class OnAirInstance extends InstanceBase {
 			{ variableId: 'diagnostic_status', name: 'Receiver and primary panel health' },
 			{ variableId: 'last_command', name: 'Last command and outcome (acceptance is not physical confirmation)' },
 			{ variableId: 'last_command_status', name: 'Last command status: none / pending / accepted / undelivered / rejected / unknown' },
+			{ variableId: 'panel_command_phase', name: 'Panel request and physical confirmation phase' },
+			{ variableId: 'panel_command_target', name: 'Requested panel target, separate from observed state' },
+			{ variableId: 'panel_command_seconds', name: 'Estimated seconds remaining before the usual confirmation window ends' },
+			{ variableId: 'panel_command_result', name: 'Panel confirmation result, separate from request delivery' },
 		]
 		return Object.fromEntries(definitions.map(({ variableId, name }) => [variableId, { name }]))
 	}
@@ -828,6 +852,7 @@ class OnAirInstance extends InstanceBase {
 	publishVariables() {
 		const s = this.current
 		const v = this.view()
+		const progress = this.panelProgress?.view()
 		this.setVariableValues({
 			state: v.state,
 			label: v.label,
@@ -847,6 +872,10 @@ class OnAirInstance extends InstanceBase {
 			diagnostic_status: this.diagnosticView().status,
 			last_command: this.lastCommand?.result ?? 'No command yet',
 			last_command_status: this.lastCommand?.status ?? 'none',
+			panel_command_phase: progress?.phase ?? 'idle',
+			panel_command_target: progress?.target ?? '',
+			panel_command_seconds: progress?.remainingSeconds ?? '',
+			panel_command_result: progress?.result ?? '',
 			module_version: MODULE_BUILD_INFO.version,
 			module_commit: (MODULE_BUILD_INFO.commit ?? 'unknown') + (MODULE_BUILD_INFO.dirty ? ' (modified)' : ''),
 		})
@@ -906,6 +935,87 @@ class OnAirInstance extends InstanceBase {
 		this.lastCommand = { ...this.lastCommand, status, result }
 		this.publishVariables()
 		this.checkAll()
+	}
+
+	panelObservation() {
+		const confirmation = this.confirmation()
+		const view = this.view()
+		return {
+			receiverInstanceId: this.receiverInstanceId,
+			statusSequence: this.statusSequence,
+			revision: this.observationRevision,
+			physical: this.fault || view.connection !== 'ok' ? 'unknown'
+				: confirmation === 'asleep' ? 'asleep' : confirmation === 'agrees' ? 'awake' : 'unknown',
+			busy: view.busy,
+		}
+	}
+
+	commandButtonValue(kind, field) {
+		const now = performance.now()
+		if (kind === 'state') return field === 'visible' && (this.stateRequests > 0 || now < this.statePressUntil)
+		const progress = this.panelProgress?.view() ?? { phase: 'idle' }
+		const physical = this.panelObservation().physical
+		const uncertain = physical === 'unknown'
+		const known = !uncertain || this.lastPanelPhysical !== 'unknown'
+		const visible = uncertain || !['idle', 'confirmed', 'cancelled'].includes(progress.phase)
+		if (field === 'visible') return visible
+		if (field === 'known') return known
+		if (field === 'fraction') return uncertain ? 0 : progress.fraction ?? 0
+		if (field === 'pulsing') return !uncertain && progress.phase === 'checking'
+		if (field === 'header') {
+			if (uncertain) return known ? 'LAST SEEN' : 'UNKNOWN'
+			if (progress.phase === 'sending') return ''
+			if (progress.phase === 'delivered' || progress.phase === 'checking') return progress.target === 'asleep' ? 'SLEEP SENT' : 'WAKE SENT'
+			return 'CHECK PANEL'
+		}
+		if (field === 'caption') {
+			if (visible && now < this.repeatPressUntil) return 'WAIT'
+			if (progress.phase === 'sending') return 'SENDING'
+			if (uncertain) return this.fault || this.view().connection !== 'ok' ? 'CHECK LINK' : 'NO CONF'
+			if (progress.phase === 'delivered') return `CHECK ~${progress.remainingSeconds}s`
+			if (progress.phase === 'checking') return `CHECK +${progress.overtimeSeconds ?? 0}s`
+			if (progress.phase === 'held') return this.panelObservation().physical === 'awake' ? 'BUSY / LIT' : 'BUSY'
+			if (progress.phase === 'rejected') return 'REJECTED'
+			if (progress.phase === 'undelivered') return 'NO ACK'
+			if (progress.phase === 'uncertain') {
+				if (progress.result === 'undelivered') return 'NO ACK'
+				if (progress.result === 'unknown' || progress.result === 'request-timeout') return 'NO REPLY'
+				if (progress.result === 'contact-lost') return 'CHECK LINK'
+				if (progress.result === 'receiver-changed') return 'RESTART'
+				return 'NO CONF'
+			}
+		}
+		return ''
+	}
+
+	refreshCommandPresentation() {
+		if (this.stopping) return
+		const progress = this.panelProgress?.view()
+		if (progress && progress.phase !== 'sending' && (this.fault || this.view().connection !== 'ok')) this.panelProgress.cancel('contact-lost')
+		this.publishVariables()
+		const appearance = this.commandPresentationKey()
+		if (appearance !== this.lastCommandAppearance) {
+			this.lastCommandAppearance = appearance
+			this.checkFeedbacks('command_progress_value', 'panel_last_seen_asleep')
+		}
+		const timed = this.panelProgress?.view().needsTick || this.stateRequests > 0
+			|| performance.now() < this.statePressUntil || performance.now() < this.repeatPressUntil
+		if (timed && !this.commandTimer) {
+			// This clock changes presentation only. It never polls the panel or rebuilds presets.
+			this.commandTimer = setInterval(() => this.refreshCommandPresentation(), 250)
+			this.commandTimer.unref?.()
+		} else if (!timed && this.commandTimer) {
+			clearInterval(this.commandTimer)
+			this.commandTimer = null
+		}
+	}
+
+	commandPresentationKey() {
+		return JSON.stringify([
+			...['visible', 'header', 'caption', 'fraction', 'pulsing', 'known'].map(field => this.commandButtonValue('panel', field)),
+			this.commandButtonValue('state', 'visible'),
+			this.panelObservation().physical === 'unknown' && this.lastPanelPhysical === 'asleep',
+		])
 	}
 
 	// ---- actions ---------------------------------------------------------------------------
@@ -1027,8 +1137,17 @@ class OnAirInstance extends InstanceBase {
 		// booleans are kept rather than replaced with strings so #91's two actions read the same
 		// as they always did at their call sites.
 		const what = command === 'toggle' ? 'toggle' : command ? 'sleep' : 'wake'
-		const outcome = this.beginCommand(`panel ${what}`)
 		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
+		const operation = this.panelProgress.begin({ kind: what, generation: this.generation,
+			observation: this.panelObservation(), requestTimeoutMs: timeout })
+		if (!operation.started) {
+			this.repeatPressUntil = performance.now() + 700
+			this.refreshCommandPresentation()
+			return
+		}
+		this.repeatPressUntil = 0
+		const outcome = this.beginCommand(`panel ${what}`)
+		this.refreshCommandPresentation()
 		const request = this.beginRequest(timeout)
 		try {
 			const res = await fetch(`${request.base}/panel/${what}`, {
@@ -1040,14 +1159,18 @@ class OnAirInstance extends InstanceBase {
 			if (res.ok) {
 				let delivered = null
 				let asked = null
+				let wasDark = null
 				try {
 					const body = await res.json()
 					delivered = body?.delivered ?? null
 					asked = body?.asked ?? null
+					wasDark = body?.wasDark ?? null
 				} catch {
 					/* a 200 with an unreadable body; the poll will settle it */
 				}
 				if (!this.isCurrent(request.generation)) return
+				this.panelProgress.delivered(operation.token, { delivered, asked, wasDark })
+				this.refreshCommandPresentation()
 				this.finishCommand(outcome, delivered === true ? 'accepted' : delivered === false ? 'undelivered' : 'unknown',
 					delivered === true ? `Panel ${asked ?? what} request delivered` : delivered === false ? 'Panel request not acknowledged' : 'Panel request outcome unknown')
 				if (delivered === false) {
@@ -1083,10 +1206,14 @@ class OnAirInstance extends InstanceBase {
 			// models no device. Nothing the operator can fix from the deck, but "not supported"
 			// beats a bare number.
 			if (!this.isCurrent(request.generation)) return
+			this.panelProgress.rejected(operation.token, { reason: 'rejected' })
+			this.refreshCommandPresentation()
 			this.finishCommand(outcome, 'rejected', `Panel request rejected (${res.status})`)
 			this.log('error', `panel ${what} failed: ${detail}`)
 		} catch (err) {
 			if (!this.isCurrent(request.generation)) return
+			this.panelProgress.rejected(operation.token, { reason: 'unknown' })
+			this.refreshCommandPresentation()
 			this.finishCommand(outcome, 'unknown', 'No reply; panel command outcome unknown')
 			if (err.name === 'TimeoutError') {
 				this.log('warn', `panel ${what}: no answer within ${timeout} ms. It may still have landed.`)
@@ -1143,6 +1270,9 @@ class OnAirInstance extends InstanceBase {
 	async postWrite(path, what) {
 		if (this.stopping) return
 		const command = this.beginCommand(what)
+		this.stateRequests++
+		this.statePressUntil = performance.now() + 500
+		this.refreshCommandPresentation()
 		const timeout = num(this.config.write_timeout_ms, 20000, 1000)
 		const request = this.beginRequest(timeout)
 		try {
@@ -1209,6 +1339,10 @@ class OnAirInstance extends InstanceBase {
 			this.log('error', `${what} failed: ${err.message}`)
 		} finally {
 			this.requests.delete(request)
+			if (this.isCurrent(request.generation)) {
+				this.stateRequests = Math.max(0, this.stateRequests - 1)
+				this.refreshCommandPresentation()
+			}
 		}
 	}
 
@@ -1220,6 +1354,19 @@ class OnAirInstance extends InstanceBase {
 		const white = combineRgb(255, 255, 255)
 		const black = combineRgb(0, 0, 0)
 		return {
+			panel_last_seen_asleep: {
+				type: 'boolean', name: 'Panel last observed asleep while current evidence is unknown',
+				options: [],
+				callback: () => this.panelObservation().physical === 'unknown' && this.lastPanelPhysical === 'asleep',
+			},
+			command_progress_value: {
+				type: 'value', name: 'Command button feedback',
+				options: [
+					{ type: 'dropdown', id: 'kind', label: 'Command', default: 'panel', choices: [{ id: 'panel', label: 'Panel sleep/wake' }, { id: 'state', label: 'State change' }] },
+					{ type: 'dropdown', id: 'field', label: 'Value', default: 'visible', choices: ['visible', 'header', 'caption', 'fraction', 'pulsing', 'known'].map(id => ({ id, label: id })) },
+				],
+				callback: ({ options }) => this.commandButtonValue(options.kind, options.field),
+			},
 			diagnostic_value: {
 				type: 'value', name: 'Diagnostics value',
 				options: [{ type: 'dropdown', id: 'field', label: 'Field', default: 'status', choices: [
@@ -1679,7 +1826,7 @@ class OnAirInstance extends InstanceBase {
 			],
 			steps: [{ down: [], up: [] }], feedbacks: [],
 		}
-		return presets
+		return enhanceCommandPresets(presets)
 	}
 }
 
