@@ -302,8 +302,13 @@ Receiver has the same permission. The optional signed runtime gives the Receiver
 Apple-signed app identity and a pinned Node binary without running the service as root.
 
 The native `On Air Receiver.app` supervisor stays alive while its bundled Node runs. It
-forwards termination signals and exit status. The bundle's identifier and display name stay
-stable across runtime updates. The app requires an Apple-issued signing identity selected
+forwards termination signals and exit status. A three-second shutdown grace force-terminates
+and reaps a Node helper that does not exit. The helper inherits the launchd job process group;
+a small native guardian waits for supervisor exit and terminates the owned job group,
+including descendants that ignore TERM. This also covers a hard `kickstart -k`, where the
+supervisor cannot run its own handler. It never signals a standalone caller's process group.
+`AbandonProcessGroup` remains false. The service template allows ten seconds before launchd
+force-kills the supervisor. The bundle's identifier and display name stay stable across runtime updates. The app requires an Apple-issued signing identity selected
 locally; there is no ad-hoc-signing fallback. Do not publish signing credentials. The included
 runtime manifest pins official Node archive URLs and SHA-256 values for each architecture.
 

@@ -168,6 +168,7 @@ def probe(args):
     plist.write_bytes(plistlib.dumps({
         "Label": label, "ProgramArguments": [str(app / "Contents/MacOS" / EXECUTABLE), "--probe", args.url],
         "AssociatedBundleIdentifiers": [BUNDLE_ID], "RunAtLoad": True,
+        "ExitTimeOut": 10, "AbandonProcessGroup": False,
         "StandardOutPath": str(log), "StandardErrorPath": str(log),
     }))
     target = f"gui/{uid}/{label}"

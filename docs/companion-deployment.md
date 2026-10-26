@@ -6,6 +6,40 @@ respects the host's existing custom-module import permission. It does not create
 spoof a local client, change permissions, edit connection settings, press buttons, or replace
 placed controls. A different Companion minor version requires reviewing its RPC contract.
 
+## One command from reviewed source
+
+From a clean committed checkout with dependencies and firmware verification prerequisites
+already installed, run:
+
+```sh
+npm run module:release -- \
+  --target http://companion-host:8000 --connection CONNECTION_ID \
+  --control 1/2/1 --control 1/2/2
+```
+
+This validates the clean checkout and synchronized versions, then creates a private Git
+clone at that exact commit. The clone installs its own dependencies with
+`npm ci --ignore-scripts`, runs the complete `npm run verify` gate, and builds the module.
+The caller's `node_modules`, `server/dist`, and served `server/public/admin` are never build
+destinations. The existing firmware verification environment is linked into the clone, and
+its secrets file is copied privately with mode 0600. Operator `ONAIR_*` environment
+overrides are removed from child installs, tests, and builds so they cannot repoint tests
+at live device addresses or state files.
+
+After validating the clean commit identity and bundle hash, the temporary clone (including
+its secrets copy) is removed. Only the validated module archive and SHA-256 sidecar are
+copied back into `companion-module/pkg`, then that exact artifact is passed to the deployment
+helper below. A missing verification prerequisite, failed gate/build, or caller checkout
+that changes during preparation stops before any Companion mutation. Failed builds do not
+replace existing caller artifacts. This command does not restart the Receiver or flash
+firmware.
+
+Version bumping, commits, pushes, GitHub tags, and release publication remain explicit
+reviewed operations. `module:release` performs none of them. Use `module:deploy deploy` for
+an already-built published artifact, and `module:deploy rollback` for recovery without
+rebuilding or rerunning the full source gate. The same target, connection, control,
+backup-directory, and activation-timeout options apply to both commands.
+
 ## Inspect and capture selected controls
 
 ```sh

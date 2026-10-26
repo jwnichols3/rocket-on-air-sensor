@@ -31,7 +31,8 @@
     "version:check": "node scripts/version.mjs check",
     "version:set": "node scripts/version.mjs set",
     "test:version": "node --test scripts/test/*.test.mjs",
-    "module:deploy": "node scripts/companion-deploy.mjs"
+    "module:deploy": "node scripts/companion-deploy.mjs",
+    "module:release": "node scripts/companion-release.mjs"
   },
   "devDependencies": {
     "@types/node": "^22",

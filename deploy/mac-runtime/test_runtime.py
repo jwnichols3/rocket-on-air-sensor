@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import plistlib
+import time
+import uuid
 import subprocess
 import tempfile
 import unittest
@@ -67,6 +70,96 @@ class NativeLauncherTest(unittest.TestCase):
             with self.assertRaises(ProcessLookupError): os.kill(child, 0)
         finally:
             if proc.poll() is None: proc.kill(); proc.wait()
+
+    def test_ignored_termination_is_bounded(self):
+        marker = self.root / ('ignore-' + uuid.uuid4().hex)
+        script = "process.on('SIGTERM',()=>{});require('fs').writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)"
+        proc = subprocess.Popen([str(self.exe), '-e', script, str(marker)])
+        child = None
+        try:
+            deadline = time.monotonic() + 5
+            while not marker.exists() and time.monotonic() < deadline: time.sleep(.02)
+            self.assertTrue(marker.exists())
+            child = int(marker.read_text())
+            started = time.monotonic()
+            proc.send_signal(signal.SIGTERM)
+            self.assertEqual(proc.wait(timeout=4.5), 137)
+            self.assertLess(time.monotonic() - started, 4.5)
+            with self.assertRaises(ProcessLookupError): os.kill(child, 0)
+        finally:
+            if child:
+                try: os.kill(child, signal.SIGKILL)
+                except ProcessLookupError: pass
+            if proc.poll() is None: proc.wait(timeout=5)
+
+    def test_launchd_hard_restart_cleans_node_and_grandchild(self):
+        marker = self.root / ('launchd-' + uuid.uuid4().hex + '.json')
+        label = 'com.rocket.onair.lifecycle-test.' + uuid.uuid4().hex
+        target = f'gui/{os.getuid()}/{label}'
+        child_script = "process.on('SIGTERM',()=>{});console.log('ready');setInterval(()=>{},1000)"
+        parent_script = "process.on('SIGTERM',()=>{});const p=require('child_process').spawn(process.execPath,['-e',process.argv[2]],{stdio:['ignore','pipe','ignore']});p.stdout.once('data',()=>require('fs').writeFileSync(process.argv[1],JSON.stringify([process.ppid,process.pid,p.pid])));setInterval(()=>{},1000)"
+        plist = self.root / (label + '.plist')
+        plist.write_bytes(plistlib.dumps({'Label': label, 'ProgramArguments': [str(self.exe), '-e', parent_script, str(marker), child_script],
+                                        'RunAtLoad': True, 'ExitTimeOut': 5, 'AbandonProcessGroup': False,
+                                        'ThrottleInterval': 1}))
+        recorded = []
+        def ready(previous=None):
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                try:
+                    value = json.loads(marker.read_text())
+                    if previous is None or value[0] != previous[0]: return value
+                except (OSError, ValueError): pass
+                time.sleep(.02)
+            self.fail('temporary launchd job did not become ready')
+        subprocess.run(['launchctl', 'bootstrap', f'gui/{os.getuid()}', str(plist)], check=True)
+        try:
+            old = ready(); recorded.append(old)
+            groups = {os.getpgid(pid) for pid in old}
+            self.assertEqual(len(groups), 1, 'runtime must inherit the launchd job process group')
+            self.assertNotIn(os.getpgrp(), groups, 'temporary job must not share the test runner group')
+            subprocess.run(['launchctl', 'kickstart', '-k', target], check=True)
+            new = ready(old); recorded.append(new)
+            deadline = time.monotonic() + 3
+            living = []
+            while time.monotonic() < deadline:
+                living = []
+                for pid in old:
+                    try: os.kill(pid, 0); living.append(pid)
+                    except ProcessLookupError: pass
+                if not living: break
+                time.sleep(.02)
+            details = subprocess.run(['ps', '-o', 'pid=,ppid=,pgid=,state=,comm=', '-p', ','.join(map(str, living))],
+                                     capture_output=True, text=True).stdout if living else ''
+            self.assertEqual(living, [], 'hard restart left old runtime processes alive: ' + details)
+            os.kill(new[0], signal.SIGKILL)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                living = []
+                for pid in new:
+                    try: os.kill(pid, 0); living.append(pid)
+                    except ProcessLookupError: pass
+                if not living: break
+                time.sleep(.02)
+            self.assertEqual(living, [], 'SIGKILL of supervisor left runtime descendants alive')
+            subprocess.run(['launchctl', 'kickstart', target], check=True)
+            newest = ready(new); recorded.append(newest)
+            subprocess.run(['launchctl', 'kill', 'SIGTERM', target], check=True)
+            deadline = time.monotonic() + 4.5
+            while time.monotonic() < deadline:
+                living = []
+                for pid in newest:
+                    try: os.kill(pid, 0); living.append(pid)
+                    except ProcessLookupError: pass
+                if not living: break
+                time.sleep(.02)
+            self.assertEqual(living, [], 'bounded TERM shutdown left runtime descendants alive')
+        finally:
+            subprocess.run(['launchctl', 'bootout', target], capture_output=True)
+            for group in recorded:
+                for pid in group:
+                    try: os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError: pass
 
     def test_probe_rejects_credentials_without_network_access(self):
         result = subprocess.run([str(self.exe), '--probe', 'http://user:password@127.0.0.1/'], capture_output=True)

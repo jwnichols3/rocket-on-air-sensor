@@ -99,6 +99,12 @@ export async function runDeployment(options, dependencies = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 300_000) throw new Error('Timeout must be an integer from 1000 to 300000 ms');
   if ((options.controls ?? []).length > 64) throw new Error('At most 64 explicitly selected controls can be snapshotted');
   const artifact = options.command === 'deploy' ? await inspectPackage(options.packagePath) : null;
+  // A source-release caller pins the artifact it just verified. Re-read validation must
+  // not silently accept another clean package replacing that path before deployment.
+  if (artifact && ((options.expectedCommit !== undefined && options.expectedCommit !== artifact.info.commit)
+    || (options.expectedArchiveSha256 !== undefined && options.expectedArchiveSha256 !== artifact.archiveSha256))) {
+    throw new Error('Package changed after source verification; no deployment attempted');
+  }
   let prior;
   if (options.command === 'rollback') {
     const raw = await readFile(options.backupPath, 'utf8');

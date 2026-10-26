@@ -48,6 +48,11 @@
 	<key>KeepAlive</key>
 	<true/>
 
+	<key>ExitTimeOut</key>
+	<integer>10</integer>
+	<key>AbandonProcessGroup</key>
+	<false/>
+
 	<key>RunAtLoad</key>
 	<true/>
 

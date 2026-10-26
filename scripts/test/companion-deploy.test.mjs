@@ -201,3 +201,14 @@ test('malformed rollback data does not echo private contents or contact Companio
   }), error => /invalid JSON/.test(error.message) && !error.message.includes('private-credential-data'));
   assert.equal(called, false);
 });
+
+test('source release pins commit and archive bytes before any network call', async (t) => {
+  const f = await artifact(t);
+  for (const mismatch of [{ expectedCommit: 'f'.repeat(40) }, { expectedArchiveSha256: 'f'.repeat(64) }]) {
+    let contacted = false;
+    await assert.rejects(runDeployment(options('deploy', f, mismatch), {
+      connect: async () => { contacted = true; },
+    }), /changed after source verification/);
+    assert.equal(contacted, false);
+  }
+});

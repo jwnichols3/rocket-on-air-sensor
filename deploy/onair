@@ -236,6 +236,24 @@ is_loaded() {
   sudo_launchctl print "$T" >/dev/null 2>&1
 }
 
+# bootout returns before launchd has necessarily removed the job. Starting it during
+# teardown can report bootstrap error 5, with "Operation already in progress" in logs.
+wait_for_unload() {
+  local deadline=$((SECONDS + ${1:-10})) output
+  while (( SECONDS < deadline )); do
+    if output="$(sudo_launchctl print "$T" 2>&1)"; then
+      sleep 0.1
+    elif [[ "$output" == *"Could not find service"* || "$output" == *"Could not find job"* ]]; then
+      return 0
+    else
+      echo "onair: cannot confirm service removal: $output" >&2
+      return 1
+    fi
+  done
+  echo "onair: service is still being removed after the bounded wait" >&2
+  return 1
+}
+
 # ensure_target_dir DIR - mkdir -p as TARGET_USER, whether invoked directly
 # or via sudo. A plain root-owned mkdir under sudo would leave the directory
 # unwritable by the daemon, which always runs as TARGET_USER.
@@ -815,6 +833,7 @@ cmd_reload() {
   echo "(e.g. after re-running install) actually take effect." >&2
   if is_loaded; then
     sudo_launchctl bootout "$T"
+    wait_for_unload || return 1
   fi
   sudo_launchctl bootstrap system "$PLIST_PATH"
   mutating_health_poll

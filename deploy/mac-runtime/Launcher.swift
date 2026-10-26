@@ -5,14 +5,55 @@ import Network
 
 private var childPID: pid_t = 0
 private var pendingSignal: Int32 = 0
+private var shutdownStarted: Int32 = 0
+private var forcedShutdown: Int32 = 0
+private func forceShutdown(_ number: Int32) {
+    let savedErrno = errno
+    forcedShutdown = 1
+    if childPID > 0 { _ = Darwin.kill(childPID, SIGKILL) }
+    errno = savedErrno
+}
 private func forwardSignal(_ number: Int32) {
-    if childPID > 0 { _ = Darwin.kill(-childPID, number) }
-    else { pendingSignal = number }
+    let savedErrno = errno
+    pendingSignal = number
+    if shutdownStarted == 0 {
+        shutdownStarted = 1
+        _ = Darwin.alarm(3)
+    }
+    if childPID > 0 { _ = Darwin.kill(childPID, number) }
+    errno = savedErrno
 }
 
 private func fail(_ message: String, _ code: Int32 = 125) -> Never {
     FileHandle.standardError.write(Data(("On Air Receiver: " + message + "\n").utf8))
     exit(code)
+}
+
+// launchd's group cleanup can leave a TERM-ignoring grandchild alive. This small
+// guardian waits in the kernel for the supervisor to exit, then kills that owned
+// job group. It is ready before Node starts, ignores soft shutdown signals, and
+// also works when the supervisor receives SIGKILL and cannot run a handler.
+if CommandLine.arguments.count == 6 && CommandLine.arguments[1] == "--watch-parent",
+   let parent = Int32(CommandLine.arguments[2]), let group = Int32(CommandLine.arguments[3]),
+   let readFD = Int32(CommandLine.arguments[4]), let readyFD = Int32(CommandLine.arguments[5]) {
+    guard parent > 1, group == parent, getpgrp() == group, getpid() != group,
+          getppid() == parent, readFD >= 3, readyFD >= 3 else { exit(125) }
+    close(readFD)
+    for number in [SIGTERM, SIGINT, SIGHUP] { _ = Darwin.signal(number, SIG_IGN) }
+    let queue = kqueue()
+    guard queue >= 0 else { exit(125) }
+    var event = kevent(ident: UInt(parent), filter: Int16(EVFILT_PROC),
+                       flags: UInt16(EV_ADD | EV_ONESHOT), fflags: UInt32(NOTE_EXIT),
+                       data: 0, udata: nil)
+    guard kevent(queue, &event, 1, nil, 0, nil) == 0 else { exit(125) }
+    var ready: UInt8 = 1
+    guard Darwin.write(readyFD, &ready, 1) == 1 else { exit(125) }
+    close(readyFD)
+    while kevent(queue, nil, 0, &event, 1, nil) < 0 {
+        if errno != EINTR { exit(125) }
+    }
+    _ = Darwin.kill(-group, SIGKILL)
+    exit(0)
 }
 
 let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
@@ -68,6 +109,7 @@ if arguments.first == "--probe" {
 
 guard FileManager.default.isExecutableFile(atPath: runtime) else { fail("bundled Node is missing") }
 for number in [SIGTERM, SIGINT, SIGHUP] { _ = Darwin.signal(number, forwardSignal) }
+_ = Darwin.signal(SIGALRM, forceShutdown)
 var attr: posix_spawnattr_t? = nil
 if posix_spawnattr_init(&attr) != 0 { fail("could not initialize child attributes") }
 defer { posix_spawnattr_destroy(&attr) }
@@ -75,11 +117,33 @@ var emptyMask = sigset_t()
 sigemptyset(&emptyMask)
 var defaults = sigset_t()
 sigemptyset(&defaults)
-for number in [SIGTERM, SIGINT, SIGHUP] { sigaddset(&defaults, number) }
+for number in [SIGTERM, SIGINT, SIGHUP, SIGALRM] { sigaddset(&defaults, number) }
 posix_spawnattr_setsigmask(&attr, &emptyMask)
 posix_spawnattr_setsigdefault(&attr, &defaults)
-posix_spawnattr_setpgroup(&attr, 0)
-posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETPGROUP))
+// Inherit launchd's job process group. Its default AbandonProcessGroup=false cleanup
+// then covers Node and descendants even when kickstart -k kills this supervisor.
+// Never signal the whole group here: standalone callers may share their own group.
+posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
+if getpgrp() == getpid() {
+    // Only an owned group gets a guardian. A standalone caller's group is never
+    // signalled; direct-child TERM/timeout handling below remains available there.
+    var pipeFDs: [Int32] = [0, 0]
+    guard pipe(&pipeFDs) == 0 else { fail("could not create guardian readiness pipe") }
+    let watcherArgs = [executable.path, "--watch-parent", String(getpid()), String(getpgrp()),
+                       String(pipeFDs[0]), String(pipeFDs[1])].map { strdup($0) } + [nil]
+    var watcher: pid_t = 0
+    let watcherResult = watcherArgs.withUnsafeBufferPointer { buffer in
+        posix_spawn(&watcher, executable.path, nil, &attr, UnsafeMutablePointer(mutating: buffer.baseAddress!), environ)
+    }
+    watcherArgs.forEach { free($0) }
+    close(pipeFDs[1])
+    guard watcherResult == 0 else { close(pipeFDs[0]); fail("could not start shutdown guardian") }
+    var descriptor = pollfd(fd: pipeFDs[0], events: Int16(POLLIN), revents: 0)
+    var ready: UInt8 = 0
+    let becameReady = poll(&descriptor, 1, 2000) > 0 && Darwin.read(pipeFDs[0], &ready, 1) == 1 && ready == 1
+    close(pipeFDs[0])
+    if !becameReady { _ = Darwin.kill(watcher, SIGKILL); fail("shutdown guardian did not become ready") }
+}
 let argv = ([runtime] + arguments).map { strdup($0) } + [nil]
 defer { argv.forEach { free($0) } }
 var pid: pid_t = 0
@@ -88,11 +152,16 @@ let result = argv.withUnsafeBufferPointer { buffer in
 }
 if result != 0 { fail("could not start bundled Node: \(String(cString: strerror(result)))", 126) }
 childPID = pid
-if pendingSignal != 0 { _ = Darwin.kill(-pid, pendingSignal) }
+if forcedShutdown != 0 { _ = Darwin.kill(pid, SIGKILL) }
+else if pendingSignal != 0 { _ = Darwin.kill(pid, pendingSignal) }
 var status: Int32 = 0
 while waitpid(pid, &status, 0) < 0 {
     if errno != EINTR { fail("could not wait for bundled Node") }
 }
 childPID = 0
+_ = Darwin.alarm(0)
+if forcedShutdown != 0 {
+    FileHandle.standardError.write(Data("On Air Receiver: Node exceeded the 3-second shutdown grace; terminated and reaped.\n".utf8))
+}
 let signalNumber = status & 0x7f
 exit(signalNumber == 0 ? (status >> 8) & 0xff : 128 + signalNumber)
