@@ -873,6 +873,26 @@ class OnAirInstance extends InstanceBase {
 		return `${action}: ${command.status === 'unknown' ? 'outcome unknown' : command.status}`
 	}
 
+	// The key has 72 physical pixels, so its captions are deliberately shorter than
+	// the full diagnostic variables. Two lines of at most eight capitals stay legible.
+	diagnosticCaption() {
+		return ({
+			READY: 'READY', ASLEEP: 'ASLEEP', 'RECEIVER OFFLINE': 'RECEIVER\nOFFLINE',
+			'PANEL UNREACHABLE': 'PANEL\nOFFLINE', 'PANEL UNCONFIRMED': 'PANEL\nNO ACK',
+			'AUTH ERROR': 'AUTH\nERROR', 'CONFIG ERROR': 'CONFIG\nERROR', 'RECEIVER ERROR': 'RECEIVER\nERROR',
+		})[this.diagnosticView().status] ?? 'CHECK\nSTATUS'
+	}
+
+	commandDisplay() {
+		const command = this.lastCommand
+		if (!command || command.status === 'none') return 'No command'
+		const action = command.label.startsWith('cycle state') ? 'Cycle'
+			: command.label.startsWith('set state') ? 'State'
+			: command.label.startsWith('panel ') ? 'Panel' : 'Table'
+		const outcome = { pending: 'WAIT', accepted: action === 'Table' ? 'OK' : 'SENT', undelivered: 'NO ACK', rejected: 'ERR', unknown: '?' }[command.status] ?? '?'
+		return `${action} ${outcome}`
+	}
+
 	beginCommand(label) {
 		const token = { id: ++this.commandId, generation: this.generation }
 		this.lastCommand = { ...token, label, status: 'pending', result: `Pending: ${label}` }
@@ -1205,8 +1225,11 @@ class OnAirInstance extends InstanceBase {
 				options: [{ type: 'dropdown', id: 'field', label: 'Field', default: 'status', choices: [
 					{ id: 'status', label: 'Status' }, { id: 'color', label: 'Background' }, { id: 'ink', label: 'Text color' },
 					{ id: 'command', label: 'Last command' }, { id: 'version', label: 'Module version' },
+					{ id: 'status_display', label: 'Compact status caption' }, { id: 'command_display', label: 'Compact command caption' },
 				] }],
 				callback: ({ options }) => {
+					if (options.field === 'status_display') return this.diagnosticCaption()
+					if (options.field === 'command_display') return this.commandDisplay()
 					if (options.field === 'command') return this.commandSummary()
 					if (options.field === 'version') return `v${MODULE_BUILD_INFO.version}`
 					return this.diagnosticView()[options.field] ?? ''
@@ -1644,13 +1667,15 @@ class OnAirInstance extends InstanceBase {
 			notes: 'Status distinguishes Receiver contact from physical panel evidence. A delivered or accepted command is not physical confirmation.',
 			canvas: { decoration: 'none' },
 			localVariables: ['status', 'color', 'ink', 'command', 'version'].map((field) => ({
-				variableName: field, variableType: 'feedback', feedbackId: 'diagnostic_value', options: { field },
+				variableName: field, variableType: 'feedback', feedbackId: 'diagnostic_value',
+				options: { field: field === 'status' || field === 'command' ? `${field}_display` : field },
 			})),
 			elements: [
 				{ type: 'box', id: 'background', x: 0, y: 0, width: 100, height: 100, color: local('color') },
-				{ type: 'text', id: 'status', x: 3, y: 4, width: 94, height: 48, text: local('status'), fontsize: 22, fontsizeAllowShrink: true, color: local('ink') },
-				{ type: 'text', id: 'command', x: 3, y: 55, width: 94, height: 24, text: local('command'), fontsize: 11, fontsizeAllowShrink: true, color: local('ink') },
-				{ type: 'text', id: 'version', x: 3, y: 83, width: 94, height: 14, text: local('version'), fontsize: 11, color: local('ink') },
+				// API 2 fontsize is a percent of this element's inner height, not pixels.
+				{ type: 'text', id: 'status', x: 3, y: 3, width: 94, height: 50, text: local('status'), fontsize: 100, fontsizeAllowShrink: true, color: local('ink') },
+				{ type: 'text', id: 'command', x: 3, y: 57, width: 94, height: 20, text: local('command'), fontsize: 100, fontsizeAllowShrink: true, color: local('ink') },
+				{ type: 'text', id: 'version', x: 3, y: 80, width: 94, height: 18, text: local('version'), fontsize: 100, color: local('ink') },
 			],
 			steps: [{ down: [], up: [] }], feedbacks: [],
 		}

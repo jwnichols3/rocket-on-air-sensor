@@ -129,3 +129,38 @@ test('a table response already in flight is followed up when the accepted target
  await second
  assert.equal(inst.tableVersion,3)
 })
+
+test('diagnostics font sizes use Companion element-relative percentages at 72px',async(t)=>{
+ const {inst}=await instance(t)
+ const preset=inst.buildPresets().diagnostics
+ const layers=preset.elements.filter(e=>e.type==='text')
+ // Companion 5.1.1 LayeredRenderer draws fontsize% of each element's inner height.
+ // These are requested line-box heights, before long text is shrunk to fit.
+ const lineBox=layer=>72*layer.height/100*0.97*layer.fontsize/100
+ assert(lineBox(layers.find(e=>e.id==='status'))>=30,'primary status must not start at a microscopic font')
+ for(const id of ['command','version'])assert(lineBox(layers.find(e=>e.id===id))>=11,`${id} needs a readable line box`)
+ for(const layer of layers)assert(layer.y+layer.height<=100)
+ const local=preset.localVariables
+ assert.equal(local.find(v=>v.variableName==='status').options.field,'status_display')
+ assert.equal(local.find(v=>v.variableName==='command').options.field,'command_display')
+})
+
+test('compact diagnostic captions fit the key while full diagnostics remain available',async(t)=>{
+ const {inst,variables}=await instance(t)
+ inst.ingest(status('boot-a',1,{confirmed:'unknown',confirmedReason:'unreachable'}))
+ const feedback=inst.buildFeedbacks().diagnostic_value
+ assert.equal(variables.diagnostic_status,'PANEL UNREACHABLE')
+ assert.equal(feedback.callback({options:{field:'status'}}),'PANEL UNREACHABLE')
+ assert.equal(feedback.callback({options:{field:'status_display'}}),'PANEL\nOFFLINE')
+ for(const text of ['READY','ASLEEP','RECEIVER OFFLINE','PANEL UNREACHABLE','PANEL UNCONFIRMED','AUTH ERROR','CONFIG ERROR','RECEIVER ERROR']){
+  inst.diagnosticView=()=>({status:text})
+  const lines=feedback.callback({options:{field:'status_display'}}).split('\n')
+  assert(lines.length<=2)
+  assert(lines.every(line=>line.length<=8),text)
+ }
+ const command=inst.beginCommand('cycle state (available -> on-air -> interruptible -> recording)')
+ inst.finishCommand(command,'accepted','Accepted: cycle state (available -> on-air -> interruptible -> recording)')
+ assert.equal(feedback.callback({options:{field:'command_display'}}),'Cycle SENT')
+ assert.match(variables.last_command,/available -> on-air/)
+ assert.match(feedback.callback({options:{field:'command'}}),/accepted/)
+})

@@ -1,5 +1,10 @@
 # Changelog
 
+## Companion module 0.8.1
+
+- Corrected the diagnostics preset's text sizing for Companion's native button canvas
+  so status, command outcome, and module version remain readable on physical keys.
+
 ## 0.3.0
 
 - Added an optional Apple-signed Mac Receiver app with a native supervisor and pinned
