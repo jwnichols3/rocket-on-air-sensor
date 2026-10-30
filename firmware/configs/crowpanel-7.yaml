@@ -123,6 +123,37 @@ font:
   - file: "gfonts://Roboto@700"
     id: clock_big
     size: 72
+  # The bigger clock looks, picked from rendered previews judged at a simulated 4 m and 8 m.
+  # Digits-only glyph sets keep each one to a few KB of flash. AM/PM is its own smaller font,
+  # top-aligned to the digits, at ~40% of their height so it still reads at distance.
+  - file: "gfonts://Roboto@700"
+    id: clock_roboto
+    size: 130
+    glyphs: "0123456789:-"
+  - file: "gfonts://Roboto@700"
+    id: clock_roboto_ampm
+    size: 54
+    glyphs: "AMP"
+  - file: "gfonts://Oswald@700"
+    id: clock_condensed
+    size: 170
+    glyphs: "0123456789:-"
+  - file: "gfonts://Oswald@700"
+    id: clock_condensed_ampm
+    size: 64
+    glyphs: "AMP"
+  - file: "gfonts://Roboto@900"
+    id: clock_badge
+    size: 120
+    glyphs: "0123456789:-"
+  - file: "gfonts://Roboto@900"
+    id: clock_badge_ampm
+    size: 50
+    glyphs: "AMP"
+  - file: "gfonts://Inter@800"
+    id: clock_clean
+    size: 140
+    glyphs: "0123456789:-"
 
 # ---- the repaint request, consumed (#64) -----------------------------------------
 #
@@ -283,7 +314,19 @@ display:
       // height would push it into the band. Scaling keeps every branch inside its own space.
       const int BAND_TOP = 430;
       const bool clock_on = id(show_clock).state;
-      const int state_top = clock_on ? 140 : 0;
+      // The clock style's geometry: the strip it takes, its fonts, and the digit and AM/PM cap
+      // heights MEASURED from the previews, which is what centres the digits in the strip.
+      // ampm == nullptr draws the old single string ("compact") or no AM/PM at all ("clean").
+      struct ClockLook { int strip; font::Font *digits; font::Font *ampm; int cap; int ampm_cap; bool badge; bool split; };
+      ClockLook look;
+      switch (onair::clock_style_index(id(clock_style).current_option().c_str())) {
+        case 1:  look = {200, id(clock_condensed), id(clock_condensed_ampm), 140, 52, false, true}; break;
+        case 2:  look = {185, id(clock_badge), id(clock_badge_ampm), 87, 36, true, true}; break;
+        case 3:  look = {180, id(clock_clean), nullptr, 103, 0, false, true}; break;
+        case 4:  look = {140, id(clock_big), nullptr, 52, 0, false, false}; break;
+        default: look = {180, id(clock_roboto), id(clock_roboto_ampm), 94, 38, false, true}; break;
+      }
+      const int state_top = clock_on ? look.strip : 0;
       auto sy = [&](int y) { return state_top + y * (BAND_TOP - state_top) / BAND_TOP; };
 
       if (view.shape == onair::Shape::NO_CONFIG) {
@@ -362,12 +405,43 @@ display:
       // ROW'S OWN background in `fg`, so it is legible on every colour in the table without
       // this file knowing any of them.
       //
-      // Centred at y=74 with a 72px font, so its top edge is ~38px - 8% of the 480px panel,
-      // inside the 5-10% margin asked for.
+      // "compact" is the original: centred at y=74 with a 72px font. The split looks centre
+      // their DIGITS in the strip and hang a smaller AM/PM off the cap line.
       if (clock_on) {
         auto t = id(wall_clock).now();
-        it.print(400, 74, id(clock_big), fg, TextAlign::CENTER,
-                 onair::format_clock(t.is_valid(), t.hour, t.minute).c_str());
+        std::string s = onair::format_clock(t.is_valid(), t.hour, t.minute);
+        if (!look.split) {
+          it.print(400, 74, look.digits, fg, TextAlign::CENTER, s.c_str());
+        } else {
+          // "12:48 PM" -> digits and suffix. `--:--` has no suffix and draws alone.
+          size_t sp = s.find(' ');
+          std::string hm = s.substr(0, sp);
+          std::string ap = (sp == std::string::npos || !look.ampm) ? "" : s.substr(sp + 1);
+          int x1, y1, w, h, aw = 0;
+          it.get_text_bounds(0, 0, hm.c_str(), look.digits, TextAlign::BASELINE_LEFT, &x1, &y1, &w, &h);
+          if (!ap.empty())
+            it.get_text_bounds(0, 0, ap.c_str(), look.ampm, TextAlign::BASELINE_LEFT, &x1, &y1, &aw, &h);
+          const int gap = ap.empty() ? 0 : look.cap / 9;
+          const int x0 = 400 - (w + gap + aw) / 2;
+          const int cap_top = look.strip / 2 - look.cap / 2;
+          Color ink = fg;
+          if (look.badge) {
+            // A black pill behind the digits: the same contrast on every row colour.
+            const int pw = w + gap + aw + 50, ph = look.cap + 44, r = 22;
+            const int px = 400 - pw / 2, py = look.strip / 2 - ph / 2;
+            const Color black(0, 0, 0);
+            it.filled_rectangle(px + r, py, pw - 2 * r, ph, black);
+            it.filled_rectangle(px, py + r, pw, ph - 2 * r, black);
+            for (int cx : {px + r, px + pw - r - 1})
+              for (int cy : {py + r, py + ph - r - 1})
+                it.filled_circle(cx, cy, r, black);
+            ink = Color(255, 255, 255);
+          }
+          it.print(x0, cap_top + look.cap, look.digits, ink, TextAlign::BASELINE_LEFT, hm.c_str());
+          if (!ap.empty())
+            it.print(x0 + w + gap, cap_top + look.ampm_cap, look.ampm, ink, TextAlign::BASELINE_LEFT,
+                     ap.c_str());
+        }
       }
 
       // ---- diagnostics band LAST, y>=430 is reserved and never overdrawn ----

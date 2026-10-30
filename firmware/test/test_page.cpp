@@ -967,6 +967,36 @@ static void test_glass_bar() {
   CHECK(req.status == 400);
   CHECK(!onair::take_clock_request(want));
 
+  begin("a style rides with the toggle, and the bar shows the stored one");
+  seed_table();
+  req = post({{"action", "glass"}, {"clock", "on"}, {"style", "badge"}});
+  CHECK(req.status == 200);
+  int style = -1;
+  CHECK(onair::take_clock_style_request(style));
+  CHECK(style == onair::clock_style_index("badge"));
+  CHECK_MSG(!onair::take_clock_style_request(style), "one-shot, like the toggle");
+  CHECK(onair::take_clock_request(want));
+  onair::publish_context("available", 1000, "10.42.14.239", "-52dBm", 60000, 1800000, true,
+                         "5:48 PM", onair::clock_style_index("condensed"));
+  h = get_config();
+  CHECK(has(h, "<option value=\"condensed\" selected>"));
+  CHECK(!has(h, "<option value=\"roboto\" selected>"));
+
+  begin("no style in the POST leaves the stored one alone; an unknown one is refused");
+  seed_table();
+  req = post({{"action", "glass"}, {"clock", "on"}});
+  CHECK(req.status == 200);
+  CHECK(!onair::take_clock_style_request(style));
+  CHECK(onair::take_clock_request(want));
+  req = post({{"action", "glass"}, {"clock", "on"}, {"style", "comic-sans"}});
+  CHECK(req.status == 400);
+  CHECK(has(req.body, "unknown clock style"));
+  CHECK(!onair::take_clock_request(want));
+  CHECK(!onair::take_clock_style_request(style));
+
+  begin("the first style is the default, and it is the one the panel ships with");
+  CHECK(std::string(onair::CLOCK_STYLES[0].id) == "roboto");
+
   begin("the glass bar is behind the same CSRF check as everything else");
   seed_table();
   req = post({{"action", "glass"}, {"clock", "on"}}, "http://evil.example");
