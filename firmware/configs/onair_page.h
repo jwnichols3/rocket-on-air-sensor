@@ -589,10 +589,12 @@ inline void render_appearance(std::string &h) {
 inline void render_glass(std::string &h) {
   bool on;
   std::string now;
+  int style;
   {
     esphome::LockGuard guard(held().lock);
     on = held().clock_on;
     now = held().clock;
+    style = held().clock_style;
   }
   h += "<form method=\"post\" action=\"/onair/config\" class=\"bar\">"
        "<input type=\"hidden\" name=\"action\" value=\"glass\">"
@@ -603,7 +605,21 @@ inline void render_glass(std::string &h) {
   h += "> Off</label><label><input type=\"radio\" name=\"clock\" value=\"on\"";
   if (on)
     h += " checked";
-  h += "> On</label><button>Apply</button><span class=\"m\">";
+  h += "> On</label>";
+  // The look, in the same form so one Apply sets both. The 7-inch panel draws these; the
+  // Elegoo's 128x64 glass has one clock and ignores the choice.
+  h += "<select name=\"style\" aria-label=\"Clock style\">";
+  for (int i = 0; i < CLOCK_STYLE_COUNT; i++) {
+    h += "<option value=\"";
+    h += CLOCK_STYLES[i].id;
+    h += "\"";
+    if (i == style)
+      h += " selected";
+    h += ">";
+    h += CLOCK_STYLES[i].name;
+    h += "</option>";
+  }
+  h += "</select><button>Apply</button><span class=\"m\">";
   // THREE outcomes and not two, because "on but the panel has never been told the time"
   // is its own state and is the one worth naming. From across the room it looks exactly
   // like a clock that is merely wrong, and the fix is somewhere else entirely - this panel
@@ -618,7 +634,7 @@ inline void render_glass(std::string &h) {
   } else {
     h += "Showing <strong>";
     h += html_escape(now);
-    h += "</strong> in the panel's diagnostics strip.";
+    h += "</strong> at the top of the panel.";
   }
   h += "</span></form>";
 }
@@ -989,6 +1005,16 @@ inline Submitted handle_action(AsyncWebServerRequest *request, std::string &note
       return Submitted::FAILED;
     }
     c.show_clock = clock == "on";
+    // Optional, so a POST from before styles existed still works; refused if present and
+    // unknown, for the same reason as `clock` above.
+    std::string style = param(request, "style");
+    if (!style.empty()) {
+      c.clock_style = clock_style_index(style);
+      if (c.clock_style < 0) {
+        note = "unknown clock style";
+        return Submitted::FAILED;
+      }
+    }
     c.kind = Command::GLASS;
     return submit(c, note);
   }
