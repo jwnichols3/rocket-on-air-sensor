@@ -914,7 +914,8 @@ interval:
                                  (uint32_t) id(connection_lost_ms).state,
                                  (uint32_t) id(no_data_ms).state,
                                  id(show_clock).state,
-                                 onair::format_clock(t.is_valid(), t.hour, t.minute));
+                                 onair::format_clock(t.is_valid(), t.hour, t.minute),
+                                 onair::clock_style_index(id(clock_style).current_option().c_str()));
           onair::pump();
 
       # THE CLOCK TOGGLE COMING BACK THE OTHER WAY (#70), and it is a request rather than a
@@ -934,6 +935,11 @@ interval:
             } else {
               id(show_clock).turn_off();
             }
+          }
+          int style;
+          if (onair::take_clock_style_request(style)) {
+            ESP_LOGI("onair", "clock style set to %s from the device page", onair::CLOCK_STYLES[style].id);
+            id(clock_style).make_call().set_option(onair::CLOCK_STYLES[style].id).perform();
           }
       - lambda: |-
           // #81. The page validated it; this writes it. The three entities are what PERSIST
@@ -1028,6 +1034,20 @@ sensor:
     update_interval: 5s
     accuracy_decimals: 0
     lambda: 'return (float) id(frames);'
+
+select:
+  # HOW the clock looks, when it is on. The ids are CLOCK_STYLES in onair_table.h, matched by
+  # string; the first is the default. Only the CrowPanel draws a difference.
+  - platform: template
+    name: "ClockStyle"
+    id: clock_style
+    optimistic: true
+    restore_value: true
+    options: ["roboto", "condensed", "badge", "clean", "compact"]
+    initial_option: "roboto"
+    on_value:
+      then:
+        - lambda: 'id(repaint_pending) = true;'
 
 text_sensor:
   # WHICH BUILD IS ACTUALLY RUNNING (#87). Stock ESPHome, and the answer to the one question

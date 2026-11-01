@@ -363,6 +363,9 @@ struct Command {
   Mode mode{Mode::DARK};
   /// Only meaningful for GLASS (#70). Validated on the HTTP side before staging.
   bool show_clock{false};
+  /// Also GLASS. An index into CLOCK_STYLES, or -1 for "the POST did not name a style",
+  /// which leaves the stored one alone.
+  int clock_style{-1};
   /// Only meaningful for BENCH (#87). Validated on the HTTP side before staging.
   int bench_level{-1};
   /// Only meaningful for NIGHT (#81). Validated on the HTTP side before staging - the main
@@ -513,6 +516,8 @@ struct Held {
   /// completely different problems.
   bool clock_on{false};
   std::string clock;
+  /// The `ClockStyle` select, mirrored for the page as an index into CLOCK_STYLES.
+  int clock_style{0};
   /// Staged page action, and the one-shot flag that asks the main loop to run the pull.
   Command cmd;
   LastResult last;
@@ -526,6 +531,9 @@ struct Held {
   /// loop. Keeping a second copy of the state here would be a second source of truth.
   enum class ClockRequest : uint8_t { NONE = 0, OFF, ON };
   ClockRequest clock_request{ClockRequest::NONE};
+  /// A style asked for by the page, as an index into CLOCK_STYLES, or -1 for none. A request
+  /// for the same reason as `clock_request`: the `ClockStyle` select is what persists it.
+  int clock_style_request{-1};
   /**
    * Guards `table`, `overlay`, `cmd` and the two mirrors against the HTTP task.
    *
@@ -676,6 +684,36 @@ inline std::string format_clock(bool valid, uint8_t hour, uint8_t minute) {
   char buf[12];
   snprintf(buf, sizeof(buf), "%d:%02u %s", h, (unsigned) minute, hour < 12 ? "AM" : "PM");
   return std::string(buf);
+}
+
+/**
+ * The clock LOOKS the page can pick between. Ids are the options of the `ClockStyle` select
+ * in onair-core.yaml, and the YAML matches them BY STRING, never by position, so the order
+ * here is only the order the page lists them in. The first entry is the default.
+ *
+ * WHICH looks, and the default, came from rendering each one at 800x480 with 1-bit glyphs
+ * and judging them from a simulated 4 m and 8 m. HOW each one is drawn is board knowledge
+ * and lives in crowpanel-7.yaml; the Elegoo's 128x64 glass has one clock and ignores this.
+ */
+struct ClockStyle {
+  const char *id;
+  const char *name;
+};
+inline constexpr ClockStyle CLOCK_STYLES[] = {
+    {"roboto", "Large"},
+    {"condensed", "Largest, condensed"},
+    {"badge", "Large, on a black badge"},
+    {"clean", "Large, no AM/PM"},
+    {"compact", "Compact (the original)"},
+};
+inline constexpr int CLOCK_STYLE_COUNT = sizeof(CLOCK_STYLES) / sizeof(CLOCK_STYLES[0]);
+
+/// Index into CLOCK_STYLES, or -1 for an id this build does not know.
+inline int clock_style_index(const std::string &id) {
+  for (int i = 0; i < CLOCK_STYLE_COUNT; i++)
+    if (id == CLOCK_STYLES[i].id)
+      return i;
+  return -1;
 }
 
 /**
@@ -1109,7 +1147,7 @@ inline void publish_context(const std::string &key, uint32_t last_contact_ms,
                             const std::string &ip, const std::string &db,
                             uint32_t lost_ms = CONNECTION_LOST_MS,
                             uint32_t no_data_ms = NO_DATA_MS, bool clock_on = false,
-                            const std::string &clock = std::string()) {
+                            const std::string &clock = std::string(), int clock_style = 0) {
   esphome::LockGuard guard(held().lock);
   held().key = key;
   held().last_contact_ms = last_contact_ms;
@@ -1119,6 +1157,7 @@ inline void publish_context(const std::string &key, uint32_t last_contact_ms,
   held().db = db;
   held().clock_on = clock_on;
   held().clock = clock;
+  held().clock_style = clock_style;
 }
 
 /// Applies a staged command. Main loop only; the lock is held only across the mutation,
@@ -1143,7 +1182,10 @@ inline void apply_command(const Command &c, bool &ok, std::string &note) {
     }
     case Command::GLASS:
       held().clock_request = c.show_clock ? Held::ClockRequest::ON : Held::ClockRequest::OFF;
+      held().clock_style_request = c.clock_style;
       note = c.show_clock ? "the panel will show the time" : "the panel will stop showing the time";
+      if (c.clock_style >= 0)
+        note += std::string(" (") + CLOCK_STYLES[c.clock_style].name + ")";
       return;
     case Command::NIGHT:
       // A REQUEST, not the setting. The three settings live in ESPHome entities, which is
@@ -1370,6 +1412,16 @@ inline bool take_clock_request(bool &on) {
     return false;
   on = held().clock_request == Held::ClockRequest::ON;
   held().clock_request = Held::ClockRequest::NONE;
+  return true;
+}
+
+/// One-shot: true once per clock style the page asked for, with its CLOCK_STYLES index.
+/// Main loop only, same shape as take_clock_request.
+inline bool take_clock_style_request(int &style) {
+  if (held().clock_style_request < 0)
+    return false;
+  style = held().clock_style_request;
+  held().clock_style_request = -1;
   return true;
 }
 
