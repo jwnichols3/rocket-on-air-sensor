@@ -1,6 +1,6 @@
 # Several Macs reporting calls, one light
 
-Design, 2026-11-01. Status: **proposed, not built.** Needs Rocket's go and a D-row before code.
+Design, 2026-11-01. Status: **accepted (D-152), not built.**
 
 ## Problem
 
@@ -115,24 +115,24 @@ find an empty set and turn the light calm with A still in the call.
 - `DELETE /calls/{sensorId}` clears one claim. It is passphrase-gated. Clearing the last claim
   follows the same table as `inCall: false`.
 
-### 5. Stale claims - DECISION PENDING
+### 5. Stale claims - decided: option A (D-152)
 
 A Mac can disappear mid-call: it sleeps with the lid closed, leaves the LAN, crashes, or is
 switched off. Its claim stays, and the light stays ON.
 
-**Option A, recommended: the sensor clears its own claim.** The Receiver has no timer. The
+**Option A, chosen: the sensor clears its own claim.** The Receiver has no timer. The
 sensor reports its full truth at launch, at full wake (D-055's gate), when the network comes
 back, and on every transition. A sleeping laptop clears its claim when it next wakes on the
 LAN. A Mac that never returns leaves the light ON until Rocket clears the claim in the admin
 console or the light is set by hand. That is a false ON, the lesser failure (§3), and the
 console shows its cause.
 
-**Option B: claims expire.** The sensor renews every 60 s during a call, and the Receiver drops
+**Option B, rejected: claims expire.** The sensor renews every 60 s during a call, and the Receiver drops
 a claim not renewed for about 5 minutes. This heals itself, but it puts a clock back on the
 Receiver, which D-91 removed on purpose. A network drop longer than the expiry would also turn
 the light calm during a live call: a false OFF.
 
-Rocket's choice will be recorded as a D-row before implementation.
+Rocket chose A on 2026-11-01 (D-152).
 
 ### 6. What a sensor must do
 
