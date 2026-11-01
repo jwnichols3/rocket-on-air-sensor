@@ -1,6 +1,6 @@
 # Several Macs reporting calls, one light
 
-Design, 2026-11-01. Status: **accepted (D-152), not built.**
+Design, 2026-11-01. Status: **accepted (D-152), built.**
 
 ## Problem
 
@@ -89,11 +89,12 @@ the call. It also covers a call that starts while the state is already `busy`, s
 `recording` set by hand before joining. The first claim does not write, so the flag stays
 false, and the end of the call does not overwrite `recording` either.
 
-**The call row and calm row are configuration.** They are two new keys beside
-`shortcuts.on` and `shortcuts.off`: `calls.on` (seeded `on-air`) and `calls.off` (seeded
-`available`). If either names a row that no longer exists, the claim is still recorded and the
-state write is skipped. That is the same fail-closed rule as §5's unknown id: a typo never
-renders calm. Admin health reports it.
+**The call row and calm row are the `/on` and `/off` shortcuts.** `shortcuts.on` (seeded
+`on-air`) and `shortcuts.off` (seeded `available`) already mean "the row for on" and "the row for
+off", so claims resolve through them rather than through two new keys (changed at build time,
+2026-11-01: one setting, not two). If either is unset or names a row that no longer exists, the
+claim is still recorded and the state write is skipped. That is the same fail-closed rule as
+§5's unknown id: a typo never renders calm. The log says why.
 
 **State writes made by claims** carry the reporting sensor's `source`, so `/status` still says
 who put the light where it is.
@@ -111,7 +112,8 @@ find an empty set and turn the light calm with A still in the call.
 - `GET /status` gains `calls`: an array of `{ sensorId, source, since, lastReportAt }`.
   Additive. Older clients ignore it. `lastReportAt` is a fact, in D-91's sense: the server
   reports it and never branches on it.
-- `GET /admin/health` lists the claims. The admin console shows them with a **Clear** button.
+- `GET /admin/health` lists the claims. A **Clear** button in the admin console is a follow-up;
+  until then `DELETE /calls/{sensorId}` does it.
 - `DELETE /calls/{sensorId}` clears one claim. It is passphrase-gated. Clearing the last claim
   follows the same table as `inCall: false`.
 
@@ -170,5 +172,5 @@ change, not this repo's. If needed, a hand-off prompt in the style of
 - Concurrent `inCall: false` from the last two sensors, which `writeChain` serializes: exactly
   one calm write.
 - `inCall: false` from an unknown sensor: no state write.
-- `calls.off` names a deleted row: the claim clears and the state does not go calm.
+- `shortcuts.off` names a deleted row: the claim clears and the state does not go calm.
 - `PUT /state` is unchanged. Every existing test passes unedited.

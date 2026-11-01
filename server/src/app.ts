@@ -319,6 +319,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
       const result = await commitConfig(fresh);
       if (!result.ok) return result;
       store.write(UNKNOWN_ID, { kind: 'human', label: 'factory-reset', raw: 'human:factory-reset' });
+      store.clearCalls();
       store.clearMessage();
       await saveState(opts.stateFile, store.persisted());
       try { await driver.set(UNKNOWN_ID); } catch (err) {

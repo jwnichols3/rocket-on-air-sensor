@@ -86,6 +86,7 @@ One object, persisted atomically, restored on restart.
 | `statusSequence` | positive safe integer | Orders status observations within one Receiver instance. Advances when state, confirmation/reason, message, or table changes. Not persisted. |
 | `stateResolvedFrom` | string \| absent | Present only when the live row was deleted and the state fell back to `unknown`. Names the dead `id`. |
 | `message` | string \| `null` | Optional display message. Independent of state writes - a state write never touches it. |
+| `calls` | array | Open **call claims**, `[]` when none (D-152). Each is `{ sensorId, source, since, lastReportAt }`. `since` and `lastReportAt` are facts; the server never branches on them. See §5c. |
 
 ### Ordering observations across transports
 
@@ -487,6 +488,65 @@ something advisory that the device re-pulls on its own interval anyway. The cons
 that a table edit made while the panel is unreachable reaches it at worst one supervisor poll
 later than it used to, instead of waiting for the next state write. Nothing on this API's
 surface changes.
+
+## 5c. Call claims - `PUT /calls/{sensorId}`, `DELETE /calls/{sensorId}`
+
+Added 2026-11-01 (issue 103, D-152). **This is how a call detector should write.** Several
+detectors - one per Mac - can report the same call, and the light stays ON AIR until the last
+one has left. No single detector can enforce that, because none of them can see the others, so
+the Receiver holds the set.
+
+```
+PUT /calls/studio-mac
+{ "inCall": true, "source": "auto:call-detector-studio" }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `sensorId` (path) | yes | `^[a-z0-9][a-z0-9-]{0,31}$`. Generated once per install, never changed. |
+| `inCall` | yes | Boolean. The detector's **whole truth**, not a delta. A repeat is idempotent. |
+| `source` | yes | Prefixed, exactly as on `PUT /state` (§4). |
+
+Passphrase-gated. Response: `200` with the `GET /status` body, whose `calls` array lets the
+detector confirm its own claim from the same answer (D-90).
+
+**What a report does to the state.** Computed inside the write queue, so two reports arriving
+together are applied in order and exactly one of them sees the empty set:
+
+| Claims before | Report | State write |
+|---|---|---|
+| none | `inCall: true` | `shortcuts.on` (seeded `on-air`), **unless the current state is already `busy`** |
+| one or more | `inCall: true` | none |
+| two or more | `inCall: false` | none - **the multi-Mac rule** |
+| one | `inCall: false` | `shortcuts.off` (seeded `available`), **only if the call mechanism wrote the current state** |
+| any | `inCall: false` from a sensor with no claim | none |
+
+"The call mechanism wrote the current state" is true from the first claim's write until any
+other state write, through any route, from any source. So a row a person sets during a call
+(`interruptible`, `recording`) survives the end of the call, and so does a busy row that was
+already showing when the call began. The rows are the same configuration `/on` and `/off`
+resolve through. If the row named is unset or no longer in the table, the claim is still
+recorded and the state is left alone - never guessed at (§6).
+
+**`PUT /state` is unchanged and still last-write-wins (§3).** Claims add no precedence and veto
+nothing. But a detector that writes `available` through `PUT /state` when its call ends
+bypasses the claim set and turns the light calm while another Mac is still in the call. **A
+call detector must use this route, not `PUT /state`.**
+
+**Stale claims are cleared by their owner, never by age** (D-152, D-91). The server keeps no
+lease and no timer. A detector reports its whole truth at launch, at wake, when its network
+returns and when it goes to sleep. A Mac that vanishes mid-call leaves its claim, and the light,
+ON - a false ON, the lesser failure - until it reports again or a person clears it with:
+
+```
+DELETE /calls/{sensorId}?source=human:admin
+```
+
+`DELETE` follows the same table as `inCall: false`. Claims persist across a restart, and
+`GET /admin/health` lists them. Factory reset clears them.
+
+Errors: `400` for a bad `sensorId`, a non-boolean `inCall`, a missing or unprefixed `source`, or
+a body that is not JSON. Plus the `401` every gated route can answer.
 
 ## 5b. Darkening the panel - `POST /panel/sleep`, `POST /panel/wake`, `POST /panel/toggle`
 

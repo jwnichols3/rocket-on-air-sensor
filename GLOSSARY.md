@@ -5548,4 +5548,9 @@ else (state, light control, API) lives on the receiver.
   lesser failure (§3), and the console names the Mac holding it. Expiring leases were rejected,
   because a network drop longer than the lease would turn the light calm during a live call.
 
-  Not built yet. The sensor is a separate project (D-30).
+  **Built 2026-11-01.** At build time the call row and calm row became `shortcuts.on` and
+  `shortcuts.off` - the same setting `/on` and `/off` resolve through - rather than two new
+  config keys: "the row for on" is one setting, not two. `GET /status` gains `calls` (always
+  present); `stateFromCalls` is persisted and never on the wire. The admin console's Clear
+  button is a follow-up; `DELETE /calls/{sensorId}` does it meanwhile. The detector is a separate
+  project (D-30, `rocket-call-detector`).
