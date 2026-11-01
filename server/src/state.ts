@@ -174,6 +174,31 @@ export function coerceSource(raw: unknown): Source {
  */
 export type ConfirmedReason = 'asleep' | 'not-repainting' | 'unreachable';
 
+/**
+ * A CALL CLAIM (D-152): one detector saying "Rocket is in a call on this Mac". The Receiver
+ * holds a set of them so the light stays ON AIR until the LAST Mac leaves - a rule no single
+ * detector can enforce, because none of them can see the others.
+ *
+ * `since` and `lastReportAt` are FACTS in D-91's sense. Nothing here branches on either: a
+ * claim is removed only by its own detector or by a person, never by age (D-152, option A).
+ */
+export interface CallClaim {
+  /** `ID_PATTERN`. Generated once per install by the detector and never changed. */
+  sensorId: string;
+  /** The reporting detector's `kind:label`, for display. */
+  source: string;
+  since: string;
+  lastReportAt: string;
+}
+
+/** What a call report asks the queue to do to the state, if anything. */
+export interface CallReportResult {
+  /** The row to write, or null when the claim set changed without touching the state. */
+  write: string | null;
+  /** Why a write that the table would otherwise call for did not happen, for the log. */
+  skipped?: string;
+}
+
 export interface OnAirState {
   /** A REFERENCE to a row, never a copy of one. */
   state: string;
@@ -197,10 +222,23 @@ export interface OnAirState {
    * a feature that does that is worse than not having it.
    */
   confirmedReason?: ConfirmedReason;
+  /**
+   * The open call claims (D-152). Optional so every OnAirState literal written before claims
+   * existed still type-checks; absent and `[]` mean the same thing.
+   */
+  calls?: CallClaim[];
+  /**
+   * True only while the CURRENT state was written by the first call claim. Any other state
+   * write clears it. It is what lets the end of a call leave alone a row a person chose during
+   * it (`interruptible`, `recording`). Persisted, never on the wire.
+   */
+  stateFromCalls?: boolean;
 }
 
 /** The §2 object as it goes on the wire, with the derived fields filled in. */
-export interface StatusBody extends OnAirState {
+export interface StatusBody extends Omit<OnAirState, 'stateFromCalls' | 'calls'> {
+  /** Open call claims, always present on the wire (`[]` when none). D-152. */
+  calls: CallClaim[];
   /** Opaque lifetime identifier. A fresh Receiver starts a new sequence namespace. */
   receiverInstanceId: string;
   /** Orders observations, including confirmation changes that do not move updatedAt. */
@@ -230,6 +268,7 @@ export function defaultState(now: Date = new Date()): OnAirState {
     source: 'human:boot',
     updatedAt: now.toISOString(),
     message: null,
+    calls: [],
   };
 }
 
@@ -284,8 +323,75 @@ export class StateStore {
       updatedAt: now.toISOString(),
     };
     delete next.stateResolvedFrom;
+    // ANY state write - human, automated, factory reset, or the call mechanism's own - ends
+    // the call mechanism's ownership. The call path sets it again after its own write.
+    delete next.stateFromCalls;
     this.replaceState(next);
     return this.get();
+  }
+
+  /**
+   * Apply one detector's report to the claim set and say what, if anything, the state should
+   * become (D-152). Pure bookkeeping: it never touches `state` itself, because the state write
+   * has to go through the driver like every other write. The caller runs this INSIDE the write
+   * queue, so two reports arriving together see each other - the `/cycle` argument again.
+   *
+   * | before | report               | state write                                         |
+   * |--------|----------------------|-----------------------------------------------------|
+   * | 0      | inCall               | `onRow`, unless the current state is already busy   |
+   * | >=1    | inCall               | none                                                |
+   * | >=2    | !inCall, held        | none - the multi-Mac rule                           |
+   * | 1      | !inCall, held        | `offRow`, only if `stateFromCalls`                  |
+   * | any    | !inCall, not held    | none, and the claim set is untouched                |
+   */
+  reportCall(
+    sensorId: string,
+    inCall: boolean,
+    source: Source,
+    rows: { on: string | null; off: string | null },
+    now: Date = new Date(),
+  ): CallReportResult {
+    const calls = this.state.calls ?? [];
+    const held = calls.find((c) => c.sensorId === sensorId);
+    const at = now.toISOString();
+
+    if (inCall) {
+      const next = held
+        ? calls.map((c) => (c.sensorId === sensorId ? { ...c, source: source.raw, lastReportAt: at } : c))
+        : [...calls, { sensorId, source: source.raw, since: at, lastReportAt: at }];
+      this.replaceState({ ...this.state, calls: next });
+      if (calls.length > 0) return { write: null };
+      if (this.busy()) return { write: null, skipped: `state ${this.state.state} is already busy` };
+      if (rows.on === null || !this.table.has(rows.on)) {
+        return { write: null, skipped: `the call row ${JSON.stringify(rows.on)} is not in the table` };
+      }
+      return { write: rows.on };
+    }
+
+    if (!held) return { write: null };
+    const next = calls.filter((c) => c.sensorId !== sensorId);
+    this.replaceState({ ...this.state, calls: next });
+    if (next.length > 0) return { write: null };
+    if (!this.state.stateFromCalls) {
+      return { write: null, skipped: `state ${this.state.state} was set by ${this.state.source} during the call` };
+    }
+    // Fail closed: a calm row that no longer exists is never guessed at (D-34).
+    if (rows.off === null || !this.table.has(rows.off)) {
+      return { write: null, skipped: `the calm row ${JSON.stringify(rows.off)} is not in the table` };
+    }
+    return { write: rows.off };
+  }
+
+  /** Called by the call path right after it wrote the first claim's row. */
+  markStateFromCalls(): void {
+    this.replaceState({ ...this.state, stateFromCalls: true });
+  }
+
+  /** Every open claim, removed at once. Factory reset, and nothing else. */
+  clearCalls(): void {
+    const next = { ...this.state, calls: [] };
+    delete next.stateFromCalls;
+    this.replaceState(next);
   }
 
   setConfirmed(confirmed: string, reason?: ConfirmedReason): OnAirState {
@@ -315,10 +421,11 @@ export class StateStore {
 
   /** The §2 object, with every derived field computed at read time so none can drift. */
   status(now: Date = new Date()): StatusBody {
-    const s = this.get();
+    const { stateFromCalls: _owned, calls, ...s } = this.get();
     const busy = this.table.busy(s.state);
     return {
       ...s,
+      calls: (calls ?? []).map((c) => ({ ...c })),
       receiverInstanceId: this.receiverInstanceId,
       statusSequence: this.statusSequence,
       busy,
@@ -354,7 +461,9 @@ export class StateStore {
 function sameState(a: OnAirState, b: OnAirState): boolean {
   return a.state === b.state && a.confirmed === b.confirmed && a.source === b.source
     && a.updatedAt === b.updatedAt && a.message === b.message
-    && a.stateResolvedFrom === b.stateResolvedFrom && a.confirmedReason === b.confirmedReason;
+    && a.stateResolvedFrom === b.stateResolvedFrom && a.confirmedReason === b.confirmedReason
+    && Boolean(a.stateFromCalls) === Boolean(b.stateFromCalls)
+    && JSON.stringify(a.calls ?? []) === JSON.stringify(b.calls ?? []);
 }
 
 function tableObservation(table: StateTable): string {

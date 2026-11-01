@@ -5529,3 +5529,28 @@ else (state, light control, API) lives on the receiver.
   did not include `night` because no default page had ever posted it; the Clock bar's on/off
   assertions matched any `value="on" checked` and now had two radio pairs to choose from. Both
   now name what they mean.
+
+- **D-152 (2026-11-01)** **Several Macs can report calls; the light stays ON AIR until the last
+  one leaves. A Mac clears its own call claim; the Receiver never expires one.** Issue 103,
+  design `docs/superpowers/specs/2026-11-01-call-claims-design.md`. Rocket: *"the state should
+  remain on-air until all computers exit zoom"*, and a state set by hand during a call
+  (`interruptible`, `recording`) survives the call's end.
+
+  A new resource, `PUT /calls/{sensorId}`, holds a persisted set of **call claims**. The first
+  claim writes the call row unless the state is already busy. The last claim's end writes the
+  calm row only if nothing else wrote the state during the call. `PUT /state` is unchanged, and
+  D-126 stands: claims add no precedence to state writes.
+
+  **Stale claims (Rocket's choice, option A).** A claim from a Mac that vanished mid-call stays
+  until that Mac reports again at launch, full wake or network return, or until a person clears
+  it in the admin console. The Receiver keeps no lease and no timer, which keeps D-91 intact.
+  The cost is accepted: a Mac that never returns holds the light ON. That is a false ON, the
+  lesser failure (§3), and the console names the Mac holding it. Expiring leases were rejected,
+  because a network drop longer than the lease would turn the light calm during a live call.
+
+  **Built 2026-11-01.** At build time the call row and calm row became `shortcuts.on` and
+  `shortcuts.off` - the same setting `/on` and `/off` resolve through - rather than two new
+  config keys: "the row for on" is one setting, not two. `GET /status` gains `calls` (always
+  present); `stateFromCalls` is persisted and never on the wire. The admin console's Clear
+  button is a follow-up; `DELETE /calls/{sensorId}` does it meanwhile. The detector is a separate
+  project (D-30, `rocket-call-detector`).

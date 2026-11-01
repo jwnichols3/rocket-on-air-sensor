@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { defaultState, UNKNOWN_ID, type OnAirState, type PersistedState } from './state.js';
+import { defaultState, ID_PATTERN, UNKNOWN_ID, type CallClaim, type OnAirState, type PersistedState } from './state.js';
 
 /**
  * The v1 ladder, mapped to v2 row ids, ONCE, on read.
@@ -81,7 +81,37 @@ export async function loadState(file: string, log: (line: string) => void = () =
     source: typeof p.source === 'string' ? p.source : 'human:boot',
     updatedAt: p.updatedAt,
     message: typeof p.message === 'string' ? p.message : null,
+    // Claims MUST survive a restart (D-152): forgetting Mac A's claim would let Mac B's end
+    // find an empty set and turn the light calm with A still in the call.
+    calls: loadCalls(p.calls, log),
+    ...(p.stateFromCalls === true ? { stateFromCalls: true } : {}),
   };
+}
+
+/**
+ * Each claim is validated on its own and a bad one is dropped LOUDLY, rather than the whole
+ * file being quarantined: a quarantine resets the state to `unknown`, which would be a far
+ * bigger change to the light than losing one malformed claim. A file from before claims
+ * existed has no `calls` key and loads as an empty set.
+ */
+function loadCalls(raw: unknown, log: (line: string) => void): CallClaim[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    log('[onair] state file: calls is not an array; starting with no call claims');
+    return [];
+  }
+  const out: CallClaim[] = [];
+  for (const c of raw as unknown[]) {
+    const r = c as Record<string, unknown> | null;
+    if (r && typeof r.sensorId === 'string' && ID_PATTERN.test(r.sensorId)
+      && typeof r.source === 'string' && typeof r.since === 'string' && typeof r.lastReportAt === 'string'
+      && !out.some((o) => o.sensorId === r.sensorId)) {
+      out.push({ sensorId: r.sensorId, source: r.source, since: r.since, lastReportAt: r.lastReportAt });
+    } else {
+      log(`[onair] state file: dropped a malformed call claim: ${JSON.stringify(c)}`);
+    }
+  }
+  return out;
 }
 
 async function quarantine(file: string, raw: string, why: string): Promise<OnAirState> {

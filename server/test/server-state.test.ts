@@ -72,9 +72,10 @@ test('GET /status has an EXACT key set - a retired field cannot linger unnoticed
   // is how `hold` survived as a permanent null long enough to need D-126. An allowlist of
   // absent names ('hold' in s === false) is satisfied by the NEXT retired field too; an
   // exact set is not. `stateResolvedFrom` is deliberately absent: it appears only when the
-  // live row was deleted (D-34), and it has its own tests.
+  // live row was deleted (D-34), and it has its own tests. `calls` is always present, `[]` when
+  // no detector holds a claim (D-152); `stateFromCalls` is internal and must never appear.
   assert.deepEqual(Object.keys(await status(h)).sort(), [
-    'ageSeconds', 'busy', 'confirmed', 'intended', 'message', 'receiverInstanceId', 'source', 'state',
+    'ageSeconds', 'busy', 'calls', 'confirmed', 'intended', 'message', 'receiverInstanceId', 'source', 'state',
     'statusSequence', 'tableVersion', 'updatedAt',
   ]);
 });

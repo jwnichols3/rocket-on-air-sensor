@@ -23,6 +23,7 @@ import { escapeHtml, repairHtml } from './repair.js';
 import { createSseHub, type SseHub } from './sse.js';
 import {
   coerceSource,
+  ID_PATTERN,
   parseSource,
   SEED_SHORTCUTS,
   UNKNOWN_ID,
@@ -180,6 +181,8 @@ function audienceFor(path: string): 'data' | 'admin' | 'public' {
   return 'data';
 }
 const STATE_ID_PATH = /^\/state\/([^/]+)$/;
+/** `PUT|DELETE /calls/{sensorId}` - call claims (D-152). */
+const CALL_PATH = /^\/calls\/([^/]+)$/;
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_MESSAGE_CHARS = 200;
@@ -442,6 +445,41 @@ async function doWrite(
 }
 
 /**
+ * One call report, run INSIDE the write queue (D-152). The claim bookkeeping and the state
+ * write it may call for happen in the same queued job, so two Macs leaving together are
+ * applied one after the other and exactly one of them sees the empty set.
+ *
+ * The rows come from `shortcuts.on` / `shortcuts.off`, the same configuration `/on` and `/off`
+ * resolve through: "the row for in a call" and "the row for not" are one setting, not two.
+ */
+async function doCallReport(
+  deps: ServerDeps,
+  sensorId: string,
+  inCall: boolean,
+  source: Source,
+  log: (line: string) => void,
+): Promise<void> {
+  const shortcuts = deps.config?.().shortcuts ?? deps.shortcuts ?? SEED_SHORTCUTS;
+  const before = deps.store.get().calls?.length ?? 0;
+  const result = deps.store.reportCall(sensorId, inCall, source, shortcuts);
+  const after = deps.store.get().calls?.length ?? 0;
+  if (before !== after) {
+    log(`[onair] call claim ${inCall ? 'opened' : 'closed'} by ${sensorId} (${source.raw}); ${after} open`);
+  }
+  if (result.skipped) log(`[onair] call claim did not change the state: ${result.skipped}`);
+  if (result.write === null) {
+    await persistCurrent(deps);
+    return;
+  }
+  await doWrite(deps, result.write, source, log);
+  // doWrite cleared the flag, as every state write does; this write is the call mechanism's.
+  if (inCall) {
+    deps.store.markStateFromCalls();
+    await persistCurrent(deps);
+  }
+}
+
+/**
  * A PERSON CHANGING THE ROW LIGHTS A PANEL THEY DARKENED BY HAND (#93).
  *
  * Rocket's case: darken the glass, then press AVAILABLE, and expect to see AVAILABLE. The
@@ -546,7 +584,7 @@ async function handle(
   // `/state/{id}` is the one route with a variable segment, so it is matched rather than
   // looked up. It still goes through the same 404/405 gate: an id that is not a row is a
   // 400 further down (with the valid ids), NOT a 404 - the path is real, the name is wrong.
-  const allowed = STATE_ID_PATH.test(path) ? ['POST'] : ROUTES[path];
+  const allowed = STATE_ID_PATH.test(path) ? ['POST'] : CALL_PATH.test(path) ? ['PUT', 'DELETE'] : ROUTES[path];
   if (!allowed) {
     sendJson(res, 404, { error: `unknown path: ${path}` });
     return;
@@ -563,6 +601,7 @@ async function handle(
   const willReadBody =
     ((path === '/state' || path === '/message') && method === 'PUT') ||
     (path === '/admin/config' && method === 'PUT') ||
+    (CALL_PATH.test(path) && method === 'PUT') ||
     (path === '/admin/session' && method === 'POST') ||
     path === '/admin/factory-reset';
   if (!willReadBody) req.resume();
@@ -590,6 +629,9 @@ async function handle(
       port: boundPort(server),
       stateFileWritable: isStateFileWritable(deps.stateFile),
       devices: deviceHealth(deps),
+      // Open call claims (D-152). A claim from a Mac that vanished mid-call is held until
+      // that Mac reports again or a person clears it, so this is where it is seen.
+      calls: deps.store.get().calls ?? [],
     });
     return;
   }
@@ -874,6 +916,45 @@ async function handle(
     }
     if (!checkState(res, deps, state)) return;
     await enqueueWrite(() => doWrite(deps, state, parsed, log));
+    broadcastAndSend(res, deps, hub, ws);
+    return;
+  }
+
+  // PUT /calls/{sensorId} and DELETE /calls/{sensorId} - call claims (D-152).
+  const call = CALL_PATH.exec(path);
+  if (call) {
+    const sensorId = decodeURIComponent(call[1]!);
+    if (!ID_PATTERN.test(sensorId)) {
+      sendJson(res, 400, { error: 'sensorId must match ^[a-z0-9][a-z0-9-]{0,31}$' });
+      return;
+    }
+    let inCall = false;
+    let source: Source;
+    if (method === 'PUT') {
+      let body: { inCall?: unknown; source?: unknown };
+      try {
+        body = JSON.parse(await readBody(req)) as { inCall?: unknown; source?: unknown };
+      } catch (err) {
+        sendJson(res, 400, { error: `malformed JSON body: ${errorMessage(err)}` });
+        return;
+      }
+      if (typeof body !== 'object' || body === null || typeof body.inCall !== 'boolean') {
+        sendJson(res, 400, { error: 'body must contain inCall as a boolean' });
+        return;
+      }
+      // Strict, as on PUT /state: this route is only ever called by a machine.
+      const parsed = parseSource(body.source);
+      if (!parsed) {
+        sendJson(res, 400, { error: 'source must be prefixed auto: or human:' });
+        return;
+      }
+      inCall = body.inCall;
+      source = parsed;
+    } else {
+      // A person clearing a claim from a Mac that will not come back (D-152 option A).
+      source = coerceSource(url.searchParams.get('source'));
+    }
+    await enqueueWrite(() => doCallReport(deps, sensorId, inCall, source, log));
     broadcastAndSend(res, deps, hub, ws);
     return;
   }

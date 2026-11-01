@@ -16,7 +16,8 @@ Your answer picks your routes, your credential and your `source` for the rest of
 
 | You are | Example | You call | Your `source` |
 |---|---|---|---|
-| **An automated writer** | a call detector, a calendar sync | `PUT /state` | `auto:<yourname>` |
+| **A call detector** | one per Mac, reporting whether you are in a call | `PUT /calls/{sensorId}` (section 4.6) | `auto:<yourname>` |
+| **An automated writer** | a calendar sync | `PUT /state` | `auto:<yourname>` |
 | **A human-triggered writer** | a shell alias, a phone Shortcut, a Stream Deck button | `POST /state/{id}`, `/on`, `/off` | optional |
 | **A renderer** | a panel, a menu bar item, a wall display | `GET /status` + `GET /config/states` | none, you never write |
 | **A dumb kiosk** | a browser pointed at a screen | `GET /public/status`, or just `GET /display` | none |
@@ -230,6 +231,32 @@ Two different fields, two different questions:
   for eight hours every night, which teaches its operator to ignore it. Escalate on the other
   two. And treat an **absent** reason as unexplained rather than as fine - reading absence as
   reassurance is a false OK, which fails the same way a false OFF does.
+
+### 4.6 Call detectors report claims, not state
+
+If you detect calls, and especially if more than one Mac might, **do not write `PUT /state`**.
+Report your whole truth to `PUT /calls/{sensorId}`:
+
+```sh
+curl -X PUT http://receiver:8484/calls/studio-mac \
+  -H 'authorization: Bearer <passphrase>' -H 'content-type: application/json' \
+  -d '{"inCall": true, "source": "auto:call-detector-studio"}'
+```
+
+The Receiver keeps the set of Macs in a call. The first one in lights ON AIR (unless the light
+already shows a busy row); the light stays on until the last one leaves, and goes calm then only
+if nobody changed it by hand during the call. A detector that wrote `available` through
+`PUT /state` at the end of its call would turn the light off under another Mac that is still in
+it.
+
+- Pick a `sensorId` once per install (`^[a-z0-9][a-z0-9-]{0,31}$`) and keep it.
+- Confirm your claim from the `calls` array in the response, and retry until it matches.
+- The server never expires a claim. Report your truth at launch, at wake, when the network
+  returns and before sleep, so a claim you left behind is cleared by you. A person can clear one
+  with `DELETE /calls/{sensorId}`.
+- `inCall: false` for a claim you do not hold is a harmless no-op, so report it freely.
+
+The full rules are in `docs/api-contract.md` §5c.
 
 ## Darkening the panel
 
