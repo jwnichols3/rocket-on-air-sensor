@@ -230,6 +230,7 @@ Both thresholds are measured from the **last successful contact with the server*
 | poll interval | **1000 ms** (range 250..60000) | how often a renderer asks the server |
 | connection lost after | **1 minute** | mark the display as no longer refreshing; state unchanged |
 | no data after | **30 minutes** | give up on the state entirely -> NO DATA |
+| dim after (panel backlight only) | **60 minutes** | drop the backlight to a readable dim (default 10%, never black); full again on the next answer (D-153) |
 
 All three are **configuration, not constants**. The two thresholds are deliberately far
 apart: a meeting runs about thirty minutes, so the state must survive a server outage for at

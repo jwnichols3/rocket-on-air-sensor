@@ -495,6 +495,35 @@ number:
     max_value: 14400000
     step: 1000
     mode: box
+  # THE NO-CONTACT DIM (#105, D-153). Rocket unplugs the Receiver's Mac now and then, and a
+  # panel sitting on a full-brightness NO DATA all evening is the result. One hour of silence,
+  # then the backlight drops to NoContactBrightness; the first answer from the Receiver puts
+  # it back. Measured from `last_contact_ms`, like the two thresholds above, and not chained
+  # off NO DATA. 0 turns the rule off.
+  - platform: template
+    name: "NoContactDimMs"
+    id: contact_dim_ms
+    optimistic: true
+    restore_value: true
+    initial_value: 3600000
+    min_value: 0
+    max_value: 86400000
+    step: 1000
+    mode: box
+  # HOW DIM. 1, not 0, is the floor, and the header enforces it too: a panel that is BLACK
+  # while it cannot say what is happening looks unplugged, which is why the night schedule
+  # refuses exactly that (D-114). A dim keeps NO DATA readable. A board with no backlight
+  # ignores this, as it ignores NightBrightness (D-85).
+  - platform: template
+    name: "NoContactBrightness"
+    id: contact_dim_brightness
+    optimistic: true
+    restore_value: true
+    initial_value: 10
+    min_value: 1
+    max_value: 100
+    step: 1
+    mode: box
 
 switch:
   # THE NIGHT SCHEDULE (#78), on by default. Rocket asked for 23:00-07:00 to be in force now.
@@ -884,6 +913,26 @@ interval:
             }
           }
 
+          // ---- THE NO-CONTACT DIM (#105, D-153) --------------------------------------
+          //
+          // A level test every tick, like the schedule above, so data coming back restores
+          // the light on the next 50ms with no edge to miss. The brighten still goes through
+          // the board's paint-then-light handshake (#79), so the panel never lights up on
+          // the NO DATA frame it dimmed on. A FRESH millis(), not `now`: the poll above can
+          // stamp last_contact_ms after `now` was read (compute_view does the same).
+          {
+            onair::held().contact_dim_level = (int) id(contact_dim_brightness).state;
+            bool dim = onair::contact_should_dim(esphome::millis(), id(last_contact_ms),
+                                                 (uint32_t) id(contact_dim_ms).state,
+                                                 v.shape == onair::Shape::BUSY);
+            if (dim != onair::held().contact_dim) {
+              onair::held().contact_dim = dim;
+              ESP_LOGI("onair", "no-contact dim: %s",
+                       dim ? "dimmed - the Receiver has been silent too long"
+                           : "lifted");
+            }
+          }
+
           // THE BENCH'S TRAP-DOOR (#87). Here rather than on a slower tick because the busy
           // release has to be fast: the whole promise of the bench is that an incoming call
           // takes the glass back immediately, and `v` is already computed on this line.
@@ -1122,6 +1171,26 @@ text_sensor:
     lambda: |-
       esphome::LockGuard guard(onair::held().lock);
       return {std::string(onair::night_reason(onair::held().night_in))};
+  - platform: template
+    # Whether the no-contact dim is in force (#105, D-153), and how long the Receiver has been
+    # silent. The same job as Night: a dim panel on purpose and a dim panel by fault look the
+    # same from the doorway, and this board has no serial console to ask.
+    name: "ContactDim"
+    id: contact_dim_sensor
+    update_interval: 5s
+    lambda: |-
+      uint32_t last = id(last_contact_ms);
+      uint32_t now = esphome::millis();
+      uint32_t silent_s = ((last == 0) ? now : now - last) / 1000;
+      char buf[64];
+      if (onair::held().contact_dim)
+        snprintf(buf, sizeof(buf), "dimmed to %d%% (silent %us)",
+                 onair::contact_dim_level(onair::held().contact_dim_level), (unsigned) silent_s);
+      else if ((uint32_t) id(contact_dim_ms).state == 0)
+        snprintf(buf, sizeof(buf), "off");
+      else
+        snprintf(buf, sizeof(buf), "full (silent %us)", (unsigned) silent_s);
+      return {std::string(buf)};
   - platform: template
     # The bench override (#87), or "normal". Same argument as Render and Clock: a panel this
     # one cannot be read over HTTP is a panel nobody can check, and this one deliberately

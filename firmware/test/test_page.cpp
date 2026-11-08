@@ -1501,6 +1501,62 @@ static void test_night_brightness() {
 
 // ------------------------------------------------- the paint-then-light handshake (#79)
 
+// ---------------------------------------------------------------- no-contact dim (#105)
+
+static void test_contact_dim() {
+  const uint32_t HOUR = 3600000;
+  begin("the panel dims after an hour of silence from the Receiver, and not before");
+  CHECK(!onair::contact_should_dim(10 * HOUR, 10 * HOUR - HOUR, HOUR, false));
+  CHECK(onair::contact_should_dim(10 * HOUR, 10 * HOUR - HOUR - 1, HOUR, false));
+  CHECK_MSG(!onair::contact_should_dim(10 * HOUR, 10 * HOUR - 5000, HOUR, false),
+            "a Receiver answering every second keeps the panel at full");
+
+  begin("never heard since boot counts from boot, not from forever");
+  CHECK_MSG(!onair::contact_should_dim(30000, 0, HOUR, false),
+            "a slow first poll must not flash the glass dim");
+  CHECK(onair::contact_should_dim(HOUR + 1, 0, HOUR, false));
+
+  begin("an ON AIR on the glass is never dimmed, and 0 turns the rule off");
+  CHECK(!onair::contact_should_dim(10 * HOUR, 0, HOUR, true));
+  CHECK(!onair::contact_should_dim(10 * HOUR, 1, 0, false));
+
+  begin("a contact stamped after `now` is fresh, not a 49-day gap (measured flicker)");
+  CHECK(!onair::contact_should_dim(10 * HOUR, 10 * HOUR + 20, HOUR, false));
+  CHECK(!onair::contact_should_dim(5000, 5050, HOUR, false));
+
+  begin("the gap survives millis() wrapping");
+  CHECK(!onair::contact_should_dim(1000, 0xFFFFFFFFu - 1000, HOUR, false));
+
+  begin("the dim is never black - NO DATA has to stay readable (D-114)");
+  CHECK(onair::contact_dim_level(0) == 1);
+  CHECK(onair::contact_dim_level(-5) == 1);
+  CHECK(onair::contact_dim_level(250) == 100);
+  CHECK(onair::contact_dim_level(10) == 10);
+
+  begin("effective_backlight folds the dim in, darkest wins, the bench beats both");
+  onair::held().bench_level = onair::BENCH_NONE;
+  onair::held().night_dark = false;
+  onair::held().contact_dim = true;
+  onair::held().contact_dim_level = 10;
+  CHECK(onair::effective_backlight() == 10);
+  onair::held().contact_dim_level = 0;
+  CHECK_MSG(onair::effective_backlight() == 1, "a 0 that slipped past the entity is still not black");
+  onair::held().contact_dim_level = 10;
+  onair::held().night_dark = true;
+  onair::held().night_level = 0;
+  CHECK(onair::effective_backlight() == 0);
+  onair::held().night_level = 40;
+  CHECK(onair::effective_backlight() == 10);
+  onair::held().bench_level = 100;
+  CHECK_MSG(onair::effective_backlight() == 100, "someone at the page can light a dimmed panel");
+  onair::held().bench_level = onair::BENCH_NONE;
+  onair::held().night_dark = false;
+  onair::held().night_level = 0;
+  onair::held().contact_dim = false;
+  CHECK_MSG(onair::effective_backlight() == 100, "data coming back restores full brightness");
+  onair::held().contact_dim_level = onair::DEFAULT_CONTACT_DIM_LEVEL;
+}
+
 static void test_wake_handshake() {
   begin("the first application after boot goes straight through");
   onair::WakeGate g;
@@ -1631,6 +1687,7 @@ int main(int argc, char **argv) {
   test_night();
   test_night_brightness();
   test_wake_handshake();
+  test_contact_dim();
   test_night_bar();
 
   printf("\n%d checks, %d failed\n", g_checks, g_failures);

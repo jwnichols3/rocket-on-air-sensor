@@ -5554,3 +5554,37 @@ else (state, light control, API) lives on the receiver.
   present); `stateFromCalls` is persisted and never on the wire. The admin console's Clear
   button is a follow-up; `DELETE /calls/{sensorId}` does it meanwhile. The detector is a separate
   project (D-30, `rocket-call-detector`).
+
+- **D-153 (2026-11-08)** **After an hour with no contact from the Receiver, the panel dims -
+  never to black - and comes back to full on the next answer.** Issue 105. Rocket: *"Every so
+  often I disconnect the computer that is sending the signal ... if no data shows up for more
+  than ... 60 minutes, this display should dim."*
+
+  Measured from `last_contact_ms`, the clock `ConnectionLostMs` and `NoDataMs` already use, and
+  deliberately not chained off NO DATA. A panel that has never heard the Receiver since boot
+  counts from boot, so a slow first poll cannot flash the glass dim. Two NVS-backed entities:
+  `NoContactDimMs` (default 3600000, `0` disables) and `NoContactBrightness` (default 10, floor
+  1). The decision is `contact_should_dim()` in `onair_table.h`, host-tested; the core's 50ms
+  tick applies it as a level test, so recovery needs no edge.
+
+  **Dim, not dark, and this is what keeps it consistent with D-114.** The night schedule refuses
+  to darken a panel showing NO DATA because black plus NO DATA is indistinguishable from
+  unplugged. A dim that leaves NO DATA legible does not have that problem, so the floor of 1 is
+  enforced in the header (`contact_dim_level()`) as well as on the entity.
+
+  **Never dims an ON AIR.** With the defaults NO DATA lands at 30 minutes and the dim at 60, so
+  the glass is never busy when the dim arrives; but `NoDataMs` goes up to four hours, so the
+  rule also refuses while the glass draws a BUSY shape (D-6, D-63).
+
+  **Precedence.** `effective_backlight()`: the bench beats everything; otherwise the darker of
+  the night level and the dim wins. They do not coincide in practice, because the schedule
+  refuses NO DATA. The brighten on recovery goes through the paint-then-light handshake (#79),
+  so the panel never lights on the NO DATA frame it dimmed on. A `ContactDim` text sensor
+  (`dimmed to N% (silent Ns)` / `full (silent Ns)` / `off`) reports it over HTTP. CrowPanel only;
+  the Elegoo ignores backlight levels (D-85, D-111).
+
+  **Measured on the CrowPanel, 2026-11-08, and fixed before merge.** The first flash flickered:
+  the 50ms tick read `now` before running the poll, a poll answering inside that tick stamped
+  `last_contact_ms` later than `now`, and the unsigned gap wrapped - one tick of dim after every
+  good poll. The tick now passes a fresh `millis()` (as `compute_view()` does) and
+  `contact_should_dim()` treats a contact stamped after `now` as fresh. Host-tested.
