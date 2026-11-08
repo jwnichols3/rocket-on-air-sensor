@@ -402,6 +402,11 @@ struct LastResult {
 inline constexpr uint32_t DEFAULT_POLL_MS = 1000;
 inline constexpr uint32_t CONNECTION_LOST_MS = 60000;    // 1 minute
 inline constexpr uint32_t NO_DATA_MS = 1800000;          // 30 minutes
+// THE NO-CONTACT DIM (#105, D-153). Measured from the same instant as the two above and NOT
+// chained off NO DATA: one hour of silence from the Receiver, then the backlight drops to a
+// dim that still reads. 0 in the entity turns it off.
+inline constexpr uint32_t CONTACT_DIM_MS = 3600000;      // 60 minutes
+inline constexpr int DEFAULT_CONTACT_DIM_LEVEL = 10;     // percent
 
 /**
  * Everything the panel holds about the table, in one place.
@@ -487,6 +492,12 @@ struct Held {
   /// Mirrored from the `NightBrightness` entity by the main loop, for the usual reason: this
   /// header cannot reach an `id()`, and the board reads it from a lambda that must not block.
   int night_level{0};
+  /// THE NO-CONTACT DIM (#105, D-153). True while the Receiver has not answered this panel for
+  /// longer than `NoContactDimMs`. Main loop writes, the board reads through
+  /// `effective_backlight()`. `contact_dim_level` mirrors `NoContactBrightness` and is never 0
+  /// - see `contact_dim_level()` for why that floor is the point of the feature.
+  bool contact_dim{false};
+  int contact_dim_level{DEFAULT_CONTACT_DIM_LEVEL};
   /// THE WHOLE NIGHT INPUT, as the main loop last computed it (#81). Snapshotted rather than
   /// recomputed because the two readers cannot compute it: the page runs on the httpd task
   /// and cannot reach an `id()`, and the text sensor runs on its own 5s interval and would
@@ -1255,10 +1266,47 @@ inline int clamp_level(int pct) { return pct < 0 ? 0 : (pct > 100 ? 100 : pct); 
 /// know the precedence. A person standing at the page beats the clock: the Beta control is
 /// someone deliberately looking at the panel, and the schedule is a guess about whether
 /// anyone is.
+/// The no-contact dim level, floored at 1. NEVER 0, and that floor is the feature rather than
+/// a detail: D-114 refuses to darken a panel that cannot say what is happening because dark
+/// plus NO DATA is indistinguishable from unplugged. A dim keeps NO DATA legible from the
+/// doorway, so it is a different answer to that question, not an exception to it.
+inline int contact_dim_level(int pct) { return pct < 1 ? 1 : (pct > 100 ? 100 : pct); }
+
+/**
+ * Should the backlight drop because the Receiver has gone quiet (#105, D-153)?
+ *
+ * `last_contact_ms` is the core's clock - 0 means never heard since boot, and then the gap is
+ * the uptime rather than "infinite": a panel that boots while the Receiver's Mac is away dims
+ * an hour later, not instantly, so a slow first poll never flashes the glass dim.
+ *
+ * Refuses while the glass is drawing a BUSY row. With the defaults that cannot happen - NO
+ * DATA lands at 30 minutes and the dim at 60 - but `NoDataMs` is configurable up to four hours,
+ * and an ON AIR that is still on the glass is never dimmed (D-6, D-63). `0` disables the rule.
+ */
+inline bool contact_should_dim(uint32_t now_ms, uint32_t last_contact_ms, uint32_t dim_ms,
+                               bool showing_busy) {
+  if (dim_ms == 0 || showing_busy)
+    return false;
+  uint32_t gap = (last_contact_ms == 0) ? now_ms : now_ms - last_contact_ms;
+  return gap > dim_ms;
+}
+
+/// What the backlight should be, every reason folded into ONE answer, so no board file has to
+/// know the precedence. A person standing at the page beats the clock: the Beta control is
+/// someone deliberately looking at the panel, and the schedule is a guess about whether
+/// anyone is. The no-contact dim and the night schedule are both "less light", so the
+/// darker of the two wins; in practice they never coincide, because the schedule refuses to
+/// darken a panel showing NO DATA.
 inline int effective_backlight() {
   if (bench_active())
     return held().bench_level;
-  return held().night_dark ? clamp_level(held().night_level) : 100;
+  int level = held().night_dark ? clamp_level(held().night_level) : 100;
+  if (held().contact_dim) {
+    int dim = contact_dim_level(held().contact_dim_level);
+    if (dim < level)
+      level = dim;
+  }
+  return level;
 }
 
 /// How long the wake handshake will wait for a repaint before lighting the glass anyway.
