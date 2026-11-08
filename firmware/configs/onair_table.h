@@ -1287,7 +1287,12 @@ inline bool contact_should_dim(uint32_t now_ms, uint32_t last_contact_ms, uint32
                                bool showing_busy) {
   if (dim_ms == 0 || showing_busy)
     return false;
-  uint32_t gap = (last_contact_ms == 0) ? now_ms : now_ms - last_contact_ms;
+  // A contact stamped AFTER `now_ms` is a contact, not a 49-day gap. The 50ms tick reads the
+  // clock before it runs the poll, and a poll that answers inside that tick stamps a later
+  // time - the unsigned subtraction then wrapped and the panel dimmed for one tick after
+  // every good poll (measured on the CrowPanel, 2026-11-08). Signed difference, floor 0.
+  int32_t diff = (int32_t) (now_ms - last_contact_ms);
+  uint32_t gap = (last_contact_ms == 0) ? now_ms : (diff < 0 ? 0 : (uint32_t) diff);
   return gap > dim_ms;
 }
 

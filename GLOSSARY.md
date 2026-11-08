@@ -5582,3 +5582,9 @@ else (state, light control, API) lives on the receiver.
   so the panel never lights on the NO DATA frame it dimmed on. A `ContactDim` text sensor
   (`dimmed to N% (silent Ns)` / `full (silent Ns)` / `off`) reports it over HTTP. CrowPanel only;
   the Elegoo ignores backlight levels (D-85, D-111).
+
+  **Measured on the CrowPanel, 2026-11-08, and fixed before merge.** The first flash flickered:
+  the 50ms tick read `now` before running the poll, a poll answering inside that tick stamped
+  `last_contact_ms` later than `now`, and the unsigned gap wrapped - one tick of dim after every
+  good poll. The tick now passes a fresh `millis()` (as `compute_view()` does) and
+  `contact_should_dim()` treats a contact stamped after `now` as fresh. Host-tested.

@@ -918,10 +918,11 @@ interval:
           // A level test every tick, like the schedule above, so data coming back restores
           // the light on the next 50ms with no edge to miss. The brighten still goes through
           // the board's paint-then-light handshake (#79), so the panel never lights up on
-          // the NO DATA frame it dimmed on.
+          // the NO DATA frame it dimmed on. A FRESH millis(), not `now`: the poll above can
+          // stamp last_contact_ms after `now` was read (compute_view does the same).
           {
             onair::held().contact_dim_level = (int) id(contact_dim_brightness).state;
-            bool dim = onair::contact_should_dim(now, id(last_contact_ms),
+            bool dim = onair::contact_should_dim(esphome::millis(), id(last_contact_ms),
                                                  (uint32_t) id(contact_dim_ms).state,
                                                  v.shape == onair::Shape::BUSY);
             if (dim != onair::held().contact_dim) {

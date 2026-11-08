@@ -1520,6 +1520,10 @@ static void test_contact_dim() {
   CHECK(!onair::contact_should_dim(10 * HOUR, 0, HOUR, true));
   CHECK(!onair::contact_should_dim(10 * HOUR, 1, 0, false));
 
+  begin("a contact stamped after `now` is fresh, not a 49-day gap (measured flicker)");
+  CHECK(!onair::contact_should_dim(10 * HOUR, 10 * HOUR + 20, HOUR, false));
+  CHECK(!onair::contact_should_dim(5000, 5050, HOUR, false));
+
   begin("the gap survives millis() wrapping");
   CHECK(!onair::contact_should_dim(1000, 0xFFFFFFFFu - 1000, HOUR, false));
 
